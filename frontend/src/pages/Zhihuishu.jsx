@@ -1103,11 +1103,12 @@ export default function Zhihuishu() {
 
     const pollSeconds = clampPollSeconds(settings.progressPollSeconds)
     stopProgressPolling()
-    void fetchTaskDetail(activeTaskId, true)
 
     progressPollRef.current = setInterval(() => {
       void fetchTaskDetail(activeTaskId, true)
     }, pollSeconds * 1000)
+
+    void fetchTaskDetail(activeTaskId, true)
 
     return stopProgressPolling
   }, [activeTaskId, fetchTaskDetail, settings.progressPollSeconds, stopProgressPolling])

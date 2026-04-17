@@ -1,401 +1,43 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useNavigate } from 'react-router-dom'
 
-import jsQR from 'jsqr'
-
-import { AlertCircle, CheckCircle2, Loader2, Camera, MapPin, QrCode, CheckSquare, Clock, TrendingUp, RefreshCw, Upload } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Loader2, Camera, RefreshCw, Upload } from 'lucide-react'
 
 import { getToken, isAuthenticated, removeToken } from '../utils/auth'
 
 import { Button, Input } from '../components'
 
-import { normalizeBaiduLocationResult, normalizeBaiduPlaceCandidates } from '../services/baiduLocation'
-
 import BaiduMapPickerModal from '../components/BaiduMapPickerModal'
 
-
-
-const POLL_INTERVAL_MS = 3000
-
-const CHAOXING_API_BASE = '/api/v1/chaoxing'
-
-const CHAOXING_SETTINGS_KEY = 'chaoxing_signin_settings_v1'
-
-const DEFAULT_CHECK_INTERVAL_MINUTES = 5
-
-const MIN_CHECK_INTERVAL_MINUTES = 1
-
-const MAX_CHECK_INTERVAL_MINUTES = 60
-
-const AUTO_SIGN_TASK_COOLDOWN_MS = 2 * 60 * 1000
-
-const BACKGROUND_TASK_MAX_ITEMS = 50
-
-const BACKGROUND_RUNNING_STATUS_SET = new Set(['running', 'pending', 'processing', 'queued', 'in_progress', 'in-progress'])
-
-const TOKEN_ERROR_PATTERN = /(invalid token|token has expired|token validation failed|missing token)/i
-
-const GLASS_CARD_CLASS = 'rounded-2xl border border-white/20 bg-white/80 p-6 shadow-lg backdrop-blur-lg transition-all duration-200'
-
-const GLASS_PANEL_CLASS = 'rounded-xl border border-white/30 bg-white/60 p-4 backdrop-blur-sm transition-all duration-200'
-
-const SIGN_TYPE_FALLBACK_MAP = {
-
-}
-
-
-
-const parsePayload = async (response) => {
-
-  const text = await response.text()
-
-  if (!text) return {}
-
-  try {
-
-    return JSON.parse(text)
-
-  } catch (_) {
-
-    return { message: text }
-
-  }
-
-}
-
-
-
-const pickMessage = (payload) => {
-
-  if (!payload) return ''
-
-  return payload.msg || payload.message || payload.detail || payload.data?.message || ''
-
-}
-
-
-
-const appendPayloadToFormData = (formData, payload) => {
-
-  Object.entries(payload).forEach(([key, value]) => {
-
-    if (value === null || value === undefined || value === '') return
-
-    if (Array.isArray(value) || (typeof value === 'object' && !(value instanceof File))) {
-
-      formData.append(key, JSON.stringify(value))
-
-      return
-
-    }
-
-    formData.append(key, String(value))
-
-  })
-
-}
-
-
-
-const clampCheckInterval = (value) => {
-
-  const parsed = Number(value)
-
-  if (!Number.isFinite(parsed)) return DEFAULT_CHECK_INTERVAL_MINUTES
-
-  return Math.min(MAX_CHECK_INTERVAL_MINUTES, Math.max(MIN_CHECK_INTERVAL_MINUTES, Math.floor(parsed)))
-
-}
-
-
-
-const safeStringify = (value) => {
-
-  try {
-
-    return JSON.stringify(value)
-
-  } catch (_) {
-
-    return '[Unserializable log]'
-
-  }
-
-}
-
-
-
-const normalizeCourseText = (value) => String(value ?? '').trim()
-
-
-
-const buildCourseSelector = (course) => {
-
-  const existingId = normalizeCourseText(course?.id)
-
-  if (existingId.includes('_')) return existingId
-
-
-
-  const courseId = normalizeCourseText(course?.courseId || course?.course_id || course?.rawCourseId || existingId)
-
-  const classId = normalizeCourseText(course?.classId || course?.clazzId || course?.class_id || course?.clazz_id)
-
-  const cpi = normalizeCourseText(course?.cpi)
-
-
-
-  if (courseId && classId) {
-
-    return cpi ? `${courseId}_${classId}_${cpi}` : `${courseId}_${classId}`
-
-  }
-
-
-
-  return courseId || classId
-
-}
-
-
-
-const getCourseDisplayName = (course, fallbackLabel = '') => {
-  const name = [
-    course?.courseName,
-    course?.name,
-    course?.title,
-    course?.course_name,
-    course?.courseTitle,
-    course?.course_title,
-    course?.className,
-    course?.clazzName,
-  ]
-    .map(normalizeCourseText)
-    .find(Boolean)
-  const selector = buildCourseSelector(course)
-  return name || fallbackLabel || (selector ? `课程 ${selector}` : '未命名课程')
-}
-
-const normalizeSignTypeForApi = (value) => {
-
-  return SIGN_TYPE_FALLBACK_MAP[value] || value || 'all'
-
-}
-
-
-
-const shouldUseLocationParams = (value) => {
-
-  return value === 'location' || value === 'qrcode' || value === 'gesture' || value === 'all'
-
-}
-
-
-
-const fileToBase64 = (file) => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result
-      const base64 = result.includes(',') ? result.split(',')[1] : result
-      resolve(base64)
-    }
-    reader.onerror = () => reject(new Error('文件读取失败'))
-    reader.readAsDataURL(file)
-  })
-}
-
-const decodeQrCodeFromFile = (file) => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const img = new Image()
-      img.onload = () => {
-        const canvas = document.createElement('canvas')
-        canvas.width = img.width
-        canvas.height = img.height
-        const ctx = canvas.getContext('2d')
-        ctx.drawImage(img, 0, 0)
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const code = jsQR(imageData.data, imageData.width, imageData.height)
-        if (code && code.data) {
-          resolve(code.data)
-        } else {
-          reject(new Error('无法识别二维码，请确认图片包含有效的二维码。'))
-        }
-      }
-      img.onerror = () => reject(new Error('图片加载失败，请重新选择。'))
-      img.src = reader.result
-    }
-    reader.onerror = () => reject(new Error('文件读取失败，请重新选择。'))
-    reader.readAsDataURL(file)
-  })
-}
-
-const parseTaskTimestamp = (value) => {
-
-  if (value === undefined || value === null || value === '') return 0
-
-  if (typeof value === 'number') {
-
-    return value > 1e12 ? value : value * 1000
-
-  }
-
-  const parsed = new Date(value).getTime()
-
-  return Number.isFinite(parsed) ? parsed : 0
-
-}
-
-
-
-const extractBackgroundTaskId = (task) => {
-
-  const rawId = task?.task_id ?? task?.taskId ?? task?.id
-
-  if (rawId === undefined || rawId === null || rawId === '') return ''
-
-  return String(rawId).trim()
-
-}
-
-
-
-const normalizeBackgroundTaskRecord = (task = {}) => {
-
-  const normalizedTaskId = extractBackgroundTaskId(task)
-
-  if (!normalizedTaskId) return null
-
-  const updatedAt = task?.updated_at || task?.updatedAt || task?.timestamp || task?.created_at || task?.createdAt || ''
-
-  const createdAt = task?.created_at || task?.createdAt || updatedAt || ''
-
-  return {
-
-    taskId: normalizedTaskId,
-
-    status: String(task?.status || task?.state || task?.task_status || task?.taskStatus || 'unknown').toLowerCase(),
-
-    message: String(task?.message || task?.detail || task?.msg || ''),
-
-    courseName: String(task?.courseName || task?.course_name || task?.name || task?.title || ''),
-
-    signType: String(task?.sign_type || task?.type || ''),
-
-    progress: task?.progress && typeof task.progress === 'object' ? task.progress : null,
-
-    updatedAt,
-
-    createdAt
-
-  }
-
-}
-
-
-
-const sortBackgroundTasks = (tasks) => {
-
-  return [...tasks].sort((a, b) => {
-
-    const aTime = parseTaskTimestamp(a.updatedAt || a.createdAt)
-
-    const bTime = parseTaskTimestamp(b.updatedAt || b.createdAt)
-
-    return bTime - aTime
-
-  })
-
-}
-
-
-
-const normalizeBackgroundTaskHistory = (payload) => {
-
-  const candidates = [
-
-    payload?.data?.tasks,
-
-    payload?.data?.list,
-
-    payload?.data?.history,
-
-    payload?.data?.records,
-
-    payload?.data,
-
-    payload?.tasks,
-
-    payload?.list,
-
-    payload?.history,
-
-    payload?.records,
-
-    payload
-
-  ]
-
-  const source = candidates.find((candidate) => Array.isArray(candidate)) || []
-
-  const taskMap = new Map()
-
-
-
-  source.forEach((task) => {
-
-    const normalized = normalizeBackgroundTaskRecord(task)
-
-    if (!normalized) return
-
-    const existing = taskMap.get(normalized.taskId)
-
-    if (!existing) {
-
-      taskMap.set(normalized.taskId, normalized)
-
-      return
-
-    }
-
-    const existingTime = parseTaskTimestamp(existing.updatedAt || existing.createdAt)
-
-    const nextTime = parseTaskTimestamp(normalized.updatedAt || normalized.createdAt)
-
-    taskMap.set(normalized.taskId, nextTime >= existingTime ? { ...existing, ...normalized } : existing)
-
-  })
-
-
-
-  return sortBackgroundTasks(Array.from(taskMap.values())).slice(0, BACKGROUND_TASK_MAX_ITEMS)
-
-}
-
-
-
-const upsertBackgroundTaskHistory = (history, task) => {
-
-  const normalized = normalizeBackgroundTaskRecord(task)
-
-  if (!normalized) return history
-
-  const merged = [normalized, ...(history || []).filter((item) => item.taskId !== normalized.taskId)]
-
-  return sortBackgroundTasks(merged).slice(0, BACKGROUND_TASK_MAX_ITEMS)
-
-}
-
-
-
-const isBackgroundTaskRunning = (status) => {
-
-  return BACKGROUND_RUNNING_STATUS_SET.has(String(status || '').toLowerCase())
-
-}
+import {
+  CHAOXING_API_BASE,
+  TOKEN_ERROR_PATTERN,
+  GLASS_CARD_CLASS,
+  GLASS_PANEL_CLASS,
+  parsePayload,
+  pickMessage,
+  normalizeSignTypeForApi,
+  shouldUseLocationParams,
+  fileToBase64,
+  decodeQrCodeFromFile,
+  normalizeBackgroundTaskHistory,
+  upsertBackgroundTaskHistory,
+  isBackgroundTaskRunning,
+  safeStringify,
+  buildCourseSelector,
+  getCourseDisplayName,
+  parseTaskTimestamp,
+} from './chaoxing-signin/utils'
+
+import useBackgroundTasks from './chaoxing-signin/hooks/useBackgroundTasks'
+import useAutoSignin from './chaoxing-signin/hooks/useAutoSignin'
+import useLocationServices from './chaoxing-signin/hooks/useLocationServices'
+
+import StatsCards from './chaoxing-signin/components/StatsCards'
+import TasksTab from './chaoxing-signin/components/TasksTab'
+import HistoryTab from './chaoxing-signin/components/HistoryTab'
+import ConfigTab from './chaoxing-signin/components/ConfigTab'
 
 
 
@@ -403,33 +45,17 @@ export default function ChaoxingSignin() {
 
   const navigate = useNavigate()
 
-  const pollRef = useRef(null)
+  const ensureAccessTokenRef = useRef(null)
 
-  const autoCheckRef = useRef(null)
+  const redirectToLoginRef = useRef(null)
 
   const redirectingRef = useRef(false)
 
-  const autoSigningRef = useRef(false)
-
-  const autoSignedTaskCacheRef = useRef(new Map())
-
-  const latestAddressRef = useRef('')
-
-  const geocodeRequestIdRef = useRef(0)
-
-  const placeSearchRequestIdRef = useRef(0)
+  const setTodayStatsRef = useRef(null)
 
 
 
   const [submitting, setSubmitting] = useState(false)
-
-  const [statusLoading, setStatusLoading] = useState(false)
-
-  const [taskId, setTaskId] = useState('')
-
-  const [taskStatus, setTaskStatus] = useState(null)
-
-  const [logs, setLogs] = useState([])
 
   const [resultMessage, setResultMessage] = useState('')
 
@@ -444,30 +70,6 @@ export default function ChaoxingSignin() {
   const [signinHistory, setSigninHistory] = useState([])
 
   const [backgroundTaskHistory, setBackgroundTaskHistory] = useState([])
-
-  const [autoSignin, setAutoSignin] = useState(false)
-
-  const [autoSignFilter, setAutoSignFilter] = useState('all')
-
-  const [checkInterval, setCheckInterval] = useState(DEFAULT_CHECK_INTERVAL_MINUTES)
-
-  const [nextCheckCountdown, setNextCheckCountdown] = useState(0)
-
-  const [todayStats, setTodayStats] = useState({ total: 0, success: 0, failed: 0 })
-
-  const [geocodeLoading, setGeocodeLoading] = useState(false)
-
-  const [geocodeMessage, setGeocodeMessage] = useState('')
-
-  const [geocodeStatus, setGeocodeStatus] = useState('info')
-
-  const [placeSearchLoading, setPlaceSearchLoading] = useState(false)
-
-  const [placeSearchResults, setPlaceSearchResults] = useState([])
-
-  const [placeSearchMessage, setPlaceSearchMessage] = useState('')
-
-  const [isMapPickerOpen, setIsMapPickerOpen] = useState(false)
 
   const [form, setForm] = useState({
 
@@ -503,104 +105,6 @@ export default function ChaoxingSignin() {
 
 
 
-  useEffect(() => {
-
-    try {
-
-      const raw = localStorage.getItem(CHAOXING_SETTINGS_KEY)
-
-      if (!raw) return
-
-      const parsed = JSON.parse(raw)
-
-      if (typeof parsed.autoSignin === 'boolean') {
-
-        setAutoSignin(parsed.autoSignin)
-
-      }
-
-      if (typeof parsed.autoSignFilter === 'string' && parsed.autoSignFilter) {
-
-        setAutoSignFilter(parsed.autoSignFilter)
-
-      }
-
-      if (parsed.checkInterval !== undefined && parsed.checkInterval !== null) {
-
-        setCheckInterval(clampCheckInterval(parsed.checkInterval))
-
-      }
-
-    } catch (err) {
-
-      console.warn('Failed to load chaoxing settings:', err)
-
-    }
-
-  }, [])
-
-
-
-  useEffect(() => {
-
-    try {
-
-      localStorage.setItem(
-
-        CHAOXING_SETTINGS_KEY,
-
-        JSON.stringify({
-
-          autoSignin,
-
-          autoSignFilter,
-
-          checkInterval: clampCheckInterval(checkInterval)
-
-        })
-
-      )
-
-    } catch (err) {
-
-      console.warn('Failed to save chaoxing settings:', err)
-
-    }
-
-  }, [autoSignin, autoSignFilter, checkInterval])
-
-
-
-  const stopPolling = useCallback(() => {
-
-    if (pollRef.current) {
-
-      clearInterval(pollRef.current)
-
-      pollRef.current = null
-
-    }
-
-  }, [])
-
-
-
-  const stopAutoCheck = useCallback(() => {
-
-    if (autoCheckRef.current) {
-
-      clearInterval(autoCheckRef.current)
-
-      autoCheckRef.current = null
-
-    }
-
-    setNextCheckCountdown(0)
-
-  }, [])
-
-
-
   const ensureAccessToken = useCallback(() => {
 
     return getToken() || null
@@ -627,6 +131,12 @@ export default function ChaoxingSignin() {
 
 
 
+  ensureAccessTokenRef.current = ensureAccessToken
+
+  redirectToLoginRef.current = redirectToLogin
+
+
+
   const requestChaoxingApi = useCallback(
 
     async (path, body, options = {}) => {
@@ -637,11 +147,11 @@ export default function ChaoxingSignin() {
 
       }
 
-      const token = ensureAccessToken()
+      const token = ensureAccessTokenRef.current()
 
       if (!token) {
 
-        redirectToLogin('登录态失效，请重新登录。')
+        redirectToLoginRef.current('登录态失效，请重新登录。')
 
       }
 
@@ -725,14 +235,35 @@ export default function ChaoxingSignin() {
 
     },
 
-    [ensureAccessToken, redirectToLogin]
+    []
 
   )
 
 
 
+  // ── Hooks ──────────────────────────────────────────────────────────────────
+
+  const backgroundTasks = useBackgroundTasks(requestChaoxingApi)
+  const {
+    taskId, setTaskId, taskStatus, setTaskStatus,
+    logs, setLogs, statusLoading,
+    refreshTaskStatus, openBackgroundTask, stopPolling,
+  } = backgroundTasks
+
+  const locationServices = useLocationServices(requestChaoxingApi, setForm)
+  const {
+    latestAddressRef,
+    geocodeLoading, geocodeMessage, geocodeStatus,
+    setGeocodeStatus, setGeocodeMessage,
+    placeSearchLoading, placeSearchResults, placeSearchMessage,
+    isMapPickerOpen, setIsMapPickerOpen,
+    applyResolvedLocation,
+    resolveLocationCoordinates, searchLocationCandidates, choosePlaceSearchResult,
+  } = locationServices
 
 
+
+  // ── Callbacks that depend on requestChaoxingApi ────────────────────────────
 
   const fetchCourses = useCallback(async () => {
 
@@ -792,15 +323,17 @@ export default function ChaoxingSignin() {
 
       const todayRecords = (resp?.data || []).filter(r => new Date(r.timestamp).toDateString() === today)
 
-      setTodayStats({
+      if (setTodayStatsRef.current) {
+        setTodayStatsRef.current({
 
-        total: todayRecords.length,
+          total: todayRecords.length,
 
-        success: todayRecords.filter(r => r.status === 'success').length,
+          success: todayRecords.filter(r => r.status === 'success').length,
 
-        failed: todayRecords.filter(r => r.status === 'failed').length
+          failed: todayRecords.filter(r => r.status === 'failed').length
 
-      })
+        })
+      }
 
     } catch (err) {
 
@@ -1016,6 +549,26 @@ export default function ChaoxingSignin() {
 
 
 
+  // ── Auto-signin hook (depends on executeSignin) ────────────────────────────
+
+  const autoSigninHook = useAutoSignin(form, executeSignin, requestChaoxingApi, {
+    setResultType,
+    setResultMessage,
+    setSigninTasks,
+    redirectingRef,
+  })
+  const {
+    autoSignin, setAutoSignin,
+    autoSignFilter, setAutoSignFilter,
+    checkInterval, setCheckInterval,
+    nextCheckCountdown,
+    todayStats,
+    stopAutoCheck,
+  } = autoSigninHook
+
+  setTodayStatsRef.current = autoSigninHook.setTodayStats
+
+
   const handleQrCodeFileUpload = useCallback(async (file) => {
     if (!file) return
     setForm((prev) => ({ ...prev, qrCodeFile: file, qrDecodeStatus: '解码中...' }))
@@ -1027,401 +580,9 @@ export default function ChaoxingSignin() {
     }
   }, [])
 
-  const applyResolvedLocation = useCallback((location) => {
 
-    latestAddressRef.current = location.address || latestAddressRef.current
 
-    setForm((prev) => ({
-
-      ...prev,
-
-      address: location.address || prev.address,
-
-      latitude: location.latitude,
-
-      longitude: location.longitude,
-
-    }))
-
-  }, [])
-
-
-
-  const resolveLocationCoordinates = useCallback(async () => {
-
-    const liveAddressInput = document.getElementById('cx-address')
-
-    const liveAddress =
-
-      liveAddressInput instanceof HTMLInputElement ? liveAddressInput.value : latestAddressRef.current
-
-    const address = String(liveAddress || latestAddressRef.current).trim()
-
-    if (!address) {
-
-      setGeocodeStatus('error')
-
-      setGeocodeMessage('请先输入地址后再解析坐标。')
-
-      return
-
-    }
-
-
-
-    setGeocodeLoading(true)
-
-    latestAddressRef.current = address
-
-    setGeocodeStatus('info')
-
-    setGeocodeMessage('正在解析坐标...')
-
-    const requestId = geocodeRequestIdRef.current + 1
-
-    geocodeRequestIdRef.current = requestId
-
-
-
-    try {
-
-      const resp = await requestChaoxingApi(`/location/geocode?query=${encodeURIComponent(address)}`, null, { method: 'GET' })
-
-      if (geocodeRequestIdRef.current !== requestId) {
-        return
-      }
-
-      if (latestAddressRef.current.trim() !== address) {
-        setGeocodeStatus('info')
-
-        setGeocodeMessage('地址已变更，请重新解析坐标。')
-
-        return
-      }
-
-      const resolved = normalizeBaiduLocationResult(resp)
-
-      applyResolvedLocation(resolved)
-
-      setGeocodeStatus('success')
-
-      setGeocodeMessage(`已解析：${resolved.latitude}, ${resolved.longitude}`)
-
-    } catch (err) {
-
-      if (geocodeRequestIdRef.current !== requestId) {
-        return
-      }
-
-      setGeocodeStatus('error')
-
-      setGeocodeMessage(err.message || '地点解析失败，请稍后重试')
-
-    } finally {
-
-      setGeocodeLoading(false)
-
-    }
-
-  }, [applyResolvedLocation, requestChaoxingApi])
-
-
-
-  const searchLocationCandidates = useCallback(async () => {
-
-    const liveAddressInput = document.getElementById('cx-address')
-
-    const liveAddress =
-
-      liveAddressInput instanceof HTMLInputElement ? liveAddressInput.value : latestAddressRef.current
-
-    const query = String(liveAddress || latestAddressRef.current).trim()
-
-    if (!query) {
-
-      setPlaceSearchResults([])
-
-      setPlaceSearchMessage('请先输入地名后再搜索地点。')
-
-      return
-
-    }
-
-
-
-    setPlaceSearchLoading(true)
-
-    latestAddressRef.current = query
-
-    setPlaceSearchResults([])
-
-    setPlaceSearchMessage('正在搜索地点...')
-
-    const requestId = placeSearchRequestIdRef.current + 1
-
-    placeSearchRequestIdRef.current = requestId
-
-
-
-    try {
-
-      const resp = await requestChaoxingApi(`/location/search?query=${encodeURIComponent(query)}`, null, { method: 'GET' })
-
-      if (placeSearchRequestIdRef.current !== requestId) {
-        return
-      }
-
-      if (latestAddressRef.current.trim() !== query) {
-        setPlaceSearchMessage('地名已变更，请重新搜索。')
-        return
-      }
-
-      const results = normalizeBaiduPlaceCandidates(resp)
-
-      setPlaceSearchResults(results)
-
-      setPlaceSearchMessage(results.length > 0 ? `找到 ${results.length} 个地点，请选择最接近的一个。` : '未找到可选地点')
-
-    } catch (err) {
-
-      if (placeSearchRequestIdRef.current !== requestId) {
-        return
-      }
-
-      setPlaceSearchResults([])
-
-      setPlaceSearchMessage(err.message || '地点搜索失败，请稍后重试')
-
-    } finally {
-
-      setPlaceSearchLoading(false)
-
-    }
-
-  }, [requestChaoxingApi])
-
-
-
-  const choosePlaceSearchResult = useCallback((candidate) => {
-
-    applyResolvedLocation({
-      ...candidate,
-      address: [candidate.name, candidate.address].filter(Boolean).join(' '),
-    })
-
-    setPlaceSearchResults([])
-
-    setPlaceSearchMessage(`已选择地点：${candidate.name || candidate.address}`)
-
-    setGeocodeStatus('success')
-
-    setGeocodeMessage(`已选坐标：${candidate.latitude}, ${candidate.longitude}`)
-
-  }, [applyResolvedLocation])
-
-
-
-  const runAutoSigninCycle = useCallback(async () => {
-
-    if (autoSigningRef.current || redirectingRef.current || !autoSignin) return
-
-
-
-    const username = form.username.trim()
-
-    const password = form.password
-
-    if (!username || !password) {
-
-      setResultType('error')
-
-      setResultMessage('自动签到已开启，但账号或密码为空。')
-
-      return
-
-    }
-
-
-
-    autoSigningRef.current = true
-
-    try {
-
-      const resp = await requestChaoxingApi('/tasks')
-
-      const pendingTasks = Array.isArray(resp?.data) ? resp.data : []
-
-      setSigninTasks(pendingTasks)
-
-
-
-      const filteredTasks = pendingTasks.filter((task) => {
-
-        if (task?.actionable === false || task?.source === 'background') return false
-
-        const taskType = String(task?.type || 'normal')
-
-        if (autoSignFilter === 'all') return true
-
-        if (autoSignFilter === 'gesture' || autoSignFilter === 'code') {
-
-          return taskType === 'normal'
-
-        }
-
-        return taskType === autoSignFilter
-
-      })
-
-
-
-      if (filteredTasks.length === 0) return
-
-
-
-      const now = Date.now()
-
-      let successCount = 0
-
-
-
-      for (const task of filteredTasks) {
-
-        const taskType = String(task?.type || 'normal')
-
-        const taskKey = `${task?.taskId || task?.activeId || task?.courseId || task?.courseName || 'task'}:${taskType}`
-
-        const lastTriedAt = autoSignedTaskCacheRef.current.get(taskKey) || 0
-
-        if (now - lastTriedAt < AUTO_SIGN_TASK_COOLDOWN_MS) continue
-
-        autoSignedTaskCacheRef.current.set(taskKey, now)
-
-
-
-        const result = await executeSignin(task?.courseId || null, taskType, { silent: true })
-
-        if (result.status) {
-
-          successCount += 1
-
-        }
-
-      }
-
-
-
-      if (successCount > 0) {
-
-        setResultType('success')
-
-        setResultMessage(`自动签到完成，成功处理 ${successCount} 个任务。`)
-
-      }
-
-    } catch (err) {
-
-      setResultType('error')
-
-      setResultMessage(err.message || '自动签到检查失败。')
-
-    } finally {
-
-      autoSigningRef.current = false
-
-    }
-
-  }, [autoSignin, autoSignFilter, executeSignin, form.password, form.username, requestChaoxingApi])
-
-
-
-  const refreshTaskStatus = useCallback(async (currentTaskId = taskId) => {
-
-    if (!currentTaskId) return
-
-    setStatusLoading(true)
-
-
-
-    try {
-
-      const [statusResp, logsResp] = await Promise.all([
-
-        requestChaoxingApi(`/task/${currentTaskId}`),
-
-        requestChaoxingApi(`/logs/${currentTaskId}`)
-
-      ])
-
-
-
-      const statusData = statusResp?.data || {}
-
-      setTaskStatus(statusData)
-
-      setBackgroundTaskHistory((prev) =>
-
-        upsertBackgroundTaskHistory(prev, {
-
-          ...statusData,
-
-          task_id: currentTaskId
-
-        })
-
-      )
-
-      if (Array.isArray(logsResp?.data) && logsResp.data.length > 0) {
-
-        setLogs((prev) => [...prev, ...logsResp.data].slice(-200))
-
-      }
-
-
-
-      if (statusData.status === 'completed' || statusData.status === 'error') {
-
-        stopPolling()
-
-      }
-
-    } catch (err) {
-
-      setResultType('error')
-
-      setResultMessage(err.message || '查询任务状态失败。')
-
-      stopPolling()
-
-    } finally {
-
-      setStatusLoading(false)
-
-    }
-
-  }, [requestChaoxingApi, stopPolling, taskId])
-
-
-
-  const openBackgroundTask = useCallback(async (nextTaskId) => {
-
-    const normalizedTaskId = String(nextTaskId || '').trim()
-
-    if (!normalizedTaskId) return false
-
-    setTaskId(normalizedTaskId)
-
-    setTaskStatus(null)
-
-    setLogs([])
-
-    await refreshTaskStatus(normalizedTaskId)
-
-    return true
-
-  }, [refreshTaskStatus])
-
-
+  // ── Bootstrap effect ───────────────────────────────────────────────────────
 
   useEffect(() => {
 
@@ -1471,17 +632,17 @@ export default function ChaoxingSignin() {
 
       if (backgroundTasksResult.status !== 'fulfilled') return
 
-      const backgroundTasks = Array.isArray(backgroundTasksResult.value) ? backgroundTasksResult.value : []
+      const bgTasks = Array.isArray(backgroundTasksResult.value) ? backgroundTasksResult.value : []
 
-      if (backgroundTasks.length === 0) return
+      if (bgTasks.length === 0) return
 
-      const runningTask = backgroundTasks.find((task) => isBackgroundTaskRunning(task.status))
+      const runningTask = bgTasks.find((task) => isBackgroundTaskRunning(task.status))
 
-      const latestTask = runningTask || backgroundTasks[0]
+      const latestTask = runningTask || bgTasks[0]
 
       if (latestTask?.taskId) {
 
-        await openBackgroundTask(latestTask.taskId)
+        await openBackgroundTask(latestTask.taskId, { setResultType, setResultMessage, setBackgroundTaskHistory })
 
       }
 
@@ -1504,88 +665,6 @@ export default function ChaoxingSignin() {
     }
 
   }, [ensureAccessToken, navigate, stopPolling, stopAutoCheck, fetchCourses, fetchSigninTasks, fetchSigninHistory, fetchBackgroundTaskHistory, openBackgroundTask])
-
-
-
-  useEffect(() => {
-
-    if (!autoSignin) {
-
-      stopAutoCheck()
-
-      return undefined
-
-    }
-
-
-
-    const normalizedInterval = clampCheckInterval(checkInterval)
-
-    if (normalizedInterval !== checkInterval) {
-
-      setCheckInterval(normalizedInterval)
-
-      return undefined
-
-    }
-
-
-
-    const intervalMs = normalizedInterval * 60 * 1000
-
-    setNextCheckCountdown(normalizedInterval * 60)
-
-
-
-    void runAutoSigninCycle()
-
-
-
-    const countdownInterval = setInterval(() => {
-
-      setNextCheckCountdown(prev => Math.max(0, prev - 1))
-
-    }, 1000)
-
-
-
-    autoCheckRef.current = setInterval(() => {
-
-      void runAutoSigninCycle()
-
-      setNextCheckCountdown(normalizedInterval * 60)
-
-    }, intervalMs)
-
-
-
-    return () => {
-
-      clearInterval(countdownInterval)
-
-      stopAutoCheck()
-
-    }
-
-  }, [autoSignin, checkInterval, runAutoSigninCycle, stopAutoCheck])
-
-
-
-  useEffect(() => {
-
-    if (!taskId) return undefined
-
-    stopPolling()
-
-    pollRef.current = setInterval(() => {
-
-      refreshTaskStatus()
-
-    }, POLL_INTERVAL_MS)
-
-    return stopPolling
-
-  }, [refreshTaskStatus, stopPolling, taskId])
 
 
 
@@ -1849,7 +928,7 @@ export default function ChaoxingSignin() {
 
       )
 
-      await openBackgroundTask(nextTaskId)
+      await openBackgroundTask(nextTaskId, { setResultType, setResultMessage, setBackgroundTaskHistory })
 
       void fetchBackgroundTaskHistory()
 
@@ -1887,35 +966,7 @@ export default function ChaoxingSignin() {
 
 
 
-  const getSignTypeIcon = (type) => {
-
-    switch (type) {
-
-      case 'photo': return <Camera className="h-5 w-5" />
-
-      case 'location': return <MapPin className="h-5 w-5" />
-
-      case 'qrcode': return <QrCode className="h-5 w-5" />
-
-      default: return <CheckSquare className="h-5 w-5" />
-
-    }
-
-  }
-
-
-
-  const formatCountdown = (seconds) => {
-
-    const mins = Math.floor(seconds / 60)
-
-    const secs = seconds % 60
-
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-
-  }
-
-
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
 
@@ -1957,67 +1008,7 @@ export default function ChaoxingSignin() {
 
 
 
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-
-          <div className={GLASS_CARD_CLASS}>
-
-            <div className="flex items-center gap-3">
-
-              <CheckCircle2 className="h-8 w-8 text-green-600" />
-
-              <div>
-
-                <p className="text-sm text-text/70">今日成功</p>
-
-                <p className="text-2xl font-bold text-text">{todayStats.success}</p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-          <div className={GLASS_CARD_CLASS}>
-
-            <div className="flex items-center gap-3">
-
-              <AlertCircle className="h-8 w-8 text-red-600" />
-
-              <div>
-
-                <p className="text-sm text-text/70">今日失败</p>
-
-                <p className="text-2xl font-bold text-text">{todayStats.failed}</p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-          <div className={GLASS_CARD_CLASS}>
-
-            <div className="flex items-center gap-3">
-
-              <TrendingUp className="h-8 w-8 text-blue-600" />
-
-              <div>
-
-                <p className="text-sm text-text/70">成功率</p>
-
-                <p className="text-2xl font-bold text-text">
-
-                  {todayStats.total > 0 ? Math.round((todayStats.success / todayStats.total) * 100) : 0}%
-
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
+        <StatsCards todayStats={todayStats} />
 
 
 
@@ -2849,7 +1840,7 @@ export default function ChaoxingSignin() {
 
                       className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 hover:scale-105 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
 
-                      onClick={() => refreshTaskStatus()}
+                      onClick={() => refreshTaskStatus(taskId, { setResultType, setResultMessage, setBackgroundTaskHistory })}
 
                       disabled={!taskId || statusLoading}
 
@@ -3009,7 +2000,7 @@ export default function ChaoxingSignin() {
 
                           onClick={() => {
 
-                            void openBackgroundTask(task.taskId)
+                            void openBackgroundTask(task.taskId, { setResultType, setResultMessage, setBackgroundTaskHistory })
 
                           }}
 
@@ -3060,417 +2051,35 @@ export default function ChaoxingSignin() {
 
 
           {activeTab === 'tasks' && (
-
-            <div className="mt-6 space-y-4">
-
-              <div className="flex items-center justify-between">
-
-                <h3 className="text-lg font-bold text-text">签到任务列表</h3>
-
-                <Button
-
-                  type="button"
-
-                  variant="secondary"
-
-                  className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 hover:scale-105"
-
-                  onClick={fetchSigninTasks}
-
-                >
-
-                  <RefreshCw className="h-4 w-4" />
-
-                </Button>
-
-              </div>
-
-              {signinTasks.length === 0 ? (
-
-                <p className="text-center text-text/70 py-8">暂无签到任务</p>
-
-              ) : (
-
-                <div className="space-y-3">
-
-                  {signinTasks.map((task, idx) => {
-
-                    const isBackgroundTask = task?.actionable === false || task?.source === 'background'
-
-                    const backgroundTaskId = String(task?.taskId || task?.task_id || '').trim()
-
-                    const taskType = String(task?.type || 'normal')
-
-                    const taskTypeLabel = String(task?.typeLabel || taskType || 'normal')
-
-                    const taskMessage = String(task?.message || '')
-
-                    const taskStatus = String(task?.status || '').toLowerCase()
-
-                    return (
-
-                    <div
-
-                      key={idx}
-
-                      className={`${GLASS_PANEL_CLASS} ${isBackgroundTask && backgroundTaskId ? 'cursor-pointer transition-all duration-200 hover:border-primary/40' : ''}`}
-
-                      role={isBackgroundTask && backgroundTaskId ? 'button' : undefined}
-
-                      tabIndex={isBackgroundTask && backgroundTaskId ? 0 : undefined}
-
-                      onClick={() => {
-
-                        if (isBackgroundTask && backgroundTaskId) {
-
-                          void openBackgroundTask(backgroundTaskId)
-
-                        }
-
-                      }}
-
-                      onKeyDown={(event) => {
-
-                        if (!isBackgroundTask || !backgroundTaskId) return
-
-                        if (event.key === 'Enter' || event.key === ' ') {
-
-                          event.preventDefault()
-
-                          void openBackgroundTask(backgroundTaskId)
-
-                        }
-
-                      }}
-
-                    >
-
-                      <div className="flex items-start justify-between gap-4">
-
-                        <div className="flex items-start gap-3 flex-1">
-
-                          <div className="mt-1">{getSignTypeIcon(taskType)}</div>
-
-                          <div className="flex-1">
-
-                            <h4 className="font-medium text-text">{task.courseName || (isBackgroundTask ? '后台签到任务' : '待处理签到任务')}</h4>
-
-                            <p className="text-sm text-text/70 mt-1">签到类型：{taskTypeLabel}</p>
-
-                            {taskMessage && (
-
-                              <p className="text-sm text-text/70 mt-1">{taskMessage}</p>
-
-                            )}
-
-                            {isBackgroundTask && taskStatus && (
-
-                              <p className="text-sm text-text/70 mt-1">任务状态：{taskStatus}</p>
-
-                            )}
-
-                            {task.deadline && (
-
-                              <p className="text-sm text-text/70 flex items-center gap-1 mt-1">
-
-                                <Clock className="h-3 w-3" />
-
-                                截止时间：{new Date(task.deadline).toLocaleString()}
-
-                              </p>
-
-                            )}
-
-                          </div>
-
-                        </div>
-
-                        <Button
-
-                          type="button"
-
-                          disabled={isBackgroundTask && !backgroundTaskId}
-
-                          className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 hover:scale-105"
-
-                          onClick={(event) => {
-
-                            event.stopPropagation()
-
-                            if (isBackgroundTask) {
-
-                              if (backgroundTaskId) {
-
-                                void openBackgroundTask(backgroundTaskId)
-
-                              }
-
-                              return
-
-                            }
-
-                            void executeSignin(task.courseId, taskType)
-
-                          }}
-
-                        >
-
-                          {isBackgroundTask ? '查看详情' : '执行签到'}
-
-                        </Button>
-
-                      </div>
-
-                    </div>
-
-                    )})}
-
-                </div>
-
-              )}
-
-            </div>
-
+            <TasksTab
+              signinTasks={signinTasks}
+              fetchSigninTasks={fetchSigninTasks}
+              openBackgroundTask={(tid) => openBackgroundTask(tid, { setResultType, setResultMessage, setBackgroundTaskHistory })}
+              executeSignin={executeSignin}
+            />
           )}
 
 
 
           {activeTab === 'history' && (
-
-            <div className="mt-6 space-y-4">
-
-              <div className="flex items-center justify-between">
-
-                <h3 className="text-lg font-bold text-text">签到历史</h3>
-
-                <Button
-
-                  type="button"
-
-                  variant="secondary"
-
-                  className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 hover:scale-105"
-
-                  onClick={fetchSigninHistory}
-
-                >
-
-                  <RefreshCw className="h-4 w-4" />
-
-                </Button>
-
-              </div>
-
-              {signinHistory.length === 0 ? (
-
-                <p className="text-center text-text/70 py-8">暂无签到历史</p>
-
-              ) : (
-
-                <div className="space-y-3">
-
-                  {signinHistory.map((record, idx) => (
-
-                    <div
-
-                      key={idx}
-
-                      className={GLASS_PANEL_CLASS}
-
-                    >
-
-                      <div className="flex items-start justify-between gap-4">
-
-                        <div className="flex items-start gap-3 flex-1">
-
-                          <div className="mt-1">
-
-                            {record.status === 'success' ? (
-
-                              <CheckCircle2 className="h-5 w-5 text-green-600" />
-
-                            ) : (
-
-                              <AlertCircle className="h-5 w-5 text-red-600" />
-
-                            )}
-
-                          </div>
-
-                          <div className="flex-1">
-
-                            <h4 className="font-medium text-text">{record.courseName}</h4>
-
-                            <p className="text-sm text-text/70 mt-1">{record.message}</p>
-
-                            <p className="text-xs text-text/60 mt-1">
-
-                              {new Date(record.timestamp).toLocaleString()}
-
-                            </p>
-
-                          </div>
-
-                        </div>
-
-                      </div>
-
-                    </div>
-
-                  ))}
-
-                </div>
-
-              )}
-
-            </div>
-
+            <HistoryTab
+              signinHistory={signinHistory}
+              fetchSigninHistory={fetchSigninHistory}
+            />
           )}
 
 
 
           {activeTab === 'config' && (
-
-            <div className="mt-6 space-y-6">
-
-              <div>
-
-                <h3 className="text-lg font-bold text-text mb-4">自动签到设置</h3>
-
-                <div className="space-y-4">
-
-                  <div className={`${GLASS_PANEL_CLASS} flex items-center justify-between`}>
-
-                    <div>
-
-                      <p className="font-medium text-text">自动签到</p>
-
-                      <p className="text-sm text-text/70">按设定周期自动检查并签到</p>
-
-                    </div>
-
-                    <button
-
-                      onClick={() => setAutoSignin(!autoSignin)}
-
-                      className={`relative inline-flex h-11 w-20 min-h-[44px] min-w-[44px] items-center rounded-full px-1 transition-colors duration-200 cursor-pointer ${
-
-                        autoSignin ? 'bg-primary' : 'bg-gray-300'
-
-                      }`}
-
-                    >
-
-                      <span
-
-                        className={`inline-block h-8 w-8 transform rounded-full bg-white transition-transform duration-200 ${
-
-                          autoSignin ? 'translate-x-10' : 'translate-x-1'
-
-                        }`}
-
-                      />
-
-                    </button>
-
-                  </div>
-
-
-
-                  <div className={GLASS_PANEL_CLASS}>
-
-                    <label className="block text-sm font-medium text-text mb-2">
-
-                      检查间隔（分钟）
-
-                    </label>
-
-                    <input
-
-                      type="number"
-
-                      min="1"
-
-                      max={String(MAX_CHECK_INTERVAL_MINUTES)}
-
-                      value={checkInterval}
-
-                      onChange={(e) => setCheckInterval(clampCheckInterval(e.target.value))}
-
-                      className="w-full min-h-[44px] rounded-xl border border-white/30 bg-white/60 px-4 py-2 text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-
-                    />
-
-                  </div>
-
-
-
-                  <div className={GLASS_PANEL_CLASS}>
-
-                    <label className="block text-sm font-medium text-text mb-2">
-
-                      自动签到类型
-
-                    </label>
-
-                    <select
-
-                      value={autoSignFilter}
-
-                      onChange={(e) => setAutoSignFilter(e.target.value)}
-
-                      className="w-full min-h-[44px] rounded-xl border border-white/30 bg-white/60 px-4 py-2 text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer"
-
-                    >
-
-                      <option value="all">全部类型</option>
-
-                      <option value="normal">普通签到</option>
-
-                      <option value="photo">拍照签到</option>
-
-                      <option value="location">位置签到</option>
-
-                      <option value="qrcode">二维码签到</option>
-
-                      <option value="gesture">手势签到（兼容普通）</option>
-
-                      <option value="code">签到码签到（兼容普通）</option>
-
-                    </select>
-
-                    <p className="mt-2 text-xs text-text/70">
-
-                      设置会自动保存，开启后每次检查将自动尝试签到，重复任务会短时间去重。
-
-                    </p>
-
-                  </div>
-
-
-
-                  {autoSignin && nextCheckCountdown > 0 && (
-
-                    <div className="rounded-xl border border-primary/30 bg-primary/10 p-4 backdrop-blur-sm transition-all duration-200">
-
-                      <p className="text-sm text-text flex items-center gap-2">
-
-                        <Clock className="h-4 w-4" />
-
-                        下次检查：{formatCountdown(nextCheckCountdown)}
-
-                      </p>
-
-                    </div>
-
-                  )}
-
-                </div>
-
-              </div>
-
-            </div>
-
+            <ConfigTab
+              autoSignin={autoSignin}
+              setAutoSignin={setAutoSignin}
+              autoSignFilter={autoSignFilter}
+              setAutoSignFilter={setAutoSignFilter}
+              checkInterval={checkInterval}
+              setCheckInterval={setCheckInterval}
+              nextCheckCountdown={nextCheckCountdown}
+            />
           )}
 
         </div>
@@ -3500,14 +2109,3 @@ export default function ChaoxingSignin() {
   )
 
 }
-
-
-
-
-
-
-
-
-
-
-
