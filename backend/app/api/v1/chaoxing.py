@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -11,6 +12,8 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from app.config import settings
 from app.dependencies import get_current_user
 from app.services.course.chaoxing.signin import signin_manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 PHOTON_BASE_URL = "https://photon.komoot.io"
@@ -92,8 +95,9 @@ def _request_photon_json(path: str, params: Dict[str, Any]) -> Any:
         response = requests.get(url, params=params, headers=PHOTON_HEADERS, timeout=12)
         response.raise_for_status()
     except requests.RequestException as exc:
+        logger.error("Geocoding service request failed: %s", exc)
         raise HTTPException(
-            status_code=502, detail=f"Geocoding service request failed: {exc}"
+            status_code=502, detail="Geocoding service temporarily unavailable"
         ) from exc
 
     try:
@@ -223,9 +227,15 @@ async def _parse_request_payload(raw_request: Request) -> Dict[str, Any]:
     ):
         form = await raw_request.form()
         payload: Dict[str, Any] = {}
+        ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
         for key, value in form.multi_items():
             if isinstance(value, (UploadFile, StarletteUploadFile)):
                 if key == "photo":
+                    if value.content_type not in ALLOWED_IMAGE_TYPES:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Unsupported file type: {value.content_type}. Allowed: {', '.join(sorted(ALLOWED_IMAGE_TYPES))}",
+                        )
                     file_bytes = await value.read()
                     if file_bytes:
                         payload["photo_base64"] = base64.b64encode(file_bytes).decode(

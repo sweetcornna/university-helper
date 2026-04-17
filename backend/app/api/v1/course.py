@@ -17,9 +17,11 @@ from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _QR_SESSION_TTL_SECONDS = 10 * 60
+_USER_ADAPTER_TTL_SECONDS = 60 * 60  # 1 hour
+_COURSE_TASK_TTL_SECONDS = 2 * 60 * 60  # 2 hours
 _qr_sessions: Dict[str, Dict[str, Any]] = {}
 _qr_sessions_lock = threading.Lock()
-_user_adapters: Dict[str, ZhihuishuAdapter] = {}
+_user_adapters: Dict[str, Dict[str, Any]] = {}  # {"adapter": ..., "last_access": ...}
 _course_tasks: Dict[str, Dict[str, Any]] = {}
 _course_tasks_lock = threading.Lock()
 _learning_manager_instance: Any = None
@@ -165,7 +167,8 @@ async def get_course_status(task_id: str, current_user: dict = Depends(get_curre
     # Keep /course/status compatible with Zhihuishu polling by syncing progress on every query.
     if task.get("platform") == "zhihuishu":
         with _qr_sessions_lock:
-            adapter = _user_adapters.get(user_id)
+            entry = _user_adapters.get(user_id)
+            adapter = entry["adapter"] if entry else None
         if adapter is not None:
             progress = await _run_blocking(adapter.get_progress, str(task.get("course_id") or ""))
             task_status = progress.get("status", task.get("status", "running"))
@@ -244,7 +247,7 @@ async def stop_course_task(task_id: str, current_user: dict = Depends(get_curren
     return {"status": "success", "message": result.get("message", "Task cancellation requested"), "data": result}
 
 
-def _cleanup_expired_qr_sessions() -> None:
+def _cleanup_expired_entries() -> None:
     now = time.time()
     with _qr_sessions_lock:
         expired = [
@@ -254,6 +257,22 @@ def _cleanup_expired_qr_sessions() -> None:
         ]
         for session_id in expired:
             _qr_sessions.pop(session_id, None)
+        expired_adapters = [
+            user_id
+            for user_id, entry in _user_adapters.items()
+            if now - entry.get("last_access", now) > _USER_ADAPTER_TTL_SECONDS
+        ]
+        for user_id in expired_adapters:
+            _user_adapters.pop(user_id, None)
+    with _course_tasks_lock:
+        expired_tasks = [
+            task_id
+            for task_id, task in _course_tasks.items()
+            if now - task.get("updated_at", task.get("created_at", now)) > _COURSE_TASK_TTL_SECONDS
+            and task.get("status") in ("completed", "failed", "cancelled", None)
+        ]
+        for task_id in expired_tasks:
+            _course_tasks.pop(task_id, None)
 
 
 def _current_user_id(current_user: dict) -> str:
@@ -301,7 +320,12 @@ def _update_course_task(task_id: str, **changes: Any) -> Optional[Dict[str, Any]
 
 def _get_zhihuishu_adapter(user_id: str, required: bool = True) -> Optional[ZhihuishuAdapter]:
     with _qr_sessions_lock:
-        adapter = _user_adapters.get(user_id)
+        entry = _user_adapters.get(user_id)
+        if entry is not None:
+            entry["last_access"] = time.time()
+            adapter = entry["adapter"]
+        else:
+            adapter = None
     if required and not adapter:
         raise HTTPException(status_code=401, detail="Zhihuishu not logged in")
     return adapter
@@ -337,7 +361,7 @@ router.include_router(chaoxing_router, prefix="/chaoxing", tags=["chaoxing"])
 
 @router.post("/zhihuishu/qr-login", response_model=ZhihuishuQRLoginResponse)
 async def start_zhihuishu_qr_login(current_user: dict = Depends(get_current_user)):
-    _cleanup_expired_qr_sessions()
+    _cleanup_expired_entries()
     user_id = str(current_user.get("user_id"))
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
@@ -380,7 +404,7 @@ async def start_zhihuishu_qr_login(current_user: dict = Depends(get_current_user
                 current_state["message"] = "Login successful" if success else "Login failed"
                 current_state["updated_at"] = time.time()
                 if success:
-                    _user_adapters[user_id] = adapter
+                    _user_adapters[user_id] = {"adapter": adapter, "last_access": time.time()}
         except Exception as exc:
             with _qr_sessions_lock:
                 current_state = _qr_sessions.get(session_id)
@@ -418,7 +442,7 @@ async def get_zhihuishu_login_status(
     user_id = str(current_user.get("user_id"))
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
-    _cleanup_expired_qr_sessions()
+    _cleanup_expired_entries()
 
     with _qr_sessions_lock:
         state = _qr_sessions.get(session_id)
@@ -454,7 +478,7 @@ async def zhihuishu_password_login(
         raise HTTPException(status_code=401, detail="Zhihuishu login failed") from exc
 
     with _qr_sessions_lock:
-        _user_adapters[user_id] = adapter
+        _user_adapters[user_id] = {"adapter": adapter, "last_access": time.time()}
 
     return {"status": "success", "message": "Login successful"}
 
