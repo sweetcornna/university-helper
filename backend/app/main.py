@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -6,6 +8,10 @@ from urllib.parse import urlparse
 from app.config import settings
 from app.middleware.tenant_isolation import tenant_isolation_middleware
 from app.api.v1 import auth, chaoxing
+from app.api.v1.course import cleanup_expired_entries
+
+logger = logging.getLogger(__name__)
+_CLEANUP_INTERVAL_SECONDS = 60
 
 app = FastAPI(
     title="Unified Signin Platform API",
@@ -59,6 +65,32 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 from app.api.v1 import course
 app.include_router(course.router, prefix="/api/v1/course", tags=["course"])
 app.include_router(chaoxing.router, prefix="/api/v1/chaoxing", tags=["chaoxing"])
+
+
+async def _periodic_cleanup_loop() -> None:
+    while True:
+        try:
+            cleanup_expired_entries()
+        except Exception:
+            logger.exception("cleanup_expired_entries iteration failed")
+        await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def _start_cleanup_task() -> None:
+    app.state.cleanup_task = asyncio.create_task(_periodic_cleanup_loop())
+
+
+@app.on_event("shutdown")
+async def _stop_cleanup_task() -> None:
+    task = getattr(app.state, "cleanup_task", None)
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 @app.get("/")

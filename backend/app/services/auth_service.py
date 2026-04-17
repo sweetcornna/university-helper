@@ -61,7 +61,7 @@ class AuthService:
 
     @staticmethod
     def _create_tenant_database(tenant_db_name: str) -> None:
-        """Create a tenant database from template. Runs in a background thread."""
+        """Create a tenant database from template. Raises on failure."""
         ddl_conn = None
         try:
             ddl_conn = psycopg2.connect(
@@ -80,13 +80,11 @@ class AuthService:
             )
             ddl_cur.close()
             logger.info("Tenant database %s created successfully", tenant_db_name)
-        except Exception:
-            logger.exception("Failed to create tenant database %s", tenant_db_name)
         finally:
             if ddl_conn:
                 ddl_conn.close()
 
-    def register_user(self, username: str, email: str, password: str) -> dict:
+    async def register_user(self, username: str, email: str, password: str) -> dict:
         if not username.isalnum():
             raise ValueError("Username must be alphanumeric")
         self._validate_password_strength(password)
@@ -109,10 +107,24 @@ class AuthService:
             user_id = cur.fetchone()["id"]
             cur.close()
 
-        # Create tenant database in background (non-blocking)
-        asyncio.get_event_loop().create_task(
-            asyncio.to_thread(self._create_tenant_database, tenant_db_name)
-        )
+        # Create tenant database synchronously; roll back user row on failure.
+        try:
+            await asyncio.to_thread(self._create_tenant_database, tenant_db_name)
+        except Exception:
+            logger.exception(
+                "Tenant DB creation failed for %s; rolling back user row id=%s",
+                tenant_db_name, user_id,
+            )
+            try:
+                with get_db_session() as conn:
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+                    cur.close()
+            except Exception:
+                logger.exception(
+                    "Failed to roll back user row id=%s after tenant DB failure", user_id
+                )
+            raise
 
         access_token = create_access_token({
             "user_id": user_id,

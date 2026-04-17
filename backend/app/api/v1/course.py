@@ -242,7 +242,7 @@ async def stop_course_task(task_id: str, current_user: dict = Depends(get_curren
     return {"status": "success", "message": result.get("message", "Task cancellation requested"), "data": result}
 
 
-def _cleanup_expired_entries() -> None:
+def cleanup_expired_entries() -> None:
     now = time.time()
     with _qr_sessions_lock:
         expired = [
@@ -353,7 +353,7 @@ def _register_zhihuishu_course_task(
 
 @router.post("/zhihuishu/qr-login", response_model=ZhihuishuQRLoginResponse)
 async def start_zhihuishu_qr_login(current_user: dict = Depends(get_current_user)):
-    _cleanup_expired_entries()
+    cleanup_expired_entries()
     user_id = str(current_user.get("user_id"))
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
@@ -434,7 +434,7 @@ async def get_zhihuishu_login_status(
     user_id = str(current_user.get("user_id"))
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
-    _cleanup_expired_entries()
+    cleanup_expired_entries()
 
     with _qr_sessions_lock:
         state = _qr_sessions.get(session_id)

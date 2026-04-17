@@ -23,7 +23,7 @@ def _mask_email(email: str) -> str:
 async def register(request: RegisterRequest, req: Request):
     rate_limiter.check_rate_limit(req)
     try:
-        result = auth_service.register_user(
+        result = await auth_service.register_user(
             username=request.username,
             email=request.email,
             password=request.password
