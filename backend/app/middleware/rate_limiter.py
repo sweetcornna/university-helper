@@ -1,14 +1,18 @@
+import logging
 from ipaddress import ip_address
 
 from fastapi import Request, HTTPException, status
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
     MAX_CACHE_SIZE = 10000
     CLEANUP_INTERVAL = 100  # Run cleanup every N requests
+    DB_CLEANUP_INTERVAL = 500  # Sweep stale DB rows every N requests
 
     def __init__(self, requests: int = 5, window: int = 60):
         self.requests = requests
@@ -88,22 +92,83 @@ class RateLimiter:
     def reset(self) -> None:
         self._cache.clear()
 
-    def check_rate_limit(self, request: Request) -> None:
-        self._maybe_cleanup()
-        client_id = self._get_client_id(request)
+    def _current_window_start(self, now: datetime) -> datetime:
+        """Floor `now` to the current window boundary in UTC."""
+        aware = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        bucket = int(aware.timestamp()) // self.window * self.window
+        return datetime.fromtimestamp(bucket, tz=timezone.utc)
+
+    def _check_via_db(self, client_id: str, now: datetime) -> Optional[bool]:
+        """Atomically increment counter in Postgres for the current window.
+
+        Returns True if allowed, False if limit exceeded, or None if the DB
+        path is unavailable (caller should fall back to in-memory).
+        """
+        try:
+            from app.db.session import get_db_session
+        except Exception as exc:  # pragma: no cover - import guard
+            logger.debug("rate_limiter: DB session module unavailable (%s)", exc)
+            return None
+
+        window_start = self._current_window_start(now)
+        try:
+            with get_db_session() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO rate_limit_counters (client_id, window_start, count)
+                        VALUES (%s, %s, 1)
+                        ON CONFLICT (client_id, window_start)
+                        DO UPDATE SET count = rate_limit_counters.count + 1
+                        RETURNING count
+                        """,
+                        (client_id, window_start),
+                    )
+                    row = cur.fetchone()
+                    # RealDictCursor returns a dict; plain cursor returns a tuple.
+                    new_count = row["count"] if isinstance(row, dict) else row[0]
+
+                    if self._request_count % self.DB_CLEANUP_INTERVAL == 0:
+                        cur.execute(
+                            "DELETE FROM rate_limit_counters "
+                            "WHERE window_start < %s",
+                            (window_start - timedelta(seconds=self.window * 2),),
+                        )
+            return new_count <= self.requests
+        except Exception as exc:
+            logger.warning("rate_limiter: DB path failed, falling back to in-memory (%s)", exc)
+            return None
+
+    def _check_in_memory(self, client_id: str, now: datetime) -> bool:
+        """In-memory fallback. Returns True if allowed, False if blocked."""
         count, start_time = self._cache[client_id]
-        now = datetime.now()
 
         if now - start_time > timedelta(seconds=self.window):
             self._cache[client_id] = (1, now)
-            return
+            return True
 
         if count >= self.requests:
+            return False
+
+        self._cache[client_id] = (count + 1, start_time)
+        return True
+
+    def check_rate_limit(self, request: Request) -> None:
+        self._maybe_cleanup()
+        client_id = self._get_client_id(request)
+        now = datetime.now()
+
+        db_result = self._check_via_db(client_id, now)
+        if db_result is None:
+            allowed = self._check_in_memory(client_id, now)
+        else:
+            allowed = db_result
+
+        if not allowed:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Rate limit exceeded"
             )
 
-        self._cache[client_id] = (count + 1, start_time)
 
 rate_limiter = RateLimiter()
