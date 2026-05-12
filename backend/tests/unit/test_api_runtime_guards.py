@@ -18,7 +18,7 @@ async def test_chaoxing_login_offloads_blocking_work(monkeypatch):
 
     monkeypatch.setattr(chaoxing_api.asyncio, "to_thread", fake_to_thread)
 
-    response = await chaoxing_api.chaoxing_login(request=request, current_user={"user_id": 7})
+    response = await chaoxing_api.chaoxing_login(request=request, user_id="7")
 
     assert response["status"] is True
     assert calls == [
@@ -40,7 +40,7 @@ async def test_chaoxing_courses_offloads_blocking_work(monkeypatch):
 
     monkeypatch.setattr(chaoxing_api.asyncio, "to_thread", fake_to_thread)
 
-    response = await chaoxing_api.chaoxing_courses(current_user={"user_id": 9})
+    response = await chaoxing_api.chaoxing_courses(user_id="9")
 
     assert response["data"] == [{"courseId": "101", "name": "Algorithms"}]
     assert calls == [

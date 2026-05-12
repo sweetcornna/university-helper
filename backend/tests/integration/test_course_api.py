@@ -213,8 +213,8 @@ async def test_chaoxing_compat_login_and_courses():
     with patch("app.api.v1.chaoxing.signin_manager.login", return_value={"status": True, "message": "ok", "data": {}}), patch(
         "app.api.v1.chaoxing.signin_manager.get_courses", return_value=mock_courses
     ):
-        login_resp = await chaoxing_api.chaoxing_login(login_request, current_user={"user_id": 1})
-        courses_resp = await chaoxing_api.chaoxing_courses(current_user={"user_id": 1})
+        login_resp = await chaoxing_api.chaoxing_login(login_request, user_id="1")
+        courses_resp = await chaoxing_api.chaoxing_courses(user_id="1")
 
     assert login_resp["status"] is True
     assert courses_resp["data"] == mock_courses
@@ -237,11 +237,11 @@ async def test_chaoxing_class_subject_routes_are_parallel_to_courses():
     with patch("app.api.v1.chaoxing.signin_manager.get_classes", return_value=mock_classes), patch(
         "app.api.v1.chaoxing.signin_manager.get_class_activities", return_value=mock_activities
     ) as mock_get_activities:
-        classes_resp = await chaoxing_api.chaoxing_classes(current_user={"user_id": 1})
+        classes_resp = await chaoxing_api.chaoxing_classes(user_id="1")
         activities_resp = await chaoxing_api.chaoxing_class_activities(
             "2",
             course_id="1",
-            current_user={"user_id": 1},
+            user_id="1",
         )
 
     assert classes_resp["classes"] == mock_classes
@@ -267,7 +267,7 @@ async def test_chaoxing_class_sign_passes_class_and_active_filters():
                     "activeId": "11",
                 }
             ),
-            current_user={"user_id": 1},
+            user_id="1",
         )
 
     assert response["status"] is True
@@ -297,7 +297,7 @@ async def test_chaoxing_class_start_uses_class_task_manager():
                     "sign_type": "all",
                 }
             ),
-            current_user={"user_id": 1},
+            user_id="1",
         )
 
     assert response["status"] is True
@@ -325,7 +325,7 @@ async def test_chaoxing_signin_remote_endpoints_are_remote_urls():
             course_id="1_2",
             class_id="2",
             active_id="11",
-            current_user={"user_id": 1},
+            user_id="1",
         )
 
     assert response["remoteEndpoints"]["directBrowserRequest"] is True
@@ -449,7 +449,7 @@ async def test_chaoxing_start_accepts_multipart_photo():
     with patch("app.api.v1.chaoxing.signin_manager.start_task", side_effect=_fake_start_task):
         response = await chaoxing_api.chaoxing_start(
             raw_request=FakeMultipartRequest(form_data),
-            current_user={"user_id": 1},
+            user_id="1",
         )
 
     assert response["status"] is True
@@ -483,7 +483,7 @@ async def test_chaoxing_sign_accepts_multipart_photo():
     ) as mock_sign_once:
         response = await chaoxing_api.chaoxing_sign(
             raw_request=FakeMultipartRequest(form_data),
-            current_user={"user_id": 1},
+            user_id="1",
         )
 
     assert response["status"] is True

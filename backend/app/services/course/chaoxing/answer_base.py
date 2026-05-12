@@ -174,7 +174,7 @@ class Tiku:
                 raise KeyError
         except KeyError:
             self.DISABLE = True
-            logger.error("未找到题库配置, 已忽略题库功能")
+            logger.info("未找到题库配置, 已忽略题库功能")
             return self
         # FIXME: Implement using StrEnum instead. This is not only buggy but also not safe
         # Import providers at runtime to build the lookup (avoids circular imports)
