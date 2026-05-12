@@ -15,6 +15,10 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Strict ASCII-only username pattern; prevents Unicode homoglyph bypass of
+# tenant DB naming (f"tenant_{username}") and identifier-based SQL surfaces.
+USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,30}$")
+
 
 class AuthService:
     @staticmethod
@@ -85,8 +89,8 @@ class AuthService:
                 ddl_conn.close()
 
     async def register_user(self, username: str, email: str, password: str) -> dict:
-        if not username.isalnum():
-            raise ValueError("Username must be alphanumeric")
+        if not USERNAME_RE.match(username):
+            raise ValueError("Username must be 3-30 ASCII alphanumeric/underscore characters")
         self._validate_password_strength(password)
         password_hash = hash_password(password)
         tenant_db_name = f"tenant_{username}"

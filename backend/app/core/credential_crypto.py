@@ -60,7 +60,8 @@ _cipher: _FernetCipher | _NoopCipher | None = None
 
 
 def _is_production() -> bool:
-    return (os.getenv("ENV") or "").strip().lower() == "production"
+    env = (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower()
+    return env in ("prod", "production")
 
 
 def _build_cipher() -> _FernetCipher | _NoopCipher:
