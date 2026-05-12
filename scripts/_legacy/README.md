@@ -1,0 +1,1 @@
+Archived 2026-05-12. These scripts target a stale path `/opt/easy_learning` and overwrite the production `.env` (containing real SECRET_KEY/POSTGRES_PASSWORD). DO NOT use. Production deploys via `scripts/hotfix_publish.sh`.

@@ -66,3 +66,7 @@ htmlcov/
 # Build
 *.tar.gz
 *.zip
+
+# Runtime artifacts that must not be committed
+backend/cookies.json
+backend/cookies/

@@ -80,11 +80,13 @@ npm run dev
 
 ## 推荐部署方式
 
+> **唯一权威文档：[`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)。生产部署只使用 `scripts/hotfix_publish.sh`。**
+
 服务端部署建议使用：
 
 - [`docker-compose.server.yml`](./docker-compose.server.yml)
 - [`Dockerfile.server`](./Dockerfile.server)
-- [`DEPLOY_GUIDE.zh-CN.md`](./DEPLOY_GUIDE.zh-CN.md)
+- [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)
 
 快速启动：
 
@@ -93,7 +95,7 @@ cp .env.example .env
 docker compose -f docker-compose.server.yml up -d --build
 ```
 
-仓库根目录下的 `.env.example` 已按 `docker-compose.server.yml` 准备好。历史部署辅助脚本也已经改为通过环境变量读取目标服务器和密钥，不再内置凭据。
+仓库根目录下的 `.env.example` 已按 `docker-compose.server.yml` 准备好。原根目录下的 `deploy.*` 脚本已经移动到 [`scripts/_legacy/`](./scripts/_legacy/)，禁止运行。
 
 ## 测试
 

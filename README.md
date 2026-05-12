@@ -80,11 +80,13 @@ Use PostgreSQL 15+ and initialize the schema from the files under [`database/`](
 
 ## Recommended Deployment Path
 
+> **Single source of truth: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md). Production deploy uses `scripts/hotfix_publish.sh` only.**
+
 For server deployment, use:
 
 - [`docker-compose.server.yml`](./docker-compose.server.yml)
 - [`Dockerfile.server`](./Dockerfile.server)
-- [`DEPLOY_GUIDE.md`](./DEPLOY_GUIDE.md)
+- [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)
 
 Quick start:
 
@@ -93,7 +95,7 @@ cp .env.example .env
 docker compose -f docker-compose.server.yml up -d --build
 ```
 
-The root `.env.example` is prepared for `docker-compose.server.yml`. Historical helper scripts now rely on environment variables instead of embedded credentials.
+The root `.env.example` is prepared for `docker-compose.server.yml`. The legacy root-level `deploy.*` scripts have been moved to [`scripts/_legacy/`](./scripts/_legacy/) and must not be run.
 
 ## Testing
 
