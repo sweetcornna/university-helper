@@ -160,8 +160,8 @@ class ChaoxingVideoService:
             return False, 403
 
         logger.error(f"未知错误: {resp.status_code}")
-        logger.error("请求url:", resp.url)
-        logger.error("请求头：", dict(_session.headers) | headers)
+        logger.error("请求url: {}", resp.url)
+        logger.error("请求头: {}", dict(_session.headers) | headers)
         return False, resp.status_code
 
     # ------------------------------------------------------------------
@@ -182,7 +182,7 @@ class ChaoxingVideoService:
             return None
 
         if resp.status_code != 200:
-            logger.debug("刷新视频状态返回码异常: {}"% resp.status_code)
+            logger.debug("刷新视频状态返回码异常: {}", resp.status_code)
             logger.debug(resp.text)
             return None
 
@@ -230,7 +230,11 @@ class ChaoxingVideoService:
 
         headers = gc.VIDEO_HEADERS if _type == "Video" else gc.AUDIO_HEADERS
         _info_url = f"https://mooc1.chaoxing.com/ananas/status/{_job['objectid']}?k={self._get_fid()}&flag=normal"
-        _video_info = _session.get(_info_url, headers=headers).json()
+        try:
+            _video_info = _session.get(_info_url, headers=headers).json()
+        except (RequestException, ValueError) as exc:
+            logger.warning("获取视频信息失败 (jobid={}): {}", _job.get("jobid"), exc)
+            return StudyResult.ERROR
 
         if _video_info["status"] != "success":
             logger.error(f"Unknown status: {_video_info['status']}")

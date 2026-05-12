@@ -3,6 +3,7 @@ import { MapPin, Search, X, Loader2 } from 'lucide-react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { getToken } from '../utils/auth'
+import { bd09ToWgs84, wgs84ToBd09 } from '../utils/coordTransform'
 
 const DEFAULT_CENTER = [39.9042, 116.4074]
 const DEFAULT_ZOOM = 15
@@ -45,9 +46,17 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
 
     let centerLat = DEFAULT_CENTER[0]
     let centerLng = DEFAULT_CENTER[1]
+    let hasInitial = false
     if (initialLocation?.latitude && initialLocation?.longitude) {
-      centerLat = Number(initialLocation.latitude)
-      centerLng = Number(initialLocation.longitude)
+      // Form stores BD-09; convert to WGS-84 for the OSM map.
+      const bdLat = Number(initialLocation.latitude)
+      const bdLng = Number(initialLocation.longitude)
+      if (Number.isFinite(bdLat) && Number.isFinite(bdLng)) {
+        const [wgsLng, wgsLat] = bd09ToWgs84(bdLng, bdLat)
+        centerLat = wgsLat
+        centerLng = wgsLng
+        hasInitial = true
+      }
     }
 
     const map = L.map(mapContainerRef.current).setView([centerLat, centerLng], DEFAULT_ZOOM)
@@ -60,13 +69,13 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
     mapRef.current = map
 
     // Place initial marker if coordinates exist
-    if (initialLocation?.latitude && initialLocation?.longitude) {
+    if (hasInitial) {
       const marker = L.marker([centerLat, centerLng]).addTo(map)
       markerRef.current = marker
       setDraft({
         address: initialLocation.address || '',
-        latitude: String(initialLocation.latitude),
-        longitude: String(initialLocation.longitude),
+        latitude: String(centerLat),
+        longitude: String(centerLng),
         source: '表单已有坐标',
       })
     }
@@ -296,7 +305,13 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
                   )}
                 </p>
                 <p className="mt-1 font-mono text-xs text-gray-500">
-                  {draft.latitude}, {draft.longitude}
+                  {(() => {
+                    const [bdLng, bdLat] = wgs84ToBd09(
+                      Number(draft.longitude),
+                      Number(draft.latitude)
+                    )
+                    return `${bdLat.toFixed(6)}, ${bdLng.toFixed(6)} (BD-09)`
+                  })()}
                 </p>
               </div>
             )}

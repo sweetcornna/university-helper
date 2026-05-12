@@ -1,4 +1,5 @@
-import { Camera, MapPin, QrCode, CheckSquare, Clock } from 'lucide-react'
+/* eslint-disable react/prop-types */
+import { Camera, MapPin, QrCode, CheckSquare, Clock, ExternalLink } from 'lucide-react'
 import { RefreshCw } from 'lucide-react'
 
 import { Button } from '../../../components'
@@ -14,7 +15,7 @@ const getSignTypeIcon = (type) => {
   }
 }
 
-export default function TasksTab({ signinTasks, fetchSigninTasks, openBackgroundTask, executeSignin }) {
+export default function TasksTab({ signinTasks, fetchSigninTasks, openBackgroundTask, executeSignin, executeClassSignin }) {
   return (
     <div className="mt-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -39,6 +40,11 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
             const taskTypeLabel = String(task?.typeLabel || taskType || 'normal')
             const taskMessage = String(task?.message || '')
             const taskStatusValue = String(task?.status || '').toLowerCase()
+            const isClassTask = String(task?.subjectType || '').toLowerCase() === 'class'
+            const title = isClassTask
+              ? (task.className || task.courseName || (isBackgroundTask ? '班级后台签到任务' : '班级签到任务'))
+              : (task.courseName || (isBackgroundTask ? '后台签到任务' : '待处理签到任务'))
+            const remoteSubmitUrl = String(task?.remoteEndpoints?.endpoints?.submitSign?.url || '').trim()
             return (
             <div
               key={idx}
@@ -62,7 +68,10 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
                 <div className="flex items-start gap-3 flex-1">
                   <div className="mt-1">{getSignTypeIcon(taskType)}</div>
                   <div className="flex-1">
-                    <h4 className="font-medium text-text">{task.courseName || (isBackgroundTask ? '后台签到任务' : '待处理签到任务')}</h4>
+                    <h4 className="font-medium text-text">{title}</h4>
+                    {isClassTask && task.courseName && task.courseName !== title && (
+                      <p className="text-sm text-text/70 mt-1">所属课程：{task.courseName}</p>
+                    )}
                     <p className="text-sm text-text/70 mt-1">签到类型：{taskTypeLabel}</p>
                     {taskMessage && (
                       <p className="text-sm text-text/70 mt-1">{taskMessage}</p>
@@ -76,6 +85,18 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
                         截止时间：{new Date(task.deadline).toLocaleString()}
                       </p>
                     )}
+                    {remoteSubmitUrl && (
+                      <a
+                        className="mt-2 inline-flex items-center gap-1 break-all text-xs text-primary hover:underline"
+                        href={remoteSubmitUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                        学习通远程提交接口
+                      </a>
+                    )}
                   </div>
                 </div>
                 <Button
@@ -88,6 +109,16 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
                       if (backgroundTaskId) {
                         void openBackgroundTask(backgroundTaskId)
                       }
+                      return
+                    }
+                    if (isClassTask && task.classId && executeClassSignin) {
+                      void executeClassSignin({
+                        id: task.courseSelector || task.courseId || task.classId,
+                        classId: String(task.classId),
+                        courseId: String(task.rawCourseId || ''),
+                        courseSelector: String(task.courseSelector || task.courseId || ''),
+                        name: title,
+                      }, taskType)
                       return
                     }
                     void executeSignin(task.courseId, taskType)

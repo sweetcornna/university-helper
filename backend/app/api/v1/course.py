@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user
+from app.services.course.chaoxing.course_portal_service import chaoxing_course_portal_service
 from app.services.course.chaoxing.signin import signin_manager
 from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
 
@@ -326,6 +327,37 @@ def _get_zhihuishu_adapter(user_id: str, required: bool = True) -> Optional[Zhih
     return adapter
 
 
+async def _get_chaoxing_client(user_id: str):
+    client = await _run_blocking(signin_manager.get_client, user_id)
+    if client is None:
+        raise HTTPException(status_code=401, detail="Please login to Chaoxing first")
+    return client
+
+
+async def _resolve_chaoxing_course_context(user_id: str, course_id: str):
+    courses = await _run_blocking(signin_manager.get_courses, user_id)
+    try:
+        return chaoxing_course_portal_service.resolve_course(course_id, courses)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def _load_chaoxing_course_tab(user_id: str, course_id: str, tab_key: str) -> Dict[str, Any]:
+    client = await _get_chaoxing_client(user_id)
+    context = await _resolve_chaoxing_course_context(user_id, course_id)
+    try:
+        return await _run_blocking(
+            chaoxing_course_portal_service.fetch_tab,
+            client.session,
+            context,
+            tab_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 def _register_zhihuishu_course_task(
     user_id: str,
     course_id: str,
@@ -408,7 +440,7 @@ async def start_zhihuishu_qr_login(current_user: dict = Depends(get_current_user
 
     threading.Thread(target=login_worker, daemon=True).start()
 
-    if not qr_ready_event.wait(timeout=12):
+    if not await asyncio.to_thread(qr_ready_event.wait, 12):
         with _qr_sessions_lock:
             _qr_sessions.pop(session_id, None)
         raise HTTPException(status_code=504, detail="Failed to generate QR code")
@@ -940,6 +972,99 @@ async def get_courses(
     }
 
 
+@router.get("/chaoxing/tabs")
+async def chaoxing_course_tabs(current_user: dict = Depends(get_current_user)):
+    _current_user_id(current_user)
+    tabs = chaoxing_course_portal_service.list_tabs()
+    return {"status": "success", "message": "ok", "data": tabs, "tabs": tabs}
+
+
+@router.get("/chaoxing/course/{course_id}/portal-urls")
+async def chaoxing_course_portal_urls(
+    course_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _current_user_id(current_user)
+    context = await _resolve_chaoxing_course_context(user_id, course_id)
+    data = chaoxing_course_portal_service.build_portal_urls(context)
+    return {
+        "status": "success",
+        "message": "Course portal URLs loaded",
+        "data": data,
+        "course": data["course"],
+        "tabs": data["tabs"],
+    }
+
+
+@router.get("/chaoxing/course/{course_id}/remote-endpoints")
+async def chaoxing_course_remote_endpoints(
+    course_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    return await chaoxing_course_portal_urls(course_id=course_id, current_user=current_user)
+
+
+@router.get("/chaoxing/course/{course_id}/tabs/{tab_key}")
+async def chaoxing_course_tab(
+    course_id: str,
+    tab_key: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _current_user_id(current_user)
+    data = await _load_chaoxing_course_tab(user_id, course_id, tab_key)
+    return {"status": "success", "message": "Course tab loaded", "data": data, **data}
+
+
+@router.get("/chaoxing/course/{course_id}/chapters")
+async def chaoxing_course_chapters(
+    course_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _current_user_id(current_user)
+    data = await _load_chaoxing_course_tab(user_id, course_id, "chapters")
+    return {"status": "success", "message": "Chapters loaded", "data": data, **data}
+
+
+@router.get("/chaoxing/course/{course_id}/activities")
+async def chaoxing_course_activities(
+    course_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _current_user_id(current_user)
+    data = await _load_chaoxing_course_tab(user_id, course_id, "activities")
+    return {"status": "success", "message": "Activities loaded", "data": data, **data}
+
+
+@router.get("/chaoxing/course/{course_id}/resources")
+async def chaoxing_course_resources(
+    course_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _current_user_id(current_user)
+    data = await _load_chaoxing_course_tab(user_id, course_id, "resources")
+    return {"status": "success", "message": "Resources loaded", "data": data, **data}
+
+
+@router.get("/chaoxing/course/{course_id}/homework")
+async def chaoxing_course_homework(
+    course_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _current_user_id(current_user)
+    data = await _load_chaoxing_course_tab(user_id, course_id, "homework")
+    return {"status": "success", "message": "Homework loaded", "data": data, **data}
+
+
+@router.get("/chaoxing/course/{course_id}/tests")
+async def chaoxing_course_tests(
+    course_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _current_user_id(current_user)
+    data = await _load_chaoxing_course_tab(user_id, course_id, "tests")
+    return {"status": "success", "message": "Tests loaded", "data": data, **data}
+
+
 @router.get("/chapters/{course_id}")
 async def get_chapters(
     course_id: str,
@@ -948,43 +1073,16 @@ async def get_chapters(
     user_id = _current_user_id(current_user)
 
     try:
-        course_parts = course_id.split("_")
-        if len(course_parts) < 2:
-            raise HTTPException(status_code=400, detail="Invalid course_id format")
-
-        courseid, clazzid = course_parts[0], course_parts[1]
-        cpi = course_parts[2] if len(course_parts) >= 3 else ""
-        if not cpi:
-            for item in await _run_blocking(signin_manager.get_courses, user_id):
-                if str(item.get("courseId")) == str(courseid) and str(item.get("classId")) == str(clazzid):
-                    cpi = str(item.get("cpi") or "")
-                    break
-        if not cpi:
-            raise HTTPException(status_code=400, detail="Missing cpi in course_id")
-
-        client = await _run_blocking(signin_manager.get_client, user_id)
-        if client is None:
-            raise HTTPException(status_code=401, detail="Please login to Chaoxing first")
-
-        from app.services.course.chaoxing.decode import decode_course_point
-
-        response = await _run_blocking(
-            client.session.get,
-            "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse",
-            params={
-                "courseid": courseid,
-                "clazzid": clazzid,
-                "cpi": cpi,
-                "ut": "s",
-            },
-            timeout=12,
-        )
-        if response.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Fetch chapters failed: {response.status_code}")
-        parsed = decode_course_point(response.text)
-        chapters = parsed.get("points", []) if isinstance(parsed, dict) else []
-
-        return {"chapters": chapters}
+        data = await _load_chaoxing_course_tab(user_id, course_id, "chapters")
+        return {
+            "status": "success",
+            "message": "Chapters loaded",
+            "data": data,
+            "chapters": data.get("chapters", []),
+            "course": data.get("course"),
+            "tab": data.get("tab"),
+            "url": data.get("url"),
+        }
     except HTTPException:
         raise
     except Exception as exc:
@@ -992,7 +1090,7 @@ async def get_chapters(
 
 
 @router.post("/notify/test")
-async def test_notification(request: dict):
+async def test_notification(request: dict, current_user: dict = Depends(get_current_user)):
 
     service = request.get("service")
     url = request.get("url")

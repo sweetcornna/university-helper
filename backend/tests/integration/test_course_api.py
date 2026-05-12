@@ -66,6 +66,59 @@ class FakeMultipartRequest:
         return {}
 
 
+class FakeJsonRequest:
+    def __init__(self, payload):
+        self.headers = {"content-type": "application/json"}
+        self._payload = payload
+
+    async def form(self):
+        return FormData([])
+
+    async def json(self):
+        return self._payload
+
+
+class FakeChaoxingResponse:
+    def __init__(self, text="", payload=None, status_code=200):
+        self.text = text
+        self._payload = payload if payload is not None else {}
+        self.status_code = status_code
+
+    def json(self):
+        return self._payload
+
+
+class FakeChaoxingSession:
+    def __init__(self):
+        self.calls = []
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append({"url": url, "params": params, "timeout": timeout})
+        if "activelist" in url:
+            return FakeChaoxingResponse(
+                payload={
+                    "data": {
+                        "activeList": [
+                            {
+                                "id": 11,
+                                "nameOne": "位置签到",
+                                "otherId": 4,
+                                "status": 1,
+                            }
+                        ]
+                    }
+                }
+            )
+        return FakeChaoxingResponse(
+            text='<div><a href="/mooc2/resource/view?id=1" title="课程资料.pdf">下载</a></div>'
+        )
+
+
+class FakeChaoxingClient:
+    def __init__(self):
+        self.session = FakeChaoxingSession()
+
+
 @pytest.fixture(autouse=True)
 def reset_state():
     course_api._user_adapters.clear()
@@ -117,6 +170,42 @@ async def test_course_login_and_courses():
 
 
 @pytest.mark.asyncio
+async def test_chaoxing_course_portal_urls_use_real_desktop_tabs():
+    mock_courses = [{"id": "1_2_3", "courseId": "1", "classId": "2", "cpi": "3", "name": "Course A"}]
+
+    with patch("app.api.v1.course.signin_manager.get_courses", return_value=mock_courses):
+        response = await course_api.chaoxing_course_portal_urls("1_2", current_user={"user_id": 1})
+
+    tabs = {tab["key"]: tab for tab in response["tabs"]}
+    assert response["course"]["id"] == "1_2_3"
+    assert "pageHeader=0" in tabs["activities"]["shellUrl"]
+    assert "mobilelearn.chaoxing.com/page/active/stuActiveList" in tabs["activities"]["frameUrl"]
+    assert "mobilelearn.chaoxing.com/v2/apis/active/student/activelist" in tabs["activities"]["remoteRequest"]["url"]
+    assert "mooc2-ans.chaoxing.com/mooc2-ans/coursedata/stu-datalist" in tabs["resources"]["frameUrl"]
+    assert "mooc1.chaoxing.com/mooc2/work/list" in tabs["homework"]["frameUrl"]
+    assert "proxyEndpoint" not in tabs["activities"]
+    assert tabs["activities"]["directBrowserRequest"] is True
+
+
+@pytest.mark.asyncio
+async def test_chaoxing_course_resources_and_activities_fetch_from_real_routes():
+    fake_client = FakeChaoxingClient()
+    mock_courses = [{"id": "1_2_3", "courseId": "1", "classId": "2", "cpi": "3", "name": "Course A"}]
+
+    with patch("app.api.v1.course.signin_manager.get_client", return_value=fake_client), patch(
+        "app.api.v1.course.signin_manager.get_courses", return_value=mock_courses
+    ):
+        resources = await course_api.chaoxing_course_resources("1_2", current_user={"user_id": 1})
+        activities = await course_api.chaoxing_course_activities("1_2_3", current_user={"user_id": 1})
+
+    assert resources["resources"][0]["title"] == "课程资料.pdf"
+    assert resources["resources"][0]["url"].startswith("https://mooc2-ans.chaoxing.com/mooc2/resource/view")
+    assert activities["activities"][0]["type"] == "location"
+    assert any("stu-datalist" in call["url"] for call in fake_client.session.calls)
+    assert any("activelist" in call["url"] for call in fake_client.session.calls)
+
+
+@pytest.mark.asyncio
 async def test_chaoxing_compat_login_and_courses():
     mock_courses = [{"id": "1_2", "courseId": "1", "classId": "2", "name": "Course A"}]
     login_request = chaoxing_api.ChaoxingLoginRequest(username="u", password="p", use_cookies=False)
@@ -129,6 +218,121 @@ async def test_chaoxing_compat_login_and_courses():
 
     assert login_resp["status"] is True
     assert courses_resp["data"] == mock_courses
+
+
+@pytest.mark.asyncio
+async def test_chaoxing_class_subject_routes_are_parallel_to_courses():
+    mock_classes = [
+        {
+            "id": "1_2",
+            "subjectType": "class",
+            "subjectId": "2",
+            "classId": "2",
+            "courseId": "1",
+            "name": "Class A",
+        }
+    ]
+    mock_activities = [{"activeId": "11", "classId": "2", "type": "location"}]
+
+    with patch("app.api.v1.chaoxing.signin_manager.get_classes", return_value=mock_classes), patch(
+        "app.api.v1.chaoxing.signin_manager.get_class_activities", return_value=mock_activities
+    ) as mock_get_activities:
+        classes_resp = await chaoxing_api.chaoxing_classes(current_user={"user_id": 1})
+        activities_resp = await chaoxing_api.chaoxing_class_activities(
+            "2",
+            course_id="1",
+            current_user={"user_id": 1},
+        )
+
+    assert classes_resp["classes"] == mock_classes
+    assert activities_resp["activities"] == mock_activities
+    assert mock_get_activities.call_args.kwargs["class_id"] == "2"
+    assert mock_get_activities.call_args.kwargs["course_id"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_chaoxing_class_sign_passes_class_and_active_filters():
+    with patch(
+        "app.api.v1.chaoxing.signin_manager.sign_class_once",
+        return_value={"status": True, "message": "ok", "data": {"task": {"classId": "2"}}},
+    ) as mock_sign:
+        response = await chaoxing_api.chaoxing_class_sign(
+            raw_request=FakeJsonRequest(
+                {
+                    "username": "u",
+                    "password": "p",
+                    "sign_type": "location",
+                    "classId": "2",
+                    "courseId": "1_2",
+                    "activeId": "11",
+                }
+            ),
+            current_user={"user_id": 1},
+        )
+
+    assert response["status"] is True
+    assert mock_sign.call_args.kwargs["class_id"] == "2"
+    assert mock_sign.call_args.kwargs["course_id"] == "1_2"
+    assert mock_sign.call_args.kwargs["active_id"] == "11"
+    assert mock_sign.call_args.kwargs["sign_type"] == "location"
+
+
+@pytest.mark.asyncio
+async def test_chaoxing_class_start_uses_class_task_manager():
+    captured = {}
+
+    def _fake_start_class_task(user_id, payload):
+        captured["user_id"] = user_id
+        captured["payload"] = payload
+        return "class-task-1"
+
+    with patch("app.api.v1.chaoxing.signin_manager.start_class_task", side_effect=_fake_start_class_task):
+        response = await chaoxing_api.chaoxing_class_start(
+            raw_request=FakeJsonRequest(
+                {
+                    "username": "u",
+                    "password": "p",
+                    "classList": ["2"],
+                    "courseList": ["1_2"],
+                    "sign_type": "all",
+                }
+            ),
+            current_user={"user_id": 1},
+        )
+
+    assert response["status"] is True
+    assert response["data"]["task_id"] == "class-task-1"
+    assert captured["user_id"] == "1"
+    assert captured["payload"]["class_list"] == ["2"]
+    assert captured["payload"]["course_list"] == ["1_2"]
+    assert captured["payload"]["subject_type"] == "class"
+
+
+@pytest.mark.asyncio
+async def test_chaoxing_signin_remote_endpoints_are_remote_urls():
+    with patch(
+        "app.api.v1.chaoxing.signin_manager.get_remote_endpoints",
+        return_value={
+            "directBrowserRequest": True,
+            "endpoints": {
+                "submitSign": {
+                    "url": "https://mobilelearn.chaoxing.com/pptSign/stuSignajax?activeId=11",
+                }
+            },
+        },
+    ) as mock_get_remote:
+        response = await chaoxing_api.chaoxing_remote_endpoints(
+            course_id="1_2",
+            class_id="2",
+            active_id="11",
+            current_user={"user_id": 1},
+        )
+
+    assert response["remoteEndpoints"]["directBrowserRequest"] is True
+    assert response["remoteEndpoints"]["endpoints"]["submitSign"]["url"].startswith("https://mobilelearn.chaoxing.com")
+    assert mock_get_remote.call_args.kwargs["course_id"] == "1_2"
+    assert mock_get_remote.call_args.kwargs["class_id"] == "2"
+    assert mock_get_remote.call_args.kwargs["active_id"] == "11"
 
 
 @pytest.mark.asyncio

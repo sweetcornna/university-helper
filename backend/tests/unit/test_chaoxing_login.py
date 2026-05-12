@@ -1,7 +1,7 @@
 ﻿import time
 from unittest.mock import Mock, patch
 
-from app.services.course.chaoxing.signin import ChaoxingSigninClient
+from app.services.course.chaoxing.signin import ChaoxingSigninClient, build_remote_sign_endpoints
 
 
 def test_chaoxing_signin_client_login_success():
@@ -52,6 +52,81 @@ def test_chaoxing_signin_get_active_tasks_location_filter():
     assert len(tasks) == 1
     assert tasks[0]["type"] == "location"
     assert tasks[0]["courseId"] == "1_2"
+
+
+def test_chaoxing_signin_get_class_subjects_are_parallel_subjects():
+    client = ChaoxingSigninClient()
+
+    with patch.object(
+        client,
+        "get_courses",
+        return_value=[
+            {
+                "id": "1_2_3",
+                "courseId": "1",
+                "classId": "2",
+                "cpi": "3",
+                "courseName": "Demo Course",
+            }
+        ],
+    ):
+        subjects = client.get_class_subjects()
+
+    assert len(subjects) == 1
+    assert subjects[0]["subjectType"] == "class"
+    assert subjects[0]["subjectId"] == "2"
+    assert subjects[0]["classId"] == "2"
+    assert subjects[0]["courseId"] == "1"
+    assert subjects[0]["id"] == "1_2_3"
+
+
+def test_chaoxing_signin_get_active_tasks_filters_by_class_and_active_id():
+    client = ChaoxingSigninClient()
+    now_ms = int(time.time() * 1000)
+
+    def _activities(course_id, class_id):
+        if class_id == "2":
+            return [
+                {"id": "11", "status": 1, "otherId": 4, "nameOne": "Class Location", "startTime": now_ms},
+                {"id": "12", "status": 1, "otherId": 4, "nameOne": "Other Active", "startTime": now_ms},
+            ]
+        return [{"id": "11", "status": 1, "otherId": 4, "nameOne": "Wrong Class", "startTime": now_ms}]
+
+    with patch.object(
+        client,
+        "get_courses",
+        return_value=[
+            {"courseId": "1", "classId": "2", "courseName": "Demo Course"},
+            {"courseId": "3", "classId": "4", "courseName": "Other Course"},
+        ],
+    ), patch.object(client, "_get_course_activity_list", side_effect=_activities):
+        tasks = client.get_active_tasks(class_filters=["2"], active_id="11", expected_type="location")
+
+    assert len(tasks) == 1
+    assert tasks[0]["subjectType"] == "class"
+    assert tasks[0]["activeId"] == "11"
+    assert tasks[0]["classId"] == "2"
+    assert tasks[0]["rawCourseId"] == "1"
+    assert tasks[0]["taskId"] == "1:2:11"
+    assert "mobilelearn.chaoxing.com/pptSign/stuSignajax" in tasks[0]["remoteEndpoints"]["endpoints"]["submitSign"]["url"]
+
+
+def test_chaoxing_remote_sign_endpoints_are_real_chaoxing_urls():
+    endpoints = build_remote_sign_endpoints(
+        course_id="1",
+        class_id="2",
+        active_id="11",
+        uid="99",
+        fid="88",
+    )
+
+    assert endpoints["directBrowserRequest"] is True
+    assert endpoints["browserRequestMode"] == "remote-direct"
+    assert "mobilelearn.chaoxing.com/v2/apis/active/student/activelist" in endpoints["endpoints"]["activities"]["url"]
+    assert "courseId=1" in endpoints["endpoints"]["activities"]["url"]
+    assert "classId=2" in endpoints["endpoints"]["activities"]["url"]
+    assert "mobilelearn.chaoxing.com/newsign/preSign" in endpoints["endpoints"]["preSign"]["url"]
+    assert "mobilelearn.chaoxing.com/pptSign/stuSignajax" in endpoints["endpoints"]["submitSign"]["url"]
 
 
 def test_chaoxing_signin_get_courses_traverse_folder_and_dedup():

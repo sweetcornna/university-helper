@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 
 
-import { CARD, getCourseId, mergeTaskHistory, toNum } from './chaoxing-fanya/utils'
+import { CARD, getCourseId, mergeTaskHistory } from './chaoxing-fanya/utils'
 
 
 import useTaskConfig from './chaoxing-fanya/hooks/useTaskConfig'
@@ -11,6 +11,7 @@ import useAuthentication from './chaoxing-fanya/hooks/useAuthentication'
 
 import LoginSection from './chaoxing-fanya/components/LoginSection'
 import CourseListSection from './chaoxing-fanya/components/CourseListSection'
+import CoursePortalSection from './chaoxing-fanya/components/CoursePortalSection'
 import ConfigSection from './chaoxing-fanya/components/ConfigSection'
 import TaskControlSection from './chaoxing-fanya/components/TaskControlSection'
 import TaskHistorySection from './chaoxing-fanya/components/TaskHistorySection'
@@ -207,6 +208,13 @@ export default function ChaoxingFanya() {
               expanded={expanded}
               toggleExpand={toggleExpand}
               loadCourses={auth.loadCourses}
+            />
+
+            <CoursePortalSection
+              courses={auth.courses}
+              selectedCourses={selectedCourses}
+              setError={auth.setError}
+              setNotice={auth.setNotice}
             />
 
 

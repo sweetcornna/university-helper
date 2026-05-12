@@ -75,6 +75,15 @@ async def https_redirect_middleware(request: Request, call_next):
 # CSRF protection
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_build_allowed_hosts(settings.CORS_ORIGINS))
 
+# CORS production safety checks
+_cors_origins = settings.CORS_ORIGINS or []
+if "*" in _cors_origins and getattr(settings, "ENV", "dev") == "production":
+    raise RuntimeError("CORS_ORIGINS='*' is not allowed in production")
+if getattr(settings, "ENV", "dev") == "production":
+    _bad = [o for o in _cors_origins if o.startswith("http://") and "localhost" not in o]
+    if _bad:
+        raise RuntimeError(f"CORS_ORIGINS in production must use https://: {_bad}")
+
 # CORS
 app.add_middleware(
     CORSMiddleware,

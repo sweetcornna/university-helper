@@ -4,6 +4,12 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import ChaoxingSignin from './ChaoxingSignin'
+import { wgs84ToBd09 } from '../utils/coordTransform'
+
+const expectedBd09 = (wgsLat, wgsLng) => {
+  const [bdLng, bdLat] = wgs84ToBd09(wgsLng, wgsLat)
+  return { lat: String(bdLat), lng: String(bdLng) }
+}
 
 const mockBootstrapResponse = (payload = {}) => ({
   ok: true,
@@ -137,8 +143,9 @@ describe('ChaoxingSignin location flow', () => {
       const longitudeInput = container.querySelector('#cx-longitude')
 
       if (!latitudeInput || !longitudeInput) return false
-      if (latitudeInput.value !== '39.9042') return false
-      if (longitudeInput.value !== '116.4074') return false
+      const { lat, lng } = expectedBd09(39.9042, 116.4074)
+      if (latitudeInput.value !== lat) return false
+      if (longitudeInput.value !== lng) return false
 
       return true
     })
@@ -202,8 +209,9 @@ describe('ChaoxingSignin location flow', () => {
       const nextAddressInput = container.querySelector('#cx-address')
 
       if (!latitudeInput || !longitudeInput || !nextAddressInput) return false
-      if (latitudeInput.value !== '39.9928') return false
-      if (longitudeInput.value !== '116.3055') return false
+      const { lat, lng } = expectedBd09(39.9928, 116.3055)
+      if (latitudeInput.value !== lat) return false
+      if (longitudeInput.value !== lng) return false
       if (!nextAddressInput.value.includes('北京大学')) return false
 
       return true

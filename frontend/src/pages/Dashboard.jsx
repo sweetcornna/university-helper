@@ -196,45 +196,57 @@ export default function Dashboard() {
               onClick={() => handleClick(i)}
               onMouseEnter={() => { setHovered(i); setPaused(true) }}
               onMouseLeave={() => { setHovered(-1); setPaused(false) }}
-              className="absolute cursor-pointer select-none"
+              className="absolute cursor-pointer select-none touch-manipulation"
               style={{
-                transform: `translate(${pos.x * orbitRadius}px, ${pos.y * orbitRadius}px) scale(${isHov ? 1.12 : 1})`,
+                // Outer: rAF-driven orbit translate. No CSS transition on transform —
+                // mixing a 0.45s transition with 60fps rAF updates causes overlapping
+                // animations and stutters badly on mobile.
+                transform: `translate3d(${pos.x * orbitRadius}px, ${pos.y * orbitRadius}px, 0)`,
                 opacity: isOther ? 0 : 1,
-                transition: isExpanding
-                  ? 'none'
-                  : 'transform 0.45s cubic-bezier(.4,0,.2,1), opacity 0.5s ease',
+                transition: isExpanding ? 'none' : 'opacity 0.5s ease',
                 zIndex: isHov ? 10 : 1,
+                willChange: 'transform',
               }}
             >
-              {/* glow ring */}
+              {/* Inner: hover scale lives on its own transform so it can animate
+                  without fighting the orbit translate above. */}
               <div
-                className="absolute inset-0 rounded-full blur-xl transition-opacity duration-500"
+                className="relative"
                 style={{
-                  background: svc.glow,
-                  opacity: isHov ? 0.6 : 0.2,
-                  transform: 'scale(1.3)',
-                }}
-              />
-
-              {/* bubble body */}
-              <div
-                className={`relative flex flex-col items-center justify-center rounded-full border border-white/50 backdrop-blur-xl transition-shadow duration-500 ${
-                  isHov ? 'shadow-2xl' : 'shadow-lg'
-                }`}
-                style={{
-                  width: 120,
-                  height: 120,
-                  background: `linear-gradient(135deg, rgba(255,255,255,.85), rgba(255,255,255,.55))`,
+                  transform: `scale(${isHov ? 1.12 : 1})`,
+                  transition: isExpanding ? 'none' : 'transform 0.3s cubic-bezier(.4,0,.2,1)',
                 }}
               >
-                {/* icon circle */}
+                {/* glow ring */}
                 <div
-                  className={`mb-1.5 flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br ${svc.gradient} shadow-md`}
+                  className="absolute inset-0 rounded-full blur-xl transition-opacity duration-500"
+                  style={{
+                    background: svc.glow,
+                    opacity: isHov ? 0.6 : 0.2,
+                    transform: 'scale(1.3)',
+                  }}
+                />
+
+                {/* bubble body */}
+                <div
+                  className={`relative flex flex-col items-center justify-center rounded-full border border-white/50 backdrop-blur-xl transition-shadow duration-500 ${
+                    isHov ? 'shadow-2xl' : 'shadow-lg'
+                  }`}
+                  style={{
+                    width: 120,
+                    height: 120,
+                    background: `linear-gradient(135deg, rgba(255,255,255,.85), rgba(255,255,255,.55))`,
+                  }}
                 >
-                  <svc.icon className="h-5 w-5 text-white" />
+                  {/* icon circle */}
+                  <div
+                    className={`mb-1.5 flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br ${svc.gradient} shadow-md`}
+                  >
+                    <svc.icon className="h-5 w-5 text-white" />
+                  </div>
+                  <span className="text-xs font-bold text-text/90">{svc.title}</span>
+                  <span className="text-[10px] text-text/50">{svc.desc}</span>
                 </div>
-                <span className="text-xs font-bold text-text/90">{svc.title}</span>
-                <span className="text-[10px] text-text/50">{svc.desc}</span>
               </div>
             </div>
           )

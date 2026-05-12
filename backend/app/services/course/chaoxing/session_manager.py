@@ -24,7 +24,7 @@ class SessionManager:
 
     def __init__(self):
         self._session = requests.Session()
-        adapter = HTTPAdapter(max_retries=10, pool_connections=10, pool_maxsize=20)
+        adapter = HTTPAdapter(max_retries=3, pool_connections=50, pool_maxsize=100)
         self._session.mount("https://", adapter)
         self._session.mount("http://", adapter)
         self._session.request = functools.partial(self._session.request, timeout=5)

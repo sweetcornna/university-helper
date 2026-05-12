@@ -434,7 +434,11 @@ class JobProcessor:
                 except Empty:
                     continue
                 self.task_queue.put(task)
-                self.task_queue.task_done() # task_done is not called when a task failed and needs to be retried, so if is reput into the queue, the task num will increase by one and become more than the real task number
+                # NOTE: do NOT call task_done() here. The original task remains
+                # unfinished until the worker re-processes it and marks it done
+                # (success / max-retries / cancelled). Calling task_done() here
+                # would decrement unfinished_tasks for a task that is still in
+                # flight, causing the main join() to return prematurely.
                 time.sleep(1)
         except ShutDown:
             pass
@@ -471,8 +475,14 @@ def process_chapter(chaoxing: Chaoxing, course:dict[str, Any], point:dict[str, A
         return ChapterResult.CANCELLED
 
     # 发现未开放章节, 根据配置处理
-    if job_info.get("notOpen", False):
+    if job_info and job_info.get("notOpen", False):
         return ChapterResult.NOT_OPEN
+
+    # get_job_list 失败时会返回 ({}, {}) —— 既无 jobs 也无 job_info，
+    # 不能把它当成"空任务/已完成"静默成功，否则章节会被错误标记 SUCCESS。
+    if not job_info and not jobs:
+        logger.error("获取章节任务列表失败: {}", point.get("title", "unknown"))
+        return ChapterResult.ERROR
 
     # 已经默认处理空任务，此处不需要判断
     if not jobs:

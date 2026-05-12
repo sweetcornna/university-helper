@@ -68,7 +68,6 @@ class CxCaptcha:
             'Cookie': self.cookies,
             'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
         })
-        self.s.verify = False
 
         self.ocr = ocr if ocr else ocr_init()
 
@@ -104,7 +103,7 @@ class CxCaptcha:
             'ucode': cap_token,
             'app': 0
         }
-        res = self.s.get(api, params=params)
+        res = self.s.get(api, params=params, allow_redirects=False)
         if res.status_code == 302:
             return True
         else:

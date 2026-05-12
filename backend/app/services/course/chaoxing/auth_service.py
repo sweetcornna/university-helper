@@ -40,14 +40,18 @@ class ChaoxingAuthService:
             "independentId": 0,
         }
         logger.trace("正在尝试登录...")
-        resp = _session.post(_url, headers=gc.HEADERS, data=_data)
-        if resp and resp.json()["status"] == True:
+        resp = _session.post(_url, headers=gc.HEADERS, data=_data, timeout=10)
+        try:
+            resp_data = resp.json()
+        except ValueError:
+            return {"status": False, "msg": "upstream returned non-JSON"}
+        if resp and resp_data["status"] == True:
             save_cookies(_session)
             SessionManager.update_cookies()
             logger.info("登录成功...")
             return {"status": True, "msg": "登录成功"}
         else:
-            return {"status": False, "msg": str(resp.json()["msg2"])}
+            return {"status": False, "msg": str(resp_data["msg2"])}
 
     def _validate_cookie_session(self) -> bool:
         session = SessionManager.get_instance()._session

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 
 import { normalizeBaiduLocationResult, normalizeBaiduPlaceCandidates } from '../../../services/baiduLocation'
+import { wgs84ToBd09 } from '../../../utils/coordTransform'
 
 export default function useLocationServices(requestChaoxingApi, setForm) {
   const latestAddressRef = useRef('')
@@ -15,13 +16,24 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
   const [placeSearchMessage, setPlaceSearchMessage] = useState('')
   const [isMapPickerOpen, setIsMapPickerOpen] = useState(false)
 
+  // Inputs arrive as WGS-84 (from the Photon-backed API and the OSM map picker).
+  // Chaoxing expects Baidu BD-09 coordinates, so convert once at this boundary.
   const applyResolvedLocation = useCallback((location) => {
     latestAddressRef.current = location.address || latestAddressRef.current
+    const wgsLat = Number(location.latitude)
+    const wgsLng = Number(location.longitude)
+    let latOut = location.latitude
+    let lngOut = location.longitude
+    if (Number.isFinite(wgsLat) && Number.isFinite(wgsLng)) {
+      const [bdLng, bdLat] = wgs84ToBd09(wgsLng, wgsLat)
+      latOut = String(bdLat)
+      lngOut = String(bdLng)
+    }
     setForm((prev) => ({
       ...prev,
       address: location.address || prev.address,
-      latitude: location.latitude,
-      longitude: location.longitude,
+      latitude: latOut,
+      longitude: lngOut,
     }))
   }, [setForm])
 

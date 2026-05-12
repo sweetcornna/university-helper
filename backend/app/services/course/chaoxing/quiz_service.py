@@ -260,7 +260,7 @@ class ChaoxingQuizService:
         self.kwargs = kwargs
 
     def study_work(self, _course, _job, _job_info):
-        if self.tiku.DISABLE or not self.tiku:
+        if not self.tiku or self.tiku.DISABLE:
             return True
 
         _session = SessionManager.get_session()

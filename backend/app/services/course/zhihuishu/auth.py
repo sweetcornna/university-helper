@@ -53,7 +53,7 @@ class ZhihuishuAuth:
             normalized[cookie.name] = cookie.value
         return normalized
 
-    def qr_login(self, qr_callback: Callable[[bytes], None]) -> dict:
+    def qr_login(self, qr_callback: Callable[[bytes], None], _retries: int = 3) -> dict:
         """
         二维码登录
 
@@ -63,6 +63,9 @@ class ZhihuishuAuth:
         Returns:
             登录后的 cookies 字典
         """
+        if _retries <= 0:
+            raise TimeoutError("QR login retries exhausted")
+
         login_page = "https://passport.zhihuishu.com/login?service=https://onlineservice-api.zhihuishu.com/login/gologin"
         qr_page = "https://passport.zhihuishu.com/qrCodeLogin/getLoginQrImg"
         query_page = "https://passport.zhihuishu.com/qrCodeLogin/getLoginQrInfo"
@@ -100,7 +103,7 @@ class ZhihuishuAuth:
                     raise Exception(f"Unknown status: {status}")
 
         except TimeoutError:
-            return self.qr_login(qr_callback)
+            return self.qr_login(qr_callback, _retries=_retries - 1)
         except Exception as e:
             raise Exception(f"QR login failed: {e}") from e
 

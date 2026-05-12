@@ -52,7 +52,7 @@ class LiveProcessor:
                     logger.info("Live task cancelled: {}", live.name)
                     return False
                 interval = min(1.0, sleep_time)
-                time.sleep(interval)
+                await asyncio.sleep(interval)
                 sleep_time -= interval
 
         logger.success("Live '{}' completed", live.name)

@@ -18,8 +18,8 @@ def _get_main_pool():
     global main_pool
     if main_pool is None:
         main_pool = ThreadedConnectionPool(
-            minconn=2,
-            maxconn=10,
+            minconn=5,
+            maxconn=30,
             host=settings.MAIN_DB_HOST,
             database=settings.MAIN_DB_NAME,
             user=settings.MAIN_DB_USER,
@@ -59,8 +59,8 @@ def get_tenant_db_connection(tenant_db_name: str):
                     pass
 
             tenant_pools[tenant_db_name] = ThreadedConnectionPool(
-                minconn=2,
-                maxconn=10,
+                minconn=4,
+                maxconn=20,
                 host=settings.MAIN_DB_HOST,
                 database=tenant_db_name,
                 user=settings.MAIN_DB_USER,
