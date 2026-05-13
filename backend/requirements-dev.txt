@@ -1,7 +1,9 @@
-pytest==7.4.3
-pytest-asyncio==0.21.1
-pytest-cov==4.1.0
-httpx==0.26.0
-black==23.12.1
-flake8==7.0.0
-mypy==1.8.0
+pytest>=7.4,<9.0
+pytest-asyncio>=0.21,<0.25
+pytest-cov>=4.1
+httpx>=0.26
+ruff>=0.6
+mypy>=1.8
+bandit>=1.7
+alembic>=1.13
+SQLAlchemy>=2.0

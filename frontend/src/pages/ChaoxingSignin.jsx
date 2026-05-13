@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useNavigate } from 'react-router-dom'
 
 import { AlertCircle, CheckCircle2, Loader2, Camera, RefreshCw, Upload } from 'lucide-react'
 
-import { getToken, isAuthenticated, removeToken } from '../utils/auth'
+import { getToken, removeToken } from '../utils/auth'
 
 import { Button, Input } from '../components'
 
-import BaiduMapPickerModal from '../components/BaiduMapPickerModal'
+// Lazy-load the map picker (pulls in ~150KB of leaflet) only when the user
+// opens it, so the initial signin page stays light on mobile.
+const BaiduMapPickerModal = lazy(() => import('../components/BaiduMapPickerModal'))
 
 import {
   CHAOXING_API_BASE,
@@ -611,18 +613,9 @@ export default function ChaoxingSignin() {
 
 
   // ── Bootstrap effect ───────────────────────────────────────────────────────
+  // Route guarding lives in App.jsx (PrivateRoute).
 
   useEffect(() => {
-
-    if (!isAuthenticated()) {
-
-      navigate('/login', { replace: true })
-
-      return undefined
-
-    }
-
-
 
     redirectingRef.current = false
 
@@ -2740,21 +2733,25 @@ export default function ChaoxingSignin() {
 
       </main>
 
-      <BaiduMapPickerModal
-        open={isMapPickerOpen}
-        initialLocation={{
-          latitude: form.latitude,
-          longitude: form.longitude,
-          address: form.address,
-        }}
-        onClose={() => setIsMapPickerOpen(false)}
-        onConfirm={(location) => {
-          applyResolvedLocation(location)
-          setGeocodeStatus('success')
-          setGeocodeMessage(`已选点：${location.latitude}, ${location.longitude}`)
-          setIsMapPickerOpen(false)
-        }}
-      />
+      {isMapPickerOpen && (
+        <Suspense fallback={null}>
+          <BaiduMapPickerModal
+            open={isMapPickerOpen}
+            initialLocation={{
+              latitude: form.latitude,
+              longitude: form.longitude,
+              address: form.address,
+            }}
+            onClose={() => setIsMapPickerOpen(false)}
+            onConfirm={(location) => {
+              applyResolvedLocation(location)
+              setGeocodeStatus('success')
+              setGeocodeMessage(`已选点：${location.latitude}, ${location.longitude}`)
+              setIsMapPickerOpen(false)
+            }}
+          />
+        </Suspense>
+      )}
 
     </div>
 

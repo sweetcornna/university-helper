@@ -1,4 +1,4 @@
-/* eslint-disable react/prop-types */
+ 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BookOpen, ClipboardList, ExternalLink, FileText, ListChecks, Loader2, RefreshCw } from 'lucide-react'
 import { CARD, getCourseId, getCourseName, normalizeCourseText } from '../utils'

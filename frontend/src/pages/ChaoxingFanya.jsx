@@ -78,7 +78,7 @@ export default function ChaoxingFanya() {
         auth.setError(err?.message || '获取章节失败。')
       }
     },
-    [auth.callApi, chapters, auth.setError]
+    [auth, chapters]
   )
 
 

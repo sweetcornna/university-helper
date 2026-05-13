@@ -1,80 +1,63 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+# Run backend / frontend / lint test suites against local sources (no docker required).
+set -euo pipefail
 
-echo "=== Test Suite ==="
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
 
-# Configuration
-TEST_TYPE=${1:-all}
+TARGET="${1:-all}"
 
-# Colors for output
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-run_backend_tests() {
-    echo "Running backend tests..."
-    docker-compose exec -T backend pytest --cov=. --cov-report=html --cov-report=term
-    echo -e "${GREEN}Backend tests completed${NC}"
+run_backend() {
+    echo "[test] backend pytest"
+    pushd backend >/dev/null
+    if [[ -x .venv/bin/python ]]; then
+        .venv/bin/python -m pytest -q
+    else
+        python -m pytest -q
+    fi
+    popd >/dev/null
+    echo -e "${GREEN}backend ok${NC}"
 }
 
-run_frontend_tests() {
-    echo "Running frontend tests..."
-    docker-compose exec -T frontend npm test
-    echo -e "${GREEN}Frontend tests completed${NC}"
+run_frontend() {
+    echo "[test] frontend vitest"
+    pushd frontend >/dev/null
+    npm run test -- --run
+    popd >/dev/null
+    echo -e "${GREEN}frontend ok${NC}"
 }
 
-run_integration_tests() {
-    echo "Running integration tests..."
-    # Add integration test commands here
-    echo -e "${GREEN}Integration tests completed${NC}"
+run_lint() {
+    echo "[test] lint"
+    pushd backend >/dev/null
+    if [[ -x .venv/bin/ruff ]]; then
+        .venv/bin/ruff check app/
+        .venv/bin/ruff format --check app/
+    else
+        ruff check app/
+        ruff format --check app/
+    fi
+    popd >/dev/null
+    pushd frontend >/dev/null
+    npm run lint
+    popd >/dev/null
+    echo -e "${GREEN}lint ok${NC}"
 }
 
-run_linting() {
-    echo "Running linters..."
-
-    # Backend linting
-    echo "Linting backend..."
-    docker-compose exec -T backend flake8 . || echo -e "${RED}Backend linting failed${NC}"
-
-    # Frontend linting
-    echo "Linting frontend..."
-    docker-compose exec -T frontend npm run lint || echo -e "${RED}Frontend linting failed${NC}"
-
-    echo -e "${GREEN}Linting completed${NC}"
-}
-
-# Ensure services are running
-if ! docker-compose ps | grep -q "Up"; then
-    echo "Starting services..."
-    docker-compose up -d
-    sleep 5
-fi
-
-# Run tests based on type
-case $TEST_TYPE in
-    backend)
-        run_backend_tests
-        ;;
-    frontend)
-        run_frontend_tests
-        ;;
-    integration)
-        run_integration_tests
-        ;;
-    lint)
-        run_linting
-        ;;
-    all)
-        run_linting
-        run_backend_tests
-        run_frontend_tests
-        run_integration_tests
-        ;;
+case "$TARGET" in
+    backend)  run_backend ;;
+    frontend) run_frontend ;;
+    lint)     run_lint ;;
+    all)      run_lint && run_backend && run_frontend ;;
     *)
-        echo "Usage: $0 {backend|frontend|integration|lint|all}"
+        echo -e "${RED}Usage: $0 {backend|frontend|lint|all}${NC}" >&2
         exit 1
         ;;
 esac
 
 echo ""
-echo -e "${GREEN}=== All Tests Passed ===${NC}"
+echo -e "${GREEN}=== test pass ===${NC}"

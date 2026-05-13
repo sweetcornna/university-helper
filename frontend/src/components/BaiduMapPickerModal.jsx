@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { MapPin, Search, X, Loader2 } from 'lucide-react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import markerIcon from 'leaflet/dist/images/marker-icon.png'
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
+import markerShadow from 'leaflet/dist/images/marker-shadow.png'
 import { getToken } from '../utils/auth'
 import { bd09ToWgs84, wgs84ToBd09 } from '../utils/coordTransform'
 
@@ -10,12 +13,13 @@ const DEFAULT_ZOOM = 15
 const REVERSE_GEOCODE_URL = '/api/v1/chaoxing/location/reverse-geocode'
 const PLACE_SEARCH_URL = '/api/v1/chaoxing/location/search'
 
-// Fix Leaflet default marker icon paths (broken by bundlers)
+// Resolve Leaflet default marker icons via the Vite asset pipeline so we
+// don't rely on a third-party CDN (unpkg) at runtime.
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconRetinaUrl: markerIcon2x,
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
 })
 
 const fetchJson = async (url) => {

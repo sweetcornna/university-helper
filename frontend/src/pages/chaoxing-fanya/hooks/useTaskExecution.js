@@ -392,6 +392,9 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     return () => stopPolling()
 
 
+    // pollRef is a mutable ref; including it in deps would not change the
+    // effect's identity and only adds noise. Lint rule is overzealous here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadTaskSnapshot, stopPolling, taskId, setError])
 
 

@@ -1,101 +1,76 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+All notable changes to this project will be documented in this file. The
+format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (round 3 — architectural foundations for previously-deferred items)
+- **PWA** via `vite-plugin-pwa` — service worker + precache for hashed static assets, `NetworkOnly` policy for `/api/*` to keep tenant-scoped data uncached; build produces `dist/sw.js` and `dist/workbox-*.js`.
+- **TypeScript foundation** — `frontend/tsconfig.json` with `allowJs: true`, strict mode, path alias `@/*`. New modules can be `.ts`/`.tsx`; existing `.jsx` keeps compiling unchanged. Shared API contract typings live in `frontend/src/types/api.d.ts`.
+- **`app/core/session_store.py`** — pluggable key/value session store. `InMemorySessionStore` (default, behavior-equivalent to today) + `RedisSessionStore` (auto-selected when `REDIS_URL` is set). First step toward sharing `ChaoxingSigninManager` state across workers without an in-place rewrite.
+- **Redis service in compose** — profile-gated (`docker compose --profile redis up -d redis`); 256 MB LRU cache, no persistence. App reads `REDIS_URL` to opt in.
+- **`scripts/migrate_tenants.py`** — loops `users.tenant_db_name` and runs `alembic upgrade head` against each tenant DB. Supports `--dry-run` and `--only`, skips missing DBs with a warning, exits non-zero on any failure.
+- **OpenTelemetry tracing** — `app/core/tracing.py`, env-flagged: when `OTEL_EXPORTER_OTLP_ENDPOINT` is set it wires `FastAPIInstrumentor` + best-effort psycopg2/requests/httpx instrumentors. Silently no-ops when the SDK isn't installed.
+
+### Changed (simplify-skill review fixes)
+- `metrics.py` counter is now bounded — keyed by `request.scope["route"].path` (templated, not raw URL), capped at `_MAX_KEYS=2000`, overflow buckets into `"_other_"`.
+- `request_metrics_middleware` moved to first-registered so it is outermost and sees `tenant_isolation` 401s.
+- `auth_service.login_user` is now async — DB roundtrip and `verify_password` both offloaded via `asyncio.to_thread`.
+- `auth_service._insert_user_row` dropped the redundant pre-INSERT SELECTs — UNIQUE constraint + `UniqueViolation` analysis already identifies the conflicting field. Saves 2 DB round-trips per registration.
+- Tenant pool eviction rewritten with `_TenantPoolEntry` dataclass; `pool.getconn()/putconn()` moved outside `_tenant_lock` so the outer lock only covers map mutation + refcount.
+- `PUBLIC_ROUTES` lookup is now a module-level `frozenset` (was re-built per request).
+- CORS production validation moved from module top level into `lifespan` (single "startup gates" place).
+- `configure_logging()` moved from module import to `lifespan` — no log side effects during pytest collection.
+- `/health` skips the no-op `COMMIT` round-trip via `autocommit=True`.
+- `AuthExpiredListener` now uses one stable subscription + ref instead of re-subscribing on every navigation.
+- `_get_cipher` no longer crosses module boundaries — `credential_crypto.init_cipher()` is the public entry.
+- `create_access_token` computes `now.timestamp()` once.
+- `RouteFallback` uses lucide `Loader2` instead of hand-rolled SVG.
+- `api.js` no longer remaps `AbortError` to "请求超时" when caller passed their own `signal`.
+- Inline `isAuthenticated()` checks removed from `Dashboard`/`ChaoxingSignin`/`Zhihuishu` — `PrivateRoute` covers them.
+
 ### Added
-- Initial project setup
-- Docker containerization
-- PostgreSQL database integration
-- Redis caching layer
-- Nginx reverse proxy configuration
+- Multi-stage `Dockerfile.server`; final image runs as non-root (uid/gid 10001), tini as PID 1, read-only rootfs with tmpfs `/tmp`, dropped capabilities, `no-new-privileges`.
+- Root `.dockerignore` to keep `.git`, `node_modules`, `.env*`, docs and `_legacy` scripts out of the build context.
+- Security response-headers middleware in FastAPI: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Content-Security-Policy`, conditional HSTS.
+- Frontend `ErrorBoundary`, `PrivateRoute`, `RouteFallback`, `NotFound` route, and `AuthExpiredListener` that reacts to 401s and redirects with a `from` state for round-trip return.
+- Lazy `BaiduMapPickerModal` import (~150 KB pulled only when the picker opens).
+- Web manifest, SVG favicon, theme-color and OG meta in `index.html`.
+- Backend `app/core/logging_setup.py` — single dictConfig pipeline, optional JSON formatter via `LOG_FORMAT=json`, loguru records bridged into stdlib.
+- Alembic wired: `alembic.ini`, `env.py` reading `MAIN_DB_*` env vars, idempotent baseline migrations (`CREATE … IF NOT EXISTS`).
+- nginx rate-limit zones (`/api/v1/auth/login` 5r/min, `/api/` 20r/s, per-IP conn cap), modern CSP, `server_tokens off`.
+- CI: split lint · type · test · build · trivy scan; CodeQL workflow; Dependabot for pip/npm/actions/docker; CodeOwners; issue & PR templates; `.github/SECURITY.md`.
+- `.pre-commit-config.yaml` (ruff, prettier, gitleaks).
+- `pyproject.toml` rewritten under PEP 621 with `[tool.ruff]`, `[tool.mypy]`, `[tool.pytest.ini_options]`, `[tool.coverage]` blocks.
+- `scripts/db_backup.sh` now supports `age` encryption (`AGE_RECIPIENT`/`AGE_RECIPIENT_FILE`); refuses to write plaintext `.env` snapshots without `ALLOW_UNENCRYPTED=1`.
+- `scripts/hotfix_publish.sh` now supports SSH-key auth (`SSH_KEY=`) and prefers it over the sshpass fallback (which now uses `accept-new` host-key policy).
 
 ### Changed
-- N/A
-
-### Deprecated
-- N/A
+- Postgres in `docker-compose.server.yml` tuned: `max_connections=300`, `shared_buffers=128MB`, `work_mem=8MB`, `effective_cache_size=384MB`, `wal_compression=on`, `log_min_duration_statement=500ms`.
+- Database init reorganized: `00-schema.sql`, `01-create_tenant.sql`, `02-bootstrap-tenant-template.sh` (creates the `tenant_template` DB and applies its schema from `templates/`), so the docker-entrypoint never pollutes `main_db` with the tenant template.
+- `users.created_at/updated_at` switched from naive `TIMESTAMP` to `TIMESTAMPTZ DEFAULT NOW()`.
+- `auth_service.register_user` now runs all sync DB work via `asyncio.to_thread` (matches `login_user`); bcrypt hashing also offloaded so the event loop stays responsive.
+- `app/config.py` migrated to Pydantic v2 `SettingsConfigDict` + `field_validator`; `SECRET_KEY` validated for length ≥ 16; `BCRYPT_ROUNDS` and `ENV` exposed as settings.
+- `app/main.py`: removed misleading "CSRF protection" comment over `TrustedHostMiddleware`; eager `_get_cipher()` call at startup so missing `CREDENTIAL_ENCRYPTION_KEY` fails fast in production; `/health` no longer leaks the raw pool connection.
+- `frontend/utils/api.js`: typed `ApiError`, 401-with-token now triggers a `auth:expired` CustomEvent so the SPA can redirect via React Router without coupling `api.js` to routing.
+- Vite `BaiduMapPickerModal` no longer fetches marker icons from `unpkg`; assets bundled via `leaflet/dist/images/*` imports.
+- `Makefile`, `scripts/setup.sh`, `scripts/test.sh` rewritten to target the real stack (`docker-compose.server.yml`, no redis service) and use docker compose v2.
+- Frontend `package.json` renamed from `easy-learning-frontend` to `university-helper-frontend`.
+- Frontend ESLint config: disabled `react/prop-types` (project doesn't use PropTypes), enabled `react/react-in-jsx-scope: off` for new JSX runtime, fixed mis-deps in `ChaoxingFanya.jsx`.
 
 ### Removed
-- N/A
-
-### Fixed
-- N/A
+- Unused `zustand` dependency from `frontend/package.json`.
+- `scripts/deploy.sh` and `scripts/backup.sh` moved to `scripts/_legacy/` (referenced non-existent compose services and would overwrite prod `.env`).
+- `app/main.py` legacy `from app.db.session import get_main_db_connection, _get_main_pool` (replaced by context-managed `get_db_session`).
 
 ### Security
-- N/A
+- Container hardening: non-root, read-only rootfs, capability drop, `no-new-privileges`.
+- nginx: rate-limit `/api/v1/auth/login` to 5r/min per IP; drop deprecated `X-XSS-Protection`; add CSP and Permissions-Policy.
+- Backup script encrypts dumps and refuses plaintext `.env` snapshots by default.
+- CI: CodeQL (python + javascript), Trivy image scan, Bandit, `npm audit` for high+ severity.
+- `CREDENTIAL_ENCRYPTION_KEY` enforced at startup (was lazy, surfaced only on first credential op).
 
 ## [1.0.0] - 2024-01-01
-
-### Added
-- Email/password authentication
-- Google OAuth integration
-- GitHub OAuth integration
-- WeChat OAuth integration
-- JWT token-based authentication
-- Refresh token mechanism
-- Session management
-- User registration and login
-- User profile management
-- Password hashing with bcrypt
-- Rate limiting middleware
-- CORS configuration
-- React frontend with Vite
-- Responsive UI design
-- Protected routes
-- API documentation
-- Development guide
-- Architecture documentation
-- Contributing guidelines
-- Docker Compose setup
-- Environment configuration
-- Database migrations
-- Redis session storage
-- Nginx configuration
-- Health check endpoints
-- Error handling middleware
-- Input validation
-- SQL injection prevention
-- XSS protection
-
-### Security
-- Implemented secure password hashing
-- Added JWT token validation
-- Configured HTTPS-only cookies
-- Implemented CORS restrictions
-- Added rate limiting
-- Implemented session expiration
-- Added token refresh mechanism
-- Configured secure headers
-
----
-
-## Version History
-
-### [1.0.0] - 2024-01-01
 Initial release with core authentication features.
-
----
-
-## How to Update This File
-
-When making changes:
-
-1. Add entries under `[Unreleased]` section
-2. Use appropriate subsections (Added, Changed, Fixed, etc.)
-3. Write clear, concise descriptions
-4. Include issue/PR references when applicable
-5. Move entries to a new version section on release
-
-Example entry:
-```markdown
-### Added
-- New feature description (#123)
-
-### Fixed
-- Bug fix description (#456)
-```

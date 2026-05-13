@@ -1,91 +1,79 @@
-.PHONY: help setup dev build start stop restart logs clean test backup deploy
+.PHONY: help setup build start stop restart logs logs-app logs-db ps test test-backend test-frontend lint backup deploy clean precommit
+
+COMPOSE := docker compose -f docker-compose.server.yml -p university-helper
 
 help:
-	@echo "Unified Sign-In Platform - Available Commands"
+	@echo "University Helper — make targets"
 	@echo ""
-	@echo "Setup & Installation:"
-	@echo "  make setup          - Initial project setup"
-	@echo "  make build          - Build Docker containers"
+	@echo "Setup:"
+	@echo "  make setup          Bootstrap local env (.env + tooling)"
+	@echo "  make build          Build app image"
+	@echo "  make precommit      Install pre-commit hooks"
 	@echo ""
-	@echo "Development:"
-	@echo "  make dev            - Start development environment"
-	@echo "  make start          - Start all services"
-	@echo "  make stop           - Stop all services"
-	@echo "  make restart        - Restart all services"
-	@echo "  make logs           - View logs (all services)"
-	@echo "  make logs-backend   - View backend logs"
-	@echo "  make logs-frontend  - View frontend logs"
+	@echo "Run:"
+	@echo "  make start          Start docker-compose stack (app + postgres)"
+	@echo "  make stop           Stop stack"
+	@echo "  make restart        Restart stack"
+	@echo "  make ps             Show services"
+	@echo "  make logs           Tail all logs"
+	@echo "  make logs-app       Tail backend (app) logs"
+	@echo "  make logs-db        Tail postgres logs"
 	@echo ""
-	@echo "Database:"
-	@echo "  make db-shell       - Access PostgreSQL shell"
-	@echo "  make db-migrate     - Run database migrations"
-	@echo "  make redis-shell    - Access Redis CLI"
+	@echo "Quality:"
+	@echo "  make test           Run all tests (backend + frontend)"
+	@echo "  make test-backend   Backend pytest"
+	@echo "  make test-frontend  Frontend vitest"
+	@echo "  make lint           Run all linters (ruff + eslint)"
 	@echo ""
-	@echo "Testing:"
-	@echo "  make test           - Run all tests"
-	@echo "  make test-backend   - Run backend tests"
-	@echo "  make test-frontend  - Run frontend tests"
-	@echo "  make lint           - Run linters"
-	@echo ""
-	@echo "Maintenance:"
-	@echo "  make backup         - Create backup"
-	@echo "  make clean          - Remove containers and volumes"
-	@echo "  make deploy         - Deploy to production"
-	@echo ""
+	@echo "Ops:"
+	@echo "  make backup         Run scripts/db_backup.sh"
+	@echo "  make clean          Stop stack + prune dangling images"
 
 setup:
 	@bash scripts/setup.sh
 
 build:
-	docker-compose build
+	$(COMPOSE) build app
 
-dev: start
+precommit:
+	pre-commit install
 
 start:
-	docker-compose up -d
-	@echo "Services started. Access at http://localhost"
+	$(COMPOSE) up -d
+	@echo "Services started. App on http://127.0.0.1:8000"
 
 stop:
-	docker-compose down
+	$(COMPOSE) down
 
 restart: stop start
 
+ps:
+	$(COMPOSE) ps
+
 logs:
-	docker-compose logs -f
+	$(COMPOSE) logs -f --tail=200
 
-logs-backend:
-	docker-compose logs -f backend
+logs-app:
+	$(COMPOSE) logs -f --tail=200 app
 
-logs-frontend:
-	docker-compose logs -f frontend
+logs-db:
+	$(COMPOSE) logs -f --tail=200 postgres
 
-db-shell:
-	docker-compose exec postgres psql -U signin -d unified_signin
-
-db-migrate:
-	docker-compose exec backend alembic upgrade head
-
-redis-shell:
-	docker-compose exec redis redis-cli
-
-test:
-	@bash scripts/test.sh all
+test: test-backend test-frontend
 
 test-backend:
-	@bash scripts/test.sh backend
+	cd backend && pytest -q
 
 test-frontend:
-	@bash scripts/test.sh frontend
+	cd frontend && npm run test -- --run
 
 lint:
-	@bash scripts/test.sh lint
+	cd backend && ruff check app/ && ruff format --check app/
+	cd frontend && npm run lint
 
 backup:
-	@bash scripts/backup.sh
+	@bash scripts/db_backup.sh
 
 clean:
-	docker-compose down -v
-	docker system prune -f
-
-deploy:
-	@bash scripts/deploy.sh production
+	$(COMPOSE) down
+	docker image prune -f

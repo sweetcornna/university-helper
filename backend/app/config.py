@@ -1,5 +1,6 @@
-from pydantic_settings import BaseSettings
 from typing import Optional
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PUBLIC_ROUTES = [
     "/api/v1/auth/register",
@@ -15,6 +16,12 @@ PUBLIC_ROUTES = [
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
     # Database
     MAIN_DB_HOST: str = "localhost"
     MAIN_DB_NAME: str = "main_db"
@@ -28,26 +35,33 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     # CORS
-    CORS_ORIGINS: list = []
+    CORS_ORIGINS: list[str] = []
 
     # Security
     ENFORCE_HTTPS: bool = True
+    BCRYPT_ROUNDS: int = 12
+
+    # Environment ("dev", "production", …) drives several runtime guards.
+    ENV: str = "dev"
 
     # Docs / Swagger UI — default off; opt in via env for local dev
     DOCS_ENABLED: bool = False
 
     BAIDU_MAP_API_KEY: Optional[str] = None
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    @field_validator("SECRET_KEY")
+    @classmethod
+    def _secret_key_present(cls, v: str) -> str:
+        if not v or len(v) < 16:
+            raise ValueError("SECRET_KEY must be set and at least 16 chars")
+        return v
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        if not self.SECRET_KEY:
-            raise ValueError("SECRET_KEY must be set in environment variables")
-        if not self.CORS_ORIGINS:
+    @field_validator("CORS_ORIGINS")
+    @classmethod
+    def _cors_origins_present(cls, v: list[str]) -> list[str]:
+        if not v:
             raise ValueError("CORS_ORIGINS must be set in environment variables")
+        return v
 
 
 settings = Settings()

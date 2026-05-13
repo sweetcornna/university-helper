@@ -3,10 +3,8 @@
 Revision ID: 002
 Revises: 001
 Create Date: 2026-04-16
-
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = '002'
 down_revision = '001'
@@ -25,16 +23,12 @@ def upgrade():
         )
         """
     )
-    op.create_index(
-        'ix_rate_limit_counters_window_start',
-        'rate_limit_counters',
-        ['window_start'],
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_rate_limit_counters_window_start "
+        "ON rate_limit_counters (window_start)"
     )
 
 
 def downgrade():
-    op.drop_index(
-        'ix_rate_limit_counters_window_start',
-        table_name='rate_limit_counters',
-    )
-    op.drop_table('rate_limit_counters')
+    op.execute("DROP INDEX IF EXISTS ix_rate_limit_counters_window_start")
+    op.execute("DROP TABLE IF EXISTS rate_limit_counters")

@@ -1,24 +1,60 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1.7
 
-WORKDIR /srv/backend
+# ---------- builder ----------
+FROM python:3.11-slim AS builder
+
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Use Tsinghua mirror for apt (Debian trixie uses deb822 .sources files)
-RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && echo "${PIP_INDEX_URL}" | grep -q tsinghua; then \
         sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
+        build-essential libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --default-timeout=1000 -r /tmp/requirements.txt email-validator && rm /tmp/requirements.txt
+WORKDIR /build
+COPY backend/requirements.txt /build/requirements.txt
+RUN pip wheel --wheel-dir=/wheels --default-timeout=1000 \
+        -r /build/requirements.txt email-validator
 
-COPY backend /srv/backend
+# ---------- runtime ----------
+FROM python:3.11-slim AS runtime
+
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_INDEX=1
+
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && echo "${PIP_INDEX_URL}" | grep -q tsinghua; then \
+        sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r app --gid 10001 \
+    && useradd -r -g app --uid 10001 --home-dir /srv/backend --shell /usr/sbin/nologin app
+
+WORKDIR /srv/backend
+
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir --find-links=/wheels --no-index $(ls /wheels/*.whl) \
+    && rm -rf /wheels
+
+COPY --chown=app:app backend /srv/backend
+
+USER app
 
 EXPOSE 8000
 
@@ -27,4 +63,5 @@ EXPOSE 8000
 # own in-memory _clients dict, so a login on worker A is invisible to
 # /courses requests routed to workers B/C/D — see signin.py:1156. uvloop
 # and httptools still help in single-worker mode.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--loop", "uvloop", "--http", "httptools"]

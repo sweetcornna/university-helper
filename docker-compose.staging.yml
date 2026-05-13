@@ -1,0 +1,31 @@
+# Staging overlay: docker compose -f docker-compose.server.yml -f docker-compose.staging.yml -p uh-staging up -d
+# - publishes app on 127.0.0.1:8001 instead of 8000 so prod stays untouched
+# - separates the Postgres volume so staging data never collides with prod
+# - lowers retries and resource limits
+services:
+  app:
+    container_name: shuake-uh-staging-app
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      ENV: staging
+      ENFORCE_HTTPS: "false"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  postgres:
+    container_name: shuake-uh-staging-db
+    volumes:
+      - shuake-postgres-staging-data:/var/lib/postgresql/data
+      - ./database:/docker-entrypoint-initdb.d:ro
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: '0.5'
+
+volumes:
+  shuake-postgres-staging-data:

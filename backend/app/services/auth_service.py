@@ -87,37 +87,26 @@ class AuthService:
     # Must align with _validate_tenant_db_name in app/db/session.py
     _USERNAME_RE = re.compile(r'^[a-z0-9]+$')
 
-    async def register_user(self, username: str, email: str, password: str) -> dict:
-        if not username or not self._USERNAME_RE.match(username):
-            raise ValueError("用户名只能包含小写字母和数字（a-z、0-9）")
-        self._validate_password_strength(password)
-        password_hash = hash_password(password)
-        tenant_db_name = f"tenant_{username}"
+    def _insert_user_row(
+        self, username: str, email: str, password_hash: str, tenant_db_name: str
+    ) -> int:
+        """Synchronous DB block — must be called from a worker thread.
 
+        We trust the UNIQUE constraints on (email, username, tenant_db_name)
+        rather than pre-checking with SELECTs — that would add two extra
+        round-trips per registration without closing the race window.
+        """
         try:
             with get_db_session() as conn:
                 cur = conn.cursor()
-
-                # Best-effort pre-checks. The UNIQUE constraints are the real
-                # source of truth and close the SELECT→INSERT race window.
-                cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-                if cur.fetchone():
-                    raise ValueError("Email already registered")
-                cur.execute("SELECT id FROM users WHERE username = %s", (username,))
-                if cur.fetchone():
-                    raise ValueError("Username already taken")
-
                 cur.execute(
                     "INSERT INTO users (username, email, password_hash, tenant_db_name) VALUES (%s, %s, %s, %s) RETURNING id",
-                    (username, email, password_hash, tenant_db_name)
+                    (username, email, password_hash, tenant_db_name),
                 )
                 user_id = cur.fetchone()["id"]
                 cur.close()
+                return user_id
         except psycopg2.errors.UniqueViolation as exc:
-            # users has three UNIQUE constraints (email, username, tenant_db_name).
-            # Without inspecting which one fired, every collision read as "Email
-            # already registered" — a fresh email with an already-taken username
-            # surfaced a misleading error message to the user.
             constraint = (getattr(getattr(exc, "diag", None), "constraint_name", "") or "").lower()
             if "email" in constraint:
                 raise ValueError("Email already registered")
@@ -127,7 +116,45 @@ class AuthService:
         except psycopg2.errors.IntegrityError:
             raise ValueError("用户名或邮箱已被占用")
 
-        # Create tenant database synchronously; roll back user row on failure.
+    def _rollback_user_row(self, user_id: int) -> None:
+        try:
+            with get_db_session() as conn:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+                cur.close()
+        except Exception:
+            logger.exception(
+                "Failed to roll back user row id=%s after tenant DB failure", user_id
+            )
+
+    def _build_auth_response(self, user_id: int, tenant_db_name: str) -> dict:
+        access_token = create_access_token(
+            {"user_id": user_id, "tenant_db_name": tenant_db_name}
+        )
+        result = {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user_id": user_id,
+            "tenant_db_name": tenant_db_name,
+        }
+        shuake_token = self._create_shuake_token(user_id)
+        if shuake_token:
+            result["shuake_token"] = shuake_token
+        return result
+
+    async def register_user(self, username: str, email: str, password: str) -> dict:
+        if not username or not self._USERNAME_RE.match(username):
+            raise ValueError("用户名只能包含小写字母和数字（a-z、0-9）")
+        self._validate_password_strength(password)
+        # bcrypt is CPU-bound; offload to thread to keep the event loop responsive.
+        password_hash = await asyncio.to_thread(hash_password, password)
+        tenant_db_name = f"tenant_{username}"
+
+        user_id = await asyncio.to_thread(
+            self._insert_user_row, username, email, password_hash, tenant_db_name
+        )
+
+        # Create tenant database; roll back user row on failure.
         try:
             await asyncio.to_thread(self._create_tenant_database, tenant_db_name)
         except Exception:
@@ -135,63 +162,28 @@ class AuthService:
                 "Tenant DB creation failed for %s; rolling back user row id=%s",
                 tenant_db_name, user_id,
             )
-            try:
-                with get_db_session() as conn:
-                    cur = conn.cursor()
-                    cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
-                    cur.close()
-            except Exception:
-                logger.exception(
-                    "Failed to roll back user row id=%s after tenant DB failure", user_id
-                )
+            await asyncio.to_thread(self._rollback_user_row, user_id)
             raise
 
-        access_token = create_access_token({
-            "user_id": user_id,
-            "tenant_db_name": tenant_db_name
-        })
-        shuake_token = self._create_shuake_token(user_id)
+        return self._build_auth_response(user_id, tenant_db_name)
 
-        result = {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user_id": user_id,
-            "tenant_db_name": tenant_db_name
-        }
-        if shuake_token:
-            result["shuake_token"] = shuake_token
-        return result
-
-    def login_user(self, email: str, password: str) -> dict:
+    def _fetch_login_row(self, email: str):
         with get_db_session() as conn:
             cur = conn.cursor()
-
             cur.execute(
                 "SELECT id, password_hash, tenant_db_name FROM users WHERE email = %s",
-                (email,)
+                (email,),
             )
-            result = cur.fetchone()
-
+            row = cur.fetchone()
             cur.close()
+            return row
 
-        if not result or not verify_password(password, result["password_hash"]):
+    async def login_user(self, email: str, password: str) -> dict:
+        # Both the DB roundtrip and bcrypt verification are blocking; offload
+        # so the event loop stays responsive.
+        row = await asyncio.to_thread(self._fetch_login_row, email)
+        if not row or not await asyncio.to_thread(
+            verify_password, password, row["password_hash"]
+        ):
             raise ValueError("Invalid credentials")
-
-        user_id = result["id"]
-        tenant_db_name = result["tenant_db_name"]
-
-        access_token = create_access_token({
-            "user_id": user_id,
-            "tenant_db_name": tenant_db_name
-        })
-        shuake_token = self._create_shuake_token(user_id)
-
-        result = {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user_id": user_id,
-            "tenant_db_name": tenant_db_name
-        }
-        if shuake_token:
-            result["shuake_token"] = shuake_token
-        return result
+        return self._build_auth_response(row["id"], row["tenant_db_name"])

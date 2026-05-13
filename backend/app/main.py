@@ -8,13 +8,29 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from urllib.parse import urlparse
 from app.config import settings
 from app.core.exceptions import AppException
-from app.db.session import get_main_db_connection, _get_main_pool
+from app.core.credential_crypto import init_cipher
+from app.core.logging_setup import configure_logging
+from app.core.tracing import configure_tracing
+from app.db.session import get_db_session
 from app.middleware.tenant_isolation import tenant_isolation_middleware
 from app.api.v1 import auth, chaoxing
 from app.api.v1.course import cleanup_expired_entries
+from app.api.v1.metrics import router as metrics_router, record_request
 
 logger = logging.getLogger(__name__)
 _CLEANUP_INTERVAL_SECONDS = 60
+
+
+def _validate_runtime_settings() -> None:
+    """All "production gates" in one place — called from lifespan."""
+    origins = settings.CORS_ORIGINS or []
+    env = getattr(settings, "ENV", "dev")
+    if env == "production":
+        if "*" in origins:
+            raise RuntimeError("CORS_ORIGINS='*' is not allowed in production")
+        bad = [o for o in origins if o.startswith("http://") and "localhost" not in o]
+        if bad:
+            raise RuntimeError(f"CORS_ORIGINS in production must use https://: {bad}")
 
 
 async def _periodic_cleanup_loop() -> None:
@@ -28,6 +44,13 @@ async def _periodic_cleanup_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
+    _validate_runtime_settings()
+    # Fail fast at startup if the credential cipher cannot be initialized
+    # (in production this raises when CREDENTIAL_ENCRYPTION_KEY is missing).
+    init_cipher()
+    # Opt-in OTel tracing when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    configure_tracing(app)
     app.state.cleanup_task = asyncio.create_task(_periodic_cleanup_loop())
     try:
         yield
@@ -42,8 +65,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Unified Signin Platform API",
-    description="Multi-tenant signin platform with database isolation",
+    title="University Helper API",
+    description="Multi-tenant campus helper platform with database-per-tenant isolation",
     version="1.0.0",
     docs_url="/docs" if settings.DOCS_ENABLED else None,
     redoc_url="/redoc" if settings.DOCS_ENABLED else None,
@@ -64,7 +87,23 @@ def _build_allowed_hosts(origins: list[str]) -> list[str]:
             hosts.add(host)
     return sorted(hosts)
 
-# HTTPS enforcement middleware
+
+# NOTE on middleware ordering:
+# FastAPI runs `@app.middleware("http")` and `add_middleware` in REVERSE
+# registration order — the LAST registered is the OUTERMOST. Register
+# request_metrics_middleware FIRST so it wraps everything else and sees
+# 401s emitted by tenant_isolation/CORS.
+@app.middleware("http")
+async def request_metrics_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if not request.url.path.startswith("/metrics"):
+        route = request.scope.get("route")
+        template = getattr(route, "path", None) or request.url.path
+        record_request(template, response.status_code)
+    return response
+
+
+# HTTPS enforcement
 @app.middleware("http")
 async def https_redirect_middleware(request: Request, call_next):
     if settings.ENFORCE_HTTPS and request.url.scheme == "http":
@@ -72,19 +111,36 @@ async def https_redirect_middleware(request: Request, call_next):
         return RedirectResponse(url, status_code=301)
     return await call_next(request)
 
-# CSRF protection
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=_build_allowed_hosts(settings.CORS_ORIGINS))
 
-# CORS production safety checks
-_cors_origins = settings.CORS_ORIGINS or []
-if "*" in _cors_origins and getattr(settings, "ENV", "dev") == "production":
-    raise RuntimeError("CORS_ORIGINS='*' is not allowed in production")
-if getattr(settings, "ENV", "dev") == "production":
-    _bad = [o for o in _cors_origins if o.startswith("http://") and "localhost" not in o]
-    if _bad:
-        raise RuntimeError(f"CORS_ORIGINS in production must use https://: {_bad}")
+# Security response headers (defense-in-depth — nginx also sets these).
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "geolocation=(), microphone=(), camera=(), payment=()",
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    )
+    if settings.ENFORCE_HTTPS:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
 
-# CORS
+
+# Host-header validation (NOT CSRF — CSRF would need cookie-based auth + token).
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=_build_allowed_hosts(settings.CORS_ORIGINS),
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -121,33 +177,31 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # Routes
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 
-# Course routes
 from app.api.v1 import course
 app.include_router(course.router, prefix="/api/v1/course", tags=["course"])
 app.include_router(chaoxing.router, prefix="/api/v1/chaoxing", tags=["chaoxing"])
+app.include_router(metrics_router, tags=["metrics"])
 
 
 @app.get("/")
 async def root():
-    return {"message": "Unified Signin Platform API"}
+    return {"message": "University Helper API"}
 
 
 @app.get("/health")
 def health():
-    conn = None
+    cleanup_task = getattr(app.state, "cleanup_task", None)
+    cleanup_alive = bool(cleanup_task and not cleanup_task.done())
     try:
-        conn = get_main_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
-        return {"status": "ok", "db": "ok"}
+        with get_db_session() as conn:
+            conn.autocommit = True  # avoid an unnecessary COMMIT round-trip
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            conn.autocommit = False
     except Exception as e:
         raise HTTPException(
             status_code=503, detail=f"db unavailable: {type(e).__name__}"
         )
-    finally:
-        if conn is not None:
-            try:
-                _get_main_pool().putconn(conn)
-            except Exception:
-                pass
+    status = "ok" if cleanup_alive else "degraded"
+    return {"status": status, "db": "ok", "cleanup_task": "alive" if cleanup_alive else "dead"}

@@ -29,8 +29,8 @@ def mock_tenant_db():
 
 class TestAuthRegistration:
     def test_register_success(self, client, mock_db, mock_tenant_db):
-        # email select → None, username select → None, INSERT RETURNING → id=1
-        mock_db.fetchone.side_effect = [None, None, {"id": 1}]
+        # INSERT RETURNING → id=1 (no pre-check SELECTs anymore)
+        mock_db.fetchone.return_value = {"id": 1}
 
         response = client.post("/api/v1/auth/register", json={
             "username": "testuser",
@@ -45,7 +45,14 @@ class TestAuthRegistration:
         assert data["user_id"] == 1
 
     def test_register_duplicate_email(self, client, mock_db):
-        mock_db.fetchone.return_value = {"id": 1}
+        import psycopg2
+
+        class _FakeUniqueViolation(psycopg2.errors.UniqueViolation):
+            @property
+            def diag(self):
+                return type("D", (), {"constraint_name": "users_email_key"})()
+
+        mock_db.execute.side_effect = _FakeUniqueViolation()
 
         response = client.post("/api/v1/auth/register", json={
             "username": "testuser",

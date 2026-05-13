@@ -97,6 +97,15 @@ def _build_cipher() -> _FernetCipher | _NoopCipher:
         return _NoopCipher()
 
 
+def init_cipher() -> None:
+    """Eagerly build the cipher. Raises in production if the key is missing.
+
+    Callers (lifespan) use this to fail fast at startup instead of waiting
+    for the first credential operation.
+    """
+    _get_cipher()
+
+
 def _get_cipher() -> _FernetCipher | _NoopCipher:
     global _cipher
     if _cipher is not None:

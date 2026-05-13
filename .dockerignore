@@ -1,0 +1,57 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.coverage
+**/htmlcov
+**/.venv
+**/venv
+**/*.egg-info
+
+# Node
+**/node_modules
+**/dist
+**/.cache
+**/coverage
+
+# Env / secrets — never bake into image
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Editor / OS
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Docs and dev-only assets
+docs/
+README*.md
+CHANGELOG.md
+CONTRIBUTING.md
+LICENSE
+.github/
+
+# Legacy / dev scripts (kept in repo but not needed inside image)
+scripts/_legacy/
+
+# Frontend (built separately and served by host nginx)
+frontend/
+nginx/
+
+# Local DB dumps and backups
+database/dumps/
+*.sql.gz
+*.backup

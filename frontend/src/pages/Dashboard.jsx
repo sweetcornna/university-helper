@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { BookOpen, CheckCircle, GraduationCap, LogOut } from 'lucide-react'
-import { getToken, getShuakeToken, isAuthenticated, removeToken, setShuakeToken } from '../utils/auth'
+import { getToken, getShuakeToken, removeToken, setShuakeToken } from '../utils/auth'
 import { api } from '../utils/api'
 
 /* ------------------------------------------------------------------ */
@@ -54,9 +54,11 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const orbitRadius = useOrbitRadius()
 
-  /* ---------- auth guard ---------- */
+  /* ---------- shuake token bootstrap ---------- */
+  // The route guard lives in App.jsx (PrivateRoute); unauthenticated users
+  // never reach this effect. Token refresh on 401 is handled centrally by
+  // utils/api.js → AuthExpiredListener.
   useEffect(() => {
-    if (!isAuthenticated()) { navigate('/login'); return }
     const ensureShuakeToken = async () => {
       if (getShuakeToken()) return
       try {
@@ -193,10 +195,19 @@ export default function Dashboard() {
             <div
               key={svc.path}
               id={`bubble-${i}`}
+              role="button"
+              tabIndex={0}
+              aria-label={svc.name || svc.path}
               onClick={() => handleClick(i)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  handleClick(i)
+                }
+              }}
               onMouseEnter={() => { setHovered(i); setPaused(true) }}
               onMouseLeave={() => { setHovered(-1); setPaused(false) }}
-              className="absolute cursor-pointer select-none touch-manipulation"
+              className="absolute cursor-pointer select-none touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded-full"
               style={{
                 // Outer: rAF-driven orbit translate. No CSS transition on transform —
                 // mixing a 0.45s transition with 60fps rAF updates causes overlapping

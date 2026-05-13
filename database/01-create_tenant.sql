@@ -1,5 +1,6 @@
--- 自动创建租户数据库函数
--- 使用方式：SELECT create_tenant_database(user_id);
+-- Helper function for application-side tenant DB creation.
+-- Application code (auth_service._create_tenant_database) drives this;
+-- the SQL function below is kept for ops convenience.
 
 CREATE OR REPLACE FUNCTION create_tenant_database(user_id INT)
 RETURNS TEXT AS $$

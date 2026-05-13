@@ -1,11 +1,54 @@
-@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;500;600;700&family=Comic+Neue:wght@300;400;700&display=swap');
+/*
+ * Self-hosted Inter via @fontsource would be the preferred path. For now we
+ * preconnect via index.html and keep these display=swap imports so the first
+ * paint still gets fallback fonts.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  * {
+  :root {
+    --color-primary: 37 99 235;          /* #2563EB */
+    --color-secondary: 59 130 246;       /* #3B82F6 */
+    --color-cta: 249 115 22;             /* #F97316 */
+    --color-background: 248 250 252;     /* #F8FAFC */
+    --color-surface: 255 255 255;        /* #FFFFFF */
+    --color-surface-hover: 241 245 249;  /* #F1F5F9 */
+    --color-text: 30 41 59;              /* #1E293B */
+    --color-text-muted: 100 116 139;     /* #64748B */
+    --color-border: 226 232 240;         /* #E2E8F0 */
+    --color-border-subtle: 241 245 249;  /* #F1F5F9 */
+  }
+
+  .dark {
+    --color-primary: 96 165 250;         /* lighter blue for dark bg */
+    --color-secondary: 59 130 246;
+    --color-cta: 251 146 60;
+    --color-background: 15 23 42;        /* #0F172A */
+    --color-surface: 30 41 59;           /* #1E293B */
+    --color-surface-hover: 51 65 85;     /* #334155 */
+    --color-text: 226 232 240;           /* #E2E8F0 */
+    --color-text-muted: 148 163 184;     /* #94A3B8 */
+    --color-border: 51 65 85;
+    --color-border-subtle: 30 41 59;
+  }
+
+  /*
+   * Scope the colour transition to interactive elements only. The previous
+   * `* { transition-colors }` rule animated every element on every theme
+   * change, which is expensive on large DOMs.
+   */
+  a,
+  button,
+  input,
+  textarea,
+  select,
+  [role='button'],
+  [role='link'],
+  [role='tab'] {
     @apply transition-colors duration-200;
   }
 
@@ -16,13 +59,15 @@
 
 @layer components {
   .clay-card {
-    @apply backdrop-blur-lg bg-white/70 border border-white/20 rounded-2xl shadow-xl;
+    @apply backdrop-blur-lg bg-surface/80 border border-border/40 rounded-2xl shadow-xl;
   }
 
   .clay-button {
     @apply rounded-xl px-6 py-3 font-medium cursor-pointer
            transition-all duration-200
-           hover:scale-105;
+           hover:scale-105
+           disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
   }
 
   .clay-button-primary {
@@ -41,7 +86,7 @@
   }
 
   .clay-input {
-    @apply w-full px-4 py-3 rounded-xl border border-white/30 bg-white/60 backdrop-blur-sm
+    @apply w-full px-4 py-3 rounded-xl border border-border/60 bg-surface/80 backdrop-blur-sm
            focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary
            transition-all duration-200;
   }
@@ -49,14 +94,17 @@
 
 @layer utilities {
   .glass {
-    @apply backdrop-blur-lg bg-white/80 border border-white/20;
+    @apply backdrop-blur-lg bg-surface/80 border border-border/40;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

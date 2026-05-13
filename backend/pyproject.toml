@@ -1,31 +1,87 @@
-[tool.poetry]
-name = "unified-signin-platform-backend"
+[project]
+name = "university-helper-backend"
 version = "1.0.0"
-description = "Multi-tenant signin platform backend"
-authors = ["Your Name <your.email@example.com>"]
+description = "Multi-tenant campus helper backend (Chaoxing + Zhihuishu)"
+requires-python = ">=3.10"
+readme = { file = "../README.md", content-type = "text/markdown" }
+license = { file = "../LICENSE" }
 
-[tool.poetry.dependencies]
-python = "^3.10"
-fastapi = "^0.109.0"
-uvicorn = {extras = ["standard"], version = "^0.27.0"}
-pydantic = "^2.5.3"
-pydantic-settings = "^2.1.0"
-email-validator = "^2.2.0"
-psycopg2-binary = "^2.9.9"
-PyJWT = "^2.8.0"
-bcrypt = "^4.1.2"
-python-multipart = "^0.0.6"
-cryptography = "^42.0"
+# Runtime dependencies are tracked in requirements.txt for image-build parity.
+# Keep this section as a minimal description; `pip-compile` / `uv pip compile`
+# is the single source of truth for pinned versions.
+dependencies = []
 
-[tool.poetry.dev-dependencies]
-pytest = "^7.4.3"
-pytest-asyncio = "^0.21.1"
-pytest-cov = "^4.1.0"
-httpx = "^0.26.0"
-black = "^23.12.1"
-flake8 = "^7.0.0"
-mypy = "^1.8.0"
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.1",
+    "httpx>=0.26",
+    "ruff>=0.6",
+    "mypy>=1.8",
+    "bandit>=1.7",
+]
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
+
+# ---------- Ruff ----------
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "alembic/versions", "api"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",             # isort
+    "B",             # bugbear
+    "UP",            # pyupgrade
+    "SIM",           # simplify
+    "C4",            # comprehensions
+    "PIE",
+    "RET",
+    "PL",            # pylint subset
+    "TID",
+]
+ignore = [
+    "E501",     # line length handled by formatter
+    "PLR0913",  # too many args — common in service signatures
+    "PLR2004",  # magic value comparisons
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004", "S101", "PLR0915"]
+
+# ---------- Mypy ----------
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["alembic/versions", "api/"]
+
+# ---------- Pytest ----------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+asyncio_mode = "auto"
+
+# ---------- Coverage ----------
+[tool.coverage.run]
+branch = true
+source = ["app"]
+omit = ["app/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

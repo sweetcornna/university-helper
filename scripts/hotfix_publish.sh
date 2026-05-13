@@ -1,8 +1,24 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Production hotfix publisher for university-helper.
+#
+# Two transport modes — try SSH key first, fall back to sshpass + password:
+#   - Default (recommended): set SERVER_USER + SERVER_IP + SSH_KEY (or rely on
+#     ssh-agent) and the script uses StrictHostKeyChecking=accept-new on the
+#     first run, then matches a real known_hosts entry afterwards.
+#   - Legacy: setting EASY_LEARNING_SERVER_PASSWORD enables sshpass; this is
+#     supported only because some operators still drive deploys from CI runners
+#     without configured keys, and is intentionally noisier so it gets fixed.
+#
+# Env vars (current EASY_LEARNING_* names kept for backward compatibility):
+#   SERVER_IP / EASY_LEARNING_SERVER_IP   — required
+#   SERVER_USER / EASY_LEARNING_SERVER_USER (default: root)
+#   SSH_KEY                               — path to private key (optional)
+#   EASY_LEARNING_SERVER_PASSWORD         — password (sshpass fallback only)
+#
 set -euo pipefail
 
-SERVER_IP="${EASY_LEARNING_SERVER_IP:-}"
-SERVER_USER="${EASY_LEARNING_SERVER_USER:-root}"
+SERVER_IP="${SERVER_IP:-${EASY_LEARNING_SERVER_IP:-}}"
+SERVER_USER="${SERVER_USER:-${EASY_LEARNING_SERVER_USER:-root}}"
 SERVER_PASSWORD="${EASY_LEARNING_SERVER_PASSWORD:-}"
 REMOTE_DIR="${EASY_LEARNING_REMOTE_DIR:-/opt/easy_learning}"
 COMPOSE_FILE="${EASY_LEARNING_COMPOSE_FILE:-docker-compose.yml}"
@@ -11,11 +27,12 @@ APP_CONTAINER="${EASY_LEARNING_APP_CONTAINER:-easy-learning-app}"
 NGINX_CONTAINER="${EASY_LEARNING_NGINX_CONTAINER:-easy-learning-nginx}"
 APP_PORT="${EASY_LEARNING_APP_PORT:-8002}"
 HEALTH_HOST="${EASY_LEARNING_HEALTH_HOST:-shuake.cornna.xyz}"
+SSH_KEY="${SSH_KEY:-}"
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-if [[ -z "$SERVER_IP" || -z "$SERVER_PASSWORD" ]]; then
-  echo "Missing EASY_LEARNING_SERVER_IP or EASY_LEARNING_SERVER_PASSWORD" >&2
+if [[ -z "$SERVER_IP" ]]; then
+  echo "Missing SERVER_IP (or EASY_LEARNING_SERVER_IP)" >&2
   exit 1
 fi
 
@@ -31,27 +48,34 @@ require_cmd() {
   }
 }
 
-require_cmd sshpass
 require_cmd ssh
 require_cmd scp
 
-SSH_BASE=(
-  sshpass -p "$SERVER_PASSWORD"
-  ssh
-  -o StrictHostKeyChecking=no
-  -o UserKnownHostsFile=/dev/null
-  -o PreferredAuthentications=password
-  -o PubkeyAuthentication=no
-  -o ConnectTimeout=10
-  "${SERVER_USER}@${SERVER_IP}"
-)
-
-SCP_BASE=(
-  sshpass -p "$SERVER_PASSWORD"
-  scp
-  -o StrictHostKeyChecking=no
-  -o UserKnownHostsFile=/dev/null
-)
+if [[ -n "$SERVER_PASSWORD" && -z "$SSH_KEY" ]]; then
+  echo "WARNING: using sshpass password auth — switch to SSH keys (set SSH_KEY)." >&2
+  require_cmd sshpass
+  SSH_BASE=(
+    sshpass -p "$SERVER_PASSWORD"
+    ssh
+    -o StrictHostKeyChecking=accept-new
+    -o PreferredAuthentications=password
+    -o PubkeyAuthentication=no
+    -o ConnectTimeout=10
+    "${SERVER_USER}@${SERVER_IP}"
+  )
+  SCP_BASE=(
+    sshpass -p "$SERVER_PASSWORD"
+    scp
+    -o StrictHostKeyChecking=accept-new
+  )
+else
+  SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
+  if [[ -n "$SSH_KEY" ]]; then
+    SSH_OPTS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
+  fi
+  SSH_BASE=(ssh "${SSH_OPTS[@]}" "${SERVER_USER}@${SERVER_IP}")
+  SCP_BASE=(scp "${SSH_OPTS[@]}")
+fi
 
 remote_sh() {
   "${SSH_BASE[@]}" "$@"

@@ -1,2 +1,3 @@
+# University Helper — the app is a private campus tool, not for indexing.
 User-agent: *
-Disallow:
+Disallow: /

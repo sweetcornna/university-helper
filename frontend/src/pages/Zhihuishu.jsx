@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import { Input } from '../components'
 import { api } from '../utils/api'
-import { isAuthenticated, removeToken } from '../utils/auth'
+import { removeToken } from '../utils/auth'
 import { applyCourseProgressToTaskRecords } from '../utils/zhihuishuTasks'
 
 const QR_POLL_INTERVAL_MS = 2000
@@ -1023,12 +1023,8 @@ export default function Zhihuishu() {
     loadSettingsFromStorage()
   }, [loadSettingsFromStorage])
 
+  // Route guard lives in App.jsx (PrivateRoute).
   useEffect(() => {
-    if (!isAuthenticated()) {
-      navigate('/login', { replace: true })
-      return undefined
-    }
-
     const storedActiveTaskId = readActiveTaskIdFromStorage()
     activeTaskStorageReadyRef.current = true
 

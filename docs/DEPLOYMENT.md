@@ -43,6 +43,11 @@ SECRET_KEY=<>=32 chars, rotated, never commit>
 SHUAKE_COMPAT_SECRET=<optional>
 CORS_ORIGINS=["https://shuake.cornna.xyz"]
 APP_PORT=8000
+ENV=production
+# Fernet key (urlsafe-base64), generated with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Required in production; the app refuses to start without it.
+CREDENTIAL_ENCRYPTION_KEY=<rotated, never commit>
 ```
 
 If you need to seed a fresh server, copy `.env.example` and fill in real secrets manually. Never commit a populated `.env`.
@@ -53,13 +58,23 @@ If you need to seed a fresh server, copy `.env.example` and fill in real secrets
 
 This is the only supported deploy path for ongoing changes.
 
+Preferred: SSH-key auth (the script defaults to this whenever `SSH_KEY` is set or an agent has the key).
+
 ```bash
-export EASY_LEARNING_SERVER_IP=111.228.53.64
-export EASY_LEARNING_SERVER_PASSWORD=<from secrets manager>
+export SERVER_IP=111.228.53.64
+export SSH_KEY=~/.ssh/uh
 
 ./scripts/hotfix_publish.sh \
   backend/app/api/v1/course.py \
   frontend/src/pages/Zhihuishu.jsx
+```
+
+Legacy: sshpass + password auth still works but prints a warning:
+
+```bash
+export EASY_LEARNING_SERVER_IP=111.228.53.64
+export EASY_LEARNING_SERVER_PASSWORD=<from secrets manager>
+./scripts/hotfix_publish.sh backend/app/main.py
 ```
 
 Behavior:
@@ -98,10 +113,24 @@ docker compose -f docker-compose.server.yml logs -f postgres
 # DB shell
 docker compose -f docker-compose.server.yml exec postgres psql -U easylearning -d main_db
 
-# DB backup
-docker compose -f docker-compose.server.yml exec postgres \
-  pg_dump -U easylearning main_db > /opt/university-helper/backups/main_db-$(date +%F).sql
+# Encrypted DB backup (recommended)
+AGE_RECIPIENT=age1xxxxxx... ./scripts/db_backup.sh
+# - dumps pg_dumpall through age → /opt/backups/university-helper/uh-<stamp>.sql.gz.age
+# - refuses to write plaintext .env snapshots unless ALLOW_UNENCRYPTED=1
+
+# Alembic migrations (idempotent baselines)
+docker compose -f docker-compose.server.yml exec app alembic upgrade head
 ```
+
+## Staging on the same host
+
+```bash
+docker compose \
+  -f docker-compose.server.yml -f docker-compose.staging.yml \
+  -p uh-staging up -d --build
+```
+
+The overlay publishes the app on `127.0.0.1:8001`, uses a separate `shuake-postgres-staging-data` volume, lowers resource caps, and renames the containers so the prod stack stays untouched.
 
 ---
 

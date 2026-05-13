@@ -4,11 +4,15 @@ from fastapi.responses import JSONResponse
 from app.core.security import decode_token
 from app.config import PUBLIC_ROUTES
 
+# Public-route set is built once at import. Also allow the metrics endpoint
+# and any /docs subroutes without re-listing them in app/config.py.
+_PUBLIC_PATHS = frozenset(route.rstrip("/") or "/" for route in PUBLIC_ROUTES)
+_PUBLIC_PREFIXES = ("/docs", "/redoc", "/metrics")
+
 
 async def tenant_isolation_middleware(request: Request, call_next):
     path = request.url.path.rstrip("/") or "/"
-    public_paths = {route.rstrip("/") or "/" for route in PUBLIC_ROUTES}
-    if path in public_paths:
+    if path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES):
         return await call_next(request)
 
     auth_header = request.headers.get("Authorization")

@@ -1,4 +1,4 @@
-/* eslint-disable react/prop-types */
+ 
 import { Camera, MapPin, QrCode, CheckSquare, Clock, ExternalLink } from 'lucide-react'
 import { RefreshCw } from 'lucide-react'
 

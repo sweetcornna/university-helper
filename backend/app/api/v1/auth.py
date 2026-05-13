@@ -4,7 +4,6 @@ from app.services.auth_service import AuthService
 from app.middleware.rate_limiter import rate_limiter
 from app.core.exceptions import UserAlreadyExistsError, InvalidCredentialsError, DatabaseError
 from app.dependencies import get_current_user
-import asyncio
 import logging
 
 router = APIRouter()
@@ -46,10 +45,9 @@ async def register(request: RegisterRequest, req: Request):
 async def login(request: LoginRequest, req: Request):
     rate_limiter.check_rate_limit(req)
     try:
-        result = await asyncio.to_thread(
-            auth_service.login_user,
+        result = await auth_service.login_user(
             email=request.email,
-            password=request.password
+            password=request.password,
         )
         logger.info(f"User logged in: {_mask_email(request.email)}")
         return result

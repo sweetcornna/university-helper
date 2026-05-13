@@ -1,54 +1,44 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+# Local bootstrap for university-helper. Idempotent.
+set -euo pipefail
 
-echo "=== Unified Sign-In Platform Setup ==="
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
 
-# Check prerequisites
-command -v docker >/dev/null 2>&1 || { echo "Docker is required but not installed. Aborting." >&2; exit 1; }
-command -v docker-compose >/dev/null 2>&1 || { echo "Docker Compose is required but not installed. Aborting." >&2; exit 1; }
+echo "=== university-helper · local setup ==="
 
-# Create .env if not exists
-if [ ! -f .env ]; then
-    echo "Creating .env from .env.example..."
+command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
+docker compose version >/dev/null 2>&1 || { echo "docker compose v2 is required"; exit 1; }
+
+if [[ ! -f .env ]]; then
+    echo "Creating .env from .env.example…"
     cp .env.example .env
-    echo "Please update .env with your configuration before proceeding."
-    exit 0
+    echo "  -> edit .env (SECRET_KEY, POSTGRES_PASSWORD, CORS_ORIGINS, CREDENTIAL_ENCRYPTION_KEY) before 'make start'"
 fi
 
-# Create necessary directories
-echo "Creating directories..."
-mkdir -p logs
-mkdir -p backups
+if [[ -d backend ]]; then
+    echo "Backend: installing dev deps…"
+    pushd backend >/dev/null
+    if [[ ! -d .venv ]]; then
+        python3 -m venv .venv
+    fi
+    .venv/bin/pip install --upgrade pip >/dev/null
+    .venv/bin/pip install -r requirements.txt -r requirements-dev.txt >/dev/null
+    popd >/dev/null
+fi
 
-# Pull Docker images
-echo "Pulling Docker images..."
-docker-compose pull
+if [[ -d frontend ]]; then
+    echo "Frontend: installing npm deps…"
+    pushd frontend >/dev/null
+    if [[ -f package-lock.json ]]; then
+        npm ci
+    else
+        npm install
+    fi
+    popd >/dev/null
+fi
 
-# Build containers
-echo "Building containers..."
-docker-compose build
-
-# Start database and redis first
-echo "Starting database and redis..."
-docker-compose up -d postgres redis
-
-# Wait for database
-echo "Waiting for database to be ready..."
-sleep 5
-
-# Run database migrations
-echo "Running database migrations..."
-docker-compose run --rm backend alembic upgrade head || echo "Migrations not configured yet"
-
-# Start all services
-echo "Starting all services..."
-docker-compose up -d
-
-echo ""
-echo "=== Setup Complete ==="
-echo "Services are running at:"
-echo "  Frontend: http://localhost"
-echo "  Backend API: http://localhost/api"
-echo ""
-echo "To view logs: docker-compose logs -f"
-echo "To stop services: docker-compose down"
+echo "Optional: enable pre-commit hooks with: pre-commit install"
+echo "Run:        make start    # docker-compose stack"
+echo "Tests:      make test     # backend + frontend"
+echo "=== setup complete ==="

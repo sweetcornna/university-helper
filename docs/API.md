@@ -1,217 +1,144 @@
-# API Documentation
+# API
 
-## Base URL
+Base URL: `https://shuake.cornna.xyz/api/v1` (production)
+or `http://localhost:8000/api/v1` (local dev).
+
+Every endpoint emits JSON. Errors use the shape:
+
+```json
+{ "code": "ErrorClassName", "message": "Human-readable text" }
 ```
-http://localhost:8000/api
-```
+
+For Pydantic validation failures (HTTP 422) FastAPI's default `detail`
+array is returned; the frontend `utils/api.js` flattens it before
+surfacing to the user.
+
+Authoritative source: `backend/app/api/v1/`. When `DOCS_ENABLED=true` the
+service also exposes Swagger UI at `/docs` and the raw spec at
+`/openapi.json` — prefer those for live exploration.
+
+---
 
 ## Authentication
 
-All authenticated endpoints require a JWT token in the Authorization header:
+All endpoints under `/api/v1/` (except those in `PUBLIC_ROUTES` in
+`backend/app/config.py`) require:
+
 ```
-Authorization: Bearer <token>
+Authorization: Bearer <jwt>
 ```
 
-## Endpoints
+Tokens are HS256, signed with `SECRET_KEY`. Claims include
+`user_id`, `tenant_db_name`, `iat`, `nbf`, `exp`, `jti`. Default lifetime
+is `ACCESS_TOKEN_EXPIRE_MINUTES` (30 min).
 
-### Authentication
+### POST /auth/register
 
-#### POST /auth/register
-Register a new user with email/password.
+Create a new user, provision a tenant DB, return a token.
 
-**Request:**
 ```json
+// request
+{ "username": "alice99", "email": "alice@example.com", "password": "Str0ngP@ss" }
+```
+
+```json
+// response (201)
 {
-  "email": "user@example.com",
-  "password": "securepassword",
-  "username": "username"
+  "access_token": "<jwt>",
+  "token_type": "bearer",
+  "user_id": 42,
+  "tenant_db_name": "tenant_alice99",
+  "shuake_token": "<optional, only if SHUAKE_COMPAT_SECRET is set>"
 }
 ```
 
-**Response:**
+Username must match `^[a-z0-9]+$`. Password must be ≥ 8 chars with at
+least one uppercase, one lowercase, one digit.
+
+### POST /auth/login
+
 ```json
-{
-  "user_id": "uuid",
-  "email": "user@example.com",
-  "username": "username",
-  "token": "jwt_token"
-}
+{ "email": "alice@example.com", "password": "Str0ngP@ss" }
 ```
 
-#### POST /auth/login
-Login with email/password.
+Returns the same shape as `/register`.
 
-**Request:**
-```json
-{
-  "email": "user@example.com",
-  "password": "securepassword"
-}
-```
+### GET /auth/shuake-token
 
-**Response:**
-```json
-{
-  "user_id": "uuid",
-  "token": "jwt_token",
-  "refresh_token": "refresh_token"
-}
-```
+Returns a fresh 7-day compat token for clients that still use the
+shuake bearer. Only works when `SHUAKE_COMPAT_SECRET` (≥ 32 chars) is
+configured on the backend. Requires the regular JWT.
 
-#### POST /auth/refresh
-Refresh access token.
+---
 
-**Request:**
-```json
-{
-  "refresh_token": "refresh_token"
-}
-```
+## Chaoxing
 
-**Response:**
-```json
-{
-  "token": "new_jwt_token"
-}
-```
+`backend/app/api/v1/chaoxing.py` — sign-in flow + Baidu location utils.
 
-#### POST /auth/logout
-Logout current user.
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/chaoxing/login` | Phone-number + password login; primes the in-memory client cache. |
+| GET | `/chaoxing/courses` | List courses for the authenticated chaoxing client. |
+| POST | `/chaoxing/sign` | Submit a sign-in for one active session. |
+| POST | `/chaoxing/sign-all` | Submit sign-ins for every currently-active session. |
+| GET | `/chaoxing/location/geocode` | Address → lat/lng (no auth). |
+| GET | `/chaoxing/location/search` | Place keyword search (no auth). |
+| GET | `/chaoxing/location/reverse-geocode` | lat/lng → address (no auth). |
 
-**Headers:** `Authorization: Bearer <token>`
+The location endpoints are listed in `PUBLIC_ROUTES` so the frontend's
+map picker can call them without a JWT.
 
-**Response:**
-```json
-{
-  "message": "Logged out successfully"
-}
-```
+---
 
-### OAuth
+## Course tasks (Chaoxing Fanya + Zhihuishu)
 
-#### GET /auth/google
-Initiate Google OAuth flow.
+`backend/app/api/v1/course.py` — long-running automation tasks.
 
-**Response:** Redirects to Google OAuth consent page.
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/course/start` | Start a course-learning task (`platform: "chaoxing"` or `"zhihuishu"`). |
+| GET | `/course/status/{task_id}` | Poll task progress. |
+| GET | `/course/tasks` | List the current user's tasks. |
+| GET | `/course/logs/{task_id}` | Stream log lines for one task. |
+| POST | `/course/task/{task_id}/pause` | Pause a running task. |
+| POST | `/course/task/{task_id}/resume` | Resume a paused task. |
+| POST | `/course/task/{task_id}/stop` | Cancel a task. |
+| POST | `/course/zhihuishu/qr-login` | Begin Zhihuishu QR login; returns a session id and a QR PNG. |
+| POST | `/course/zhihuishu/password-login` | Zhihuishu phone + password login. |
+| POST | `/course/zhihuishu/tasks/course` | Enqueue a Zhihuishu course-learning task. |
 
-#### GET /auth/google/callback
-Google OAuth callback endpoint.
+Tasks store JSONB payloads in the user's tenant DB (`course_task_store`).
+Long polling clients should use `status` + `logs` with backoff; the
+canonical client is `frontend/src/pages/ChaoxingFanya.jsx` and
+`Zhihuishu.jsx`.
 
-**Query Parameters:**
-- `code`: Authorization code from Google
+---
 
-**Response:** Redirects to frontend with token.
+## Observability
 
-#### GET /auth/github
-Initiate GitHub OAuth flow.
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | Returns `{ "status": "ok\|degraded", "db": "ok", "cleanup_task": "alive\|dead" }`. Used by Docker healthchecks. |
+| GET | `/metrics` | Plain-text Prometheus exposition (process uptime + per-path × status counter). |
 
-#### GET /auth/github/callback
-GitHub OAuth callback endpoint.
+---
 
-#### GET /auth/wechat
-Initiate WeChat OAuth flow.
+## Rate limiting
 
-#### GET /auth/wechat/callback
-WeChat OAuth callback endpoint.
+- nginx: `/api/v1/auth/login` capped at 5 req/min per IP; `/api/` at 20 req/s burst 40.
+- FastAPI middleware (`backend/app/middleware/rate_limiter.py`): per-route window counters with Postgres-backed storage and an in-memory fallback.
+- 429 responses include `Retry-After` when emitted by nginx.
 
-### User Management
+---
 
-#### GET /users/me
-Get current user profile.
+## OpenAPI
 
-**Headers:** `Authorization: Bearer <token>`
+The full machine-readable schema is at `/openapi.json` when
+`DOCS_ENABLED=true`. To regenerate a static copy for review without
+running the app:
 
-**Response:**
-```json
-{
-  "user_id": "uuid",
-  "email": "user@example.com",
-  "username": "username",
-  "created_at": "2024-01-01T00:00:00Z",
-  "oauth_providers": ["google", "github"]
-}
-```
-
-#### PUT /users/me
-Update current user profile.
-
-**Headers:** `Authorization: Bearer <token>`
-
-**Request:**
-```json
-{
-  "username": "newusername",
-  "email": "newemail@example.com"
-}
-```
-
-#### DELETE /users/me
-Delete current user account.
-
-**Headers:** `Authorization: Bearer <token>`
-
-**Response:**
-```json
-{
-  "message": "Account deleted successfully"
-}
-```
-
-### Session Management
-
-#### GET /sessions
-List all active sessions for current user.
-
-**Headers:** `Authorization: Bearer <token>`
-
-**Response:**
-```json
-{
-  "sessions": [
-    {
-      "session_id": "uuid",
-      "device": "Chrome on Windows",
-      "ip_address": "192.168.1.1",
-      "created_at": "2024-01-01T00:00:00Z",
-      "last_active": "2024-01-01T01:00:00Z"
-    }
-  ]
-}
-```
-
-#### DELETE /sessions/:session_id
-Revoke a specific session.
-
-**Headers:** `Authorization: Bearer <token>`
-
-## Error Responses
-
-All errors follow this format:
-```json
-{
-  "error": "error_code",
-  "message": "Human readable error message",
-  "details": {}
-}
-```
-
-### Common Error Codes
-- `400` - Bad Request
-- `401` - Unauthorized
-- `403` - Forbidden
-- `404` - Not Found
-- `409` - Conflict (e.g., email already exists)
-- `500` - Internal Server Error
-
-## Rate Limiting
-
-API endpoints are rate limited:
-- Authentication endpoints: 5 requests per minute
-- General endpoints: 100 requests per minute
-
-Rate limit headers:
-```
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 95
-X-RateLimit-Reset: 1640000000
+```bash
+cd backend
+python -c "from app.main import app; import json; print(json.dumps(app.openapi(), indent=2))" \
+  > ../docs/openapi.snapshot.json
 ```

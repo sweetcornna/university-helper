@@ -1,4 +1,4 @@
-/* eslint-disable react/prop-types */
+ 
 import { Camera, MapPin, QrCode, KeyRound, Hand, CheckSquare, RefreshCw, Clock, Target, AlertTriangle, Sparkles } from 'lucide-react'
 
 import { Button } from '../../../components'
