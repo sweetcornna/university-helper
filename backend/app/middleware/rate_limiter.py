@@ -62,17 +62,31 @@ class RateLimiter:
             self._evict_oldest()
 
     def _get_forwarded_client_id(self, request: Request) -> Optional[str]:
-        # NOTE: X-Forwarded-For is only trusted when the direct client is a
-        # known private/loopback proxy (see _is_trusted_proxy). In production,
-        # pair this with TrustedHostMiddleware and ensure Nginx/load balancer
-        # overwrites X-Forwarded-For so upstream clients cannot spoof it.
+        # X-Forwarded-For is only consulted when the direct peer is a known
+        # private/loopback proxy (see _is_trusted_proxy). nginx forwards
+        # `X-Forwarded-For $proxy_add_x_forwarded_for`, which APPENDS the real
+        # peer IP rather than overwriting the header, so the chain looks like
+        # `<client-supplied...>, <real-client>, <nginx hop>, ...`.
+        #
+        # We therefore walk the chain RIGHT-TO-LEFT and skip trusted-proxy
+        # entries, returning the RIGHTMOST UNTRUSTED hop — the real client as
+        # seen by our infrastructure. Returning the leftmost entry (as before)
+        # would let a client spoof `X-Forwarded-For: 1.2.3.4` and rotate the
+        # spoofed value to dodge the limiter.
         forwarded_for = str(request.headers.get("x-forwarded-for") or "").strip()
         if forwarded_for:
-            for part in forwarded_for.split(","):
+            for part in reversed(forwarded_for.split(",")):
                 candidate = part.strip()
-                if candidate:
-                    return candidate
+                if not candidate:
+                    continue
+                if self._is_trusted_proxy(candidate):
+                    # A trusted infra hop (our nginx / private network). Keep
+                    # walking left toward the real client.
+                    continue
+                return candidate
 
+        # x-real-ip is set by nginx itself (single value, not client-appendable
+        # through the proxy_add chain), so it is safe to use as a fallback.
         real_ip = str(request.headers.get("x-real-ip") or "").strip()
         if real_ip:
             return real_ip

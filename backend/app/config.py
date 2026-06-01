@@ -49,6 +49,13 @@ class Settings(BaseSettings):
 
     BAIDU_MAP_API_KEY: Optional[str] = None
 
+    # Optional bearer token guarding the /metrics endpoint. When set, requests
+    # to /metrics must present `Authorization: Bearer <METRICS_TOKEN>`. When
+    # unset (default), /metrics is open — acceptable only because the documented
+    # nginx topology does not proxy /metrics externally. Set this in any
+    # deployment where the uvicorn container is otherwise reachable.
+    METRICS_TOKEN: Optional[str] = None
+
     @field_validator("SECRET_KEY")
     @classmethod
     def _secret_key_present(cls, v: str) -> str:

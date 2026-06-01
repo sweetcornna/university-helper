@@ -7,12 +7,39 @@ full library when real SLOs land.
 
 from __future__ import annotations
 
+import hmac
 import threading
 import time
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, HTTPException, Request, Response, status
+
+from app.config import settings
 
 router = APIRouter()
+
+
+def _require_metrics_auth(request: Request) -> None:
+    """Guard /metrics with an optional bearer token.
+
+    When ``settings.METRICS_TOKEN`` is configured, the caller must present a
+    matching ``Authorization: Bearer <token>`` header. The comparison is
+    constant-time to avoid leaking the token via timing. When the setting is
+    unset the endpoint stays open (the documented nginx topology does not proxy
+    /metrics externally), but operators exposing the container directly should
+    set the token.
+    """
+    expected = getattr(settings, "METRICS_TOKEN", None)
+    if not expected:
+        return
+
+    auth_header = request.headers.get("Authorization") or ""
+    parts = auth_header.strip().split()
+    presented = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+    if not presented or not hmac.compare_digest(presented, str(expected)):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
+        )
 
 _PROCESS_START = time.time()
 
@@ -80,5 +107,6 @@ def _render() -> str:
 
 
 @router.get("/metrics", include_in_schema=False)
-def metrics() -> Response:
+def metrics(request: Request) -> Response:
+    _require_metrics_auth(request)
     return Response(content=_render(), media_type="text/plain; version=0.0.4")

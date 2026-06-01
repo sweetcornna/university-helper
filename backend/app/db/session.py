@@ -16,10 +16,9 @@ import re
 import threading
 from collections import OrderedDict
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
-import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
 
@@ -130,8 +129,19 @@ def _checkout_tenant(name: str):
             tenant_pools.move_to_end(name)
         entry.in_use += 1
         pool = entry.pool
-    # getconn() outside the lock — see docstring.
-    return pool.getconn()
+    # getconn() outside the lock — see docstring. If it raises (e.g. PoolError
+    # 'pool exhausted' or OperationalError when the tenant DB is briefly
+    # unreachable) we MUST undo the in_use bump we made above; otherwise the
+    # refcount leaks permanently and the pool can never be evicted
+    # (_evict_if_idle_locked only drops pools with in_use == 0).
+    try:
+        return pool.getconn()
+    except Exception:
+        with _tenant_lock:
+            current = tenant_pools.get(name)
+            if current is entry:
+                current.in_use = max(0, current.in_use - 1)
+        raise
 
 
 def _release_tenant(name: str, conn) -> None:

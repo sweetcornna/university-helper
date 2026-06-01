@@ -195,10 +195,17 @@ def health():
     try:
         with get_db_session() as conn:
             conn.autocommit = True  # avoid an unnecessary COMMIT round-trip
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
-            conn.autocommit = False
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+            finally:
+                # Always reset autocommit before the connection is returned to
+                # the pool. If SELECT 1 raised, skipping this reset would leave
+                # the pooled connection in autocommit=True, silently breaking
+                # the transactional contract (commit/rollback become no-ops)
+                # for the next caller that reuses it.
+                conn.autocommit = False
     except Exception as e:
         raise HTTPException(
             status_code=503, detail=f"db unavailable: {type(e).__name__}"
