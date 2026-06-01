@@ -1,3 +1,17 @@
+// SECURITY TRADEOFF (F61): the access/shuake JWTs are kept in window.sessionStorage,
+// which is JS-readable. This means any successful XSS in this origin can read the
+// bearer token (e.g. `sessionStorage.getItem('auth_token')`) and exfiltrate it.
+//
+// sessionStorage is a deliberate improvement over localStorage: it is scoped to a
+// single tab and cleared when the tab closes, shrinking the token's lifetime and
+// blast radius. The fully XSS-resistant alternative — an httpOnly + Secure +
+// SameSite cookie that JS cannot read — is NOT implemented here because it requires
+// the backend to set/clear the cookie and the API client to stop sending an
+// Authorization header (a cross-cutting backend + frontend change, out of scope for
+// a frontend-only fix). We therefore accept the residual risk and treat eliminating
+// XSS sinks (e.g. the sanitized href helpers in utils/safeUrl.js) as the primary
+// mitigation. Do NOT move these tokens to localStorage (longer-lived, larger blast
+// radius) or expose them on `window`.
 const TOKEN_KEY = 'auth_token'
 const SHUAKE_TOKEN_KEY = 'shuake_token'
 

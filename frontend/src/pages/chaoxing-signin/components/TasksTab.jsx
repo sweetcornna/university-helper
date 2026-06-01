@@ -4,6 +4,8 @@ import { RefreshCw } from 'lucide-react'
 
 import { Button } from '../../../components'
 
+import { safeHref } from '../../../utils/safeUrl'
+
 import { GLASS_PANEL_CLASS } from '../utils'
 
 const getSignTypeIcon = (type) => {
@@ -44,7 +46,9 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
             const title = isClassTask
               ? (task.className || task.courseName || (isBackgroundTask ? '班级后台签到任务' : '班级签到任务'))
               : (task.courseName || (isBackgroundTask ? '后台签到任务' : '待处理签到任务'))
-            const remoteSubmitUrl = String(task?.remoteEndpoints?.endpoints?.submitSign?.url || '').trim()
+            // Sanitize Chaoxing-derived submit URL to http(s) only before it is
+            // bound to an <a href>, blocking javascript:/data: DOM XSS (F60).
+            const remoteSubmitUrl = safeHref(task?.remoteEndpoints?.endpoints?.submitSign?.url)
             return (
             <div
               key={idx}

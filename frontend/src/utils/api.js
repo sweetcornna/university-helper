@@ -11,6 +11,27 @@ const DEFAULT_TIMEOUT_MS = 20000
 // react-router coupling.
 export const AUTH_EXPIRED_EVENT = 'auth:expired'
 
+// Some backend/Chaoxing endpoints signal an expired/invalid session with a
+// "soft" failure: HTTP 200 carrying { status: false, message: 'token ...' }
+// instead of a real 401. Detect those so the central api() reacts the same way
+// as a hard 401 (clear token + dispatch AUTH_EXPIRED) rather than surfacing a
+// generic error and leaving the user on a broken page (F62). Mirrors the
+// ChaoxingSignin raw-fetch path's TOKEN_ERROR_PATTERN.
+const SOFT_TOKEN_ERROR_PATTERN =
+  /(invalid token|token has expired|token validation failed|missing token|invalid authentication credentials|登录态失效|登录已过期|登录状态已失效|未登录|请重新登录)/i
+
+const isSoftAuthFailure = (payload) => {
+  if (!payload || payload.status !== false) return false
+  const message =
+    payload.message ||
+    formatDetail(payload.detail) ||
+    payload.error ||
+    payload.msg ||
+    payload.data?.message ||
+    ''
+  return SOFT_TOKEN_ERROR_PATTERN.test(String(message))
+}
+
 const parsePayload = async (response) => {
   const text = await response.text()
   if (!text) return {}
@@ -103,7 +124,10 @@ export const api = async (endpoint, options = {}) => {
     // Only treat 401 as session expiry when this request was actually
     // authenticated. A 401 on /auth/login etc. is "wrong credentials" and
     // must surface the server's message — not the generic expiry redirect.
-    if (response.status === 401 && token) {
+    // A "soft" auth failure (HTTP 200 + { status: false, message: 'token ...' })
+    // is handled identically (F62): clear the stale token and dispatch the
+    // expiry event so the shell redirects to /login.
+    if ((response.status === 401 || isSoftAuthFailure(payload)) && token) {
       handleUnauthorized()
       throw new ApiError(
         pickErrorMessage(payload, response.status) || '登录状态已失效，请重新登录。',
