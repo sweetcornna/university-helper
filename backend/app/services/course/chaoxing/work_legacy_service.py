@@ -5,7 +5,7 @@ import re
 import random
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from loguru import logger
 
@@ -13,7 +13,6 @@ from .answer import Tiku, AI
 from .answer_check import cut
 from .decode import decode_questions_info
 from .exceptions import MaxRetryExceeded
-from .session_manager import SessionManager
 
 # API URL constants
 WORK_API_URL = "https://mooc1.chaoxing.com/mooc-ans/api/work"
@@ -23,10 +22,11 @@ SUBMIT_WORK_URL = "https://mooc1.chaoxing.com/mooc-ans/work/addStudentWorkNew"
 class ChaoxingWorkLegacyService:
     """Handles legacy work/quiz answering and submission."""
 
-    def __init__(self, tiku: Tiku, rollback_times: int, kwargs: dict):
+    def __init__(self, tiku: Tiku, rollback_times: int, kwargs: dict, session_manager=None):
         self.tiku = tiku
         self.rollback_times = rollback_times
         self.kwargs = kwargs
+        self.session_manager = session_manager
 
     # ------------------------------------------------------------------
     # Static utility methods (extracted from nested functions)
@@ -245,13 +245,9 @@ class ChaoxingWorkLegacyService:
             elif q["type"] == "judgement":
                 answer = "true" if self.tiku.judgement_select(res) else "false"
             elif q["type"] == "completion":
-                if isinstance(res, list):
-                    parts = [str(part).strip() for part in res if str(part).strip()]
-                    answer = "\n".join(parts)
-                elif isinstance(res, str):
-                    answer = res.strip()
-                else:
-                    answer = str(res).strip()
+                # Tiku.query() 始终返回 str 或 None；进入此分支时 res 必为非空 str
+                # （多空填空答案已由 provider 以 '\n' 连接），故无需 list 分支。
+                answer = str(res).strip()
             else:
                 answer = res
 
@@ -266,6 +262,20 @@ class ChaoxingWorkLegacyService:
         # 填充答案
         q["answerField"][f'answer{q["id"]}'] = answer
         logger.info(f'{q["title"]} 填写答案为 {answer}')
+
+    def _fallback_random_answer(self, q, origin_html_content=""):
+        """当 _handle_question 抛异常时，为该题填入随机答案，避免提交时该题留空。"""
+        try:
+            def _multi_cut_with_context(ans):
+                return self._multi_cut(ans, origin_html_content)
+
+            answer = self._random_answer(q.get("type", ""), q.get("options", ""), _multi_cut_with_context)
+            q[f'answerSource{q["id"]}'] = "random"
+            q.setdefault("answerField", {})[f'answer{q["id"]}'] = answer
+        except Exception as exc:  # noqa: BLE001 - 兜底，确保提交表单字段不缺失
+            logger.error("生成随机兜底答案失败 (id={}): {}", q.get("id"), exc)
+            q.setdefault("answerField", {})[f'answer{q["id"]}'] = ""
+            q[f'answerSource{q["id"]}'] = "random"
 
     @staticmethod
     def _fill_answers_into_form(questions, is_save: bool):
@@ -300,11 +310,11 @@ class ChaoxingWorkLegacyService:
         """
         from .client import StudyResult
 
-        if self.tiku.DISABLE or not self.tiku:
+        if not self.tiku or self.tiku.DISABLE:
             return StudyResult.SUCCESS
         _ORIGIN_HTML_CONTENT = ""
 
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
 
         try:
             final_resp, questions = self._fetch_response(
@@ -337,10 +347,25 @@ class ChaoxingWorkLegacyService:
             ai_concurrency = max(1, ai_concurrency)
 
             with ThreadPoolExecutor(max_workers=ai_concurrency) as executor:
-                for q in questions["questions"]:
-                    executor.submit(self._handle_question, q, inc_found_concurrent, _ORIGIN_HTML_CONTENT)
-
-            executor.shutdown(wait=True)
+                future_to_q = {
+                    executor.submit(
+                        self._handle_question, q, inc_found_concurrent, _ORIGIN_HTML_CONTENT
+                    ): q
+                    for q in questions["questions"]
+                }
+                # 收集 future 结果：ThreadPoolExecutor 会吞掉 worker 异常，
+                # 若不调用 .result() 则失败的题目会被静默留空并照常提交。
+                for future in as_completed(future_to_q):
+                    q = future_to_q[future]
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        logger.error(
+                            "AI 并发答题处理题目失败 (id={}), 回退随机答案: {}",
+                            q.get("id"),
+                            exc,
+                        )
+                        self._fallback_random_answer(q, _ORIGIN_HTML_CONTENT)
         else:
             def inc_found_seq():
                 nonlocal found_answers

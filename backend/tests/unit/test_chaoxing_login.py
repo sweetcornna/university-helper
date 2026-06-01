@@ -111,6 +111,78 @@ def test_chaoxing_signin_get_active_tasks_filters_by_class_and_active_id():
     assert "mobilelearn.chaoxing.com/pptSign/stuSignajax" in tasks[0]["remoteEndpoints"]["endpoints"]["submitSign"]["url"]
 
 
+def test_chaoxing_signin_explicit_active_id_honored_when_older_than_2h():
+    """An explicitly-requested active_id must be honored regardless of the >2h
+    age heuristic, which is only meant to bound auto-discovered activities."""
+    client = ChaoxingSigninClient()
+    now_ms = int(time.time() * 1000)
+    three_hours_ago = now_ms - 3 * 60 * 60 * 1000
+
+    with patch.object(
+        client,
+        "get_courses",
+        return_value=[{"courseId": "1", "classId": "2", "courseName": "Demo Course"}],
+    ), patch.object(
+        client,
+        "_get_course_activity_list",
+        return_value=[
+            {"id": "11", "status": 1, "otherId": 4, "nameOne": "Old Location Sign", "startTime": three_hours_ago},
+        ],
+    ):
+        tasks = client.get_active_tasks(active_id="11", expected_type="location")
+
+    assert len(tasks) == 1
+    assert tasks[0]["activeId"] == "11"
+
+
+def test_chaoxing_signin_age_filter_still_drops_auto_discovered_old_activity():
+    """Without an explicit active_id, the >2h heuristic still filters out stale
+    auto-discovered activities."""
+    client = ChaoxingSigninClient()
+    now_ms = int(time.time() * 1000)
+    three_hours_ago = now_ms - 3 * 60 * 60 * 1000
+
+    with patch.object(
+        client,
+        "get_courses",
+        return_value=[{"courseId": "1", "classId": "2", "courseName": "Demo Course"}],
+    ), patch.object(
+        client,
+        "_get_course_activity_list",
+        return_value=[
+            {"id": "11", "status": 1, "otherId": 4, "nameOne": "Old Location Sign", "startTime": three_hours_ago},
+        ],
+    ):
+        tasks = client.get_active_tasks(expected_type="location")
+
+    assert tasks == []
+
+
+def test_chaoxing_signin_explicit_active_id_does_not_smuggle_other_old_activities():
+    """An explicit active_id honors only the requested activity; other stale
+    activities are still dropped by the age heuristic."""
+    client = ChaoxingSigninClient()
+    now_ms = int(time.time() * 1000)
+    three_hours_ago = now_ms - 3 * 60 * 60 * 1000
+
+    with patch.object(
+        client,
+        "get_courses",
+        return_value=[{"courseId": "1", "classId": "2", "courseName": "Demo Course"}],
+    ), patch.object(
+        client,
+        "_get_course_activity_list",
+        return_value=[
+            {"id": "11", "status": 1, "otherId": 4, "nameOne": "Requested Old Sign", "startTime": three_hours_ago},
+            {"id": "12", "status": 1, "otherId": 4, "nameOne": "Unrelated Old Sign", "startTime": three_hours_ago},
+        ],
+    ):
+        tasks = client.get_active_tasks(active_id="11", expected_type="location")
+
+    assert len(tasks) == 1
+    assert tasks[0]["activeId"] == "11"
+
+
 def test_chaoxing_remote_sign_endpoints_are_real_chaoxing_urls():
     endpoints = build_remote_sign_endpoints(
         course_id="1",

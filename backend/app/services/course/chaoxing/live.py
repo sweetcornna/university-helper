@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
 import time
-from urllib import parse
 
 from api.logger import logger
 
@@ -57,7 +56,10 @@ class Live:
             return None
         
         # 构造直播状态请求URL
-        status_url = f"https://mooc1.chaoxing.com/ananas/live/liveinfo?liveid={live_id}&userid={user_id}&clazzid={clazz_id}&knowledgeid={knowledge_id}&courseid={self.course_id}&jobid={self.attachment.get('property', {}).get('_jobid', '')}&ut=s"
+        # jobid 存储在解码后任务的顶层（decode._process_live_task），
+        # property 字典里并没有 _jobid 这个键，旧代码因此始终发送空 jobid。
+        job_id = self.attachment.get("jobid", "") or self.attachment.get("property", {}).get("jobid", "")
+        status_url = f"https://mooc1.chaoxing.com/ananas/live/liveinfo?liveid={live_id}&userid={user_id}&clazzid={clazz_id}&knowledgeid={knowledge_id}&courseid={self.course_id}&jobid={job_id}&ut=s"
         
         # 发送请求并解析状态（包含总时长）
         session = SessionManager.get_session()

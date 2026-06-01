@@ -2,7 +2,6 @@
 import re
 import time
 from loguru import logger
-from .session_manager import SessionManager
 from .decode import decode_course_list
 
 
@@ -11,8 +10,11 @@ def get_timestamp():
 
 
 class ChaoxingCourseService:
+    def __init__(self, session_manager=None):
+        self.session_manager = session_manager
+
     def get_course_list(self):
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
         _url = "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/courselistdata"
         _data = {"courseType": 1, "courseFolderId": 0, "query": "", "superstarClass": 0}
         logger.trace("正在读取所有的课程列表...")
@@ -26,13 +28,13 @@ class ChaoxingCourseService:
         return course_list
 
     def study_document(self, _course, _job):
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
         _url = f"https://mooc1.chaoxing.com/ananas/job/document?jobid={_job['jobid']}&knowledgeid={re.findall(r'nodeId_(.*?)-', _job['otherinfo'])[0]}&courseid={_course['courseId']}&clazzid={_course['clazzId']}&jtoken={_job['jtoken']}&_dc={get_timestamp()}"
         _resp = _session.get(_url)
         return _resp.status_code == 200
 
     def study_read(self, _course, _job, _job_info):
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
         _resp = _session.get(
             url="https://mooc1.chaoxing.com/ananas/job/readv2",
             params={
@@ -52,7 +54,7 @@ class ChaoxingCourseService:
             return True
 
     def study_emptypage(self, _course, point):
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
         _resp = _session.get(
             url="https://mooc1.chaoxing.com/mooc-ans/mycourse/studentstudyAjax",
             params={

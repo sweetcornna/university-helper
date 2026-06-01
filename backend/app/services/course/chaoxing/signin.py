@@ -649,16 +649,21 @@ class ChaoxingSigninClient:
             for activity in payload:
                 if int(activity.get("status", 0)) != 1:
                     continue
-                active_id = str(activity.get("id") or "")
-                if not active_id:
+                activity_id = str(activity.get("id") or "")
+                if not activity_id:
                     continue
-                if active_filter_set and active_id not in active_filter_set:
+                if active_filter_set and activity_id not in active_filter_set:
                     continue
-                start_time = int(activity.get("startTime") or now_ms)
-                if now_ms - start_time > 2 * 60 * 60 * 1000:
-                    continue
+                # The >2h age heuristic only bounds auto-discovered activities.
+                # When the caller explicitly named this active_id, honor it
+                # regardless of how long ago the activity started.
+                explicitly_requested = activity_id in active_filter_set
+                if not explicitly_requested:
+                    start_time = int(activity.get("startTime") or now_ms)
+                    if now_ms - start_time > 2 * 60 * 60 * 1000:
+                        continue
 
-                sign_type = self._resolve_sign_type(activity, active_id)
+                sign_type = self._resolve_sign_type(activity, activity_id)
                 if expected_type != "all" and sign_type != expected_type:
                     continue
 

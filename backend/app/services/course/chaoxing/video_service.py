@@ -14,7 +14,6 @@ from tqdm import tqdm
 from .config import GlobalConst as gc
 from .course_service import get_timestamp
 from .rate_limiter import RateLimiter
-from .session_manager import SessionManager
 from .constants import (
     VIDEO_LOG_RATE_LIMIT,
     VIDEO_WAIT_TIME_MIN,
@@ -28,11 +27,12 @@ from .constants import (
 class ChaoxingVideoService:
     """Handles video and audio progress logging and study tasks."""
 
-    def __init__(self, get_fid_func, get_uid_func, rate_limiter: RateLimiter, video_log_limiter: RateLimiter):
+    def __init__(self, get_fid_func, get_uid_func, rate_limiter: RateLimiter, video_log_limiter: RateLimiter, session_manager=None):
         self._get_fid = get_fid_func
         self._get_uid = get_uid_func
         self.rate_limiter = rate_limiter
         self.video_log_limiter = video_log_limiter
+        self.session_manager = session_manager
 
     # ------------------------------------------------------------------
     # Helpers
@@ -198,7 +198,7 @@ class ChaoxingVideoService:
         return None
 
     def _recover_after_forbidden(self, session: requests.Session, job: dict, _type: Literal["Video", "Audio"]):
-        SessionManager.update_cookies()
+        self.session_manager.update_cookies()
         refreshed = self._refresh_video_status(session, job, _type)
         if refreshed:
             return refreshed
@@ -226,7 +226,7 @@ class ChaoxingVideoService:
         """
         from .client import StudyResult
 
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
 
         headers = gc.VIDEO_HEADERS if _type == "Video" else gc.AUDIO_HEADERS
         _info_url = f"https://mooc1.chaoxing.com/ananas/status/{_job['objectid']}?k={self._get_fid()}&flag=normal"
@@ -272,6 +272,12 @@ class ChaoxingVideoService:
         forbidden_retry = 0
         max_forbidden_retry = MAX_FORBIDDEN_RETRY
 
+        # 防止服务器持续返回 isPassed=False 时无限循环：
+        # 一旦 play_time 已经饱和到 duration 仍未通过，最多再上报
+        # MAX_REPORTS_WHILE_SATURATED 次后放弃，避免 worker 线程被永久占用。
+        MAX_REPORTS_WHILE_SATURATED = 10
+        saturated_reports = 0
+
         passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration, play_time, _type, headers=headers)
 
         if passed:
@@ -299,14 +305,34 @@ class ChaoxingVideoService:
                     refreshed_meta = self._recover_after_forbidden(_session, _job, _type)
                     if refreshed_meta:
                         _dtoken = refreshed_meta.get("dtoken", _dtoken)
-                        _duration = refreshed_meta.get("duration", duration)
+                        # 应用刷新后的 duration（之前赋值到死变量 _duration，
+                        # 导致后续上报继续使用过期的 duration，参数自相矛盾）。
+                        refreshed_duration = refreshed_meta.get("duration", duration)
+                        try:
+                            duration = int(refreshed_duration)
+                        except (TypeError, ValueError):
+                            logger.debug("刷新返回的 duration 非法，沿用旧值: {}", refreshed_duration)
                         play_time = refreshed_meta.get("playTime", play_time)
+                        # duration 变化后重置饱和计数，避免误判。
+                        saturated_reports = 0
 
-                        logger.debug("Refreshed session: duration={}, play_time={}", _duration, play_time)
+                        logger.debug("Refreshed session: duration={}, play_time={}", duration, play_time)
                         continue
 
                 elif not passed and state != 200:
                     return StudyResult.ERROR
+
+                # F46: 服务器持续 200 但 isPassed=False，且进度已经饱和到 duration。
+                # 这种情况下后续每次循环都会立即再次上报，永远无法跳出，需设上限。
+                if not passed and state == 200 and play_time >= duration:
+                    saturated_reports += 1
+                    if saturated_reports >= MAX_REPORTS_WHILE_SATURATED:
+                        logger.warning(
+                            "进度已饱和但服务器始终未返回 isPassed (已上报 {} 次)，放弃当前任务: {}",
+                            saturated_reports,
+                            _job.get("name"),
+                        )
+                        return StudyResult.TIMEOUT
 
                 # Adaptive polling interval
                 if duration < 180:

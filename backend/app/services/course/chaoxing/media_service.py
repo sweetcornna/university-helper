@@ -9,15 +9,15 @@ from requests import RequestException
 from tqdm import tqdm
 from .config import GlobalConst as gc
 from .constants import VIDEO_WAIT_TIME_MIN, VIDEO_WAIT_TIME_MAX, VIDEO_SLEEP_THRESHOLD, MILLISECONDS_MULTIPLIER
-from .session_manager import SessionManager
 from .rate_limiter import RateLimiter
 
 
 class ChaoxingMediaService:
-    def __init__(self, get_fid_func, rate_limiter: RateLimiter, video_log_limiter: RateLimiter):
+    def __init__(self, get_fid_func, rate_limiter: RateLimiter, video_log_limiter: RateLimiter, session_manager=None):
         self.get_fid = get_fid_func
         self.rate_limiter = rate_limiter
         self.video_log_limiter = video_log_limiter
+        self.session_manager = session_manager
 
     def video_progress_log(self, session, _course, _job, _job_info, _dtoken, duration, play_time, _type, headers=None):
         self.video_log_limiter.limit_rate()
@@ -87,7 +87,7 @@ class ChaoxingMediaService:
         return None
 
     def _recover_after_forbidden(self, session: requests.Session, job: dict, _type: Literal["Video", "Audio"], account=None, login_func=None):
-        SessionManager.update_cookies()
+        self.session_manager.update_cookies()
         refreshed = self._refresh_video_status(session, job, _type)
         if refreshed:
             return refreshed
@@ -95,7 +95,7 @@ class ChaoxingMediaService:
         if False and account and account.username and account.password and login_func:
             login_result = login_func(login_with_cookies=False)
             if login_result.get("status"):
-                SessionManager.update_cookies()
+                self.session_manager.update_cookies()
                 return self._refresh_video_status(session, job, _type)
             logger.warning("账号密码登录失败: {}", login_result.get("msg"))
 
@@ -109,10 +109,11 @@ class ChaoxingMediaService:
         _speed: float = 1.0,
         _type: Literal["Video", "Audio"] = "Video",
         progress_callback=None,
+        should_stop=None,
         account=None,
         login_func=None,
     ):
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
 
         headers = gc.VIDEO_HEADERS if _type == "Video" else gc.AUDIO_HEADERS
         _info_url = f"https://mooc1.chaoxing.com/ananas/status/{_job['objectid']}?k={self.get_fid()}&flag=normal"
@@ -146,14 +147,18 @@ class ChaoxingMediaService:
         forbidden_retry = 0
         max_forbidden_retry = 2
 
+        # 仅以真实的 play_time 上报一次。旧代码紧接着又以 playingTime==duration
+        # 再报一次，等于一上来就声称整段视频已看完，覆盖了第一次上报。
         passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration, play_time, _type, headers=headers)
-        passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration, duration, _type, headers=headers)
 
         if passed:
             logger.info("任务瞬间完成: {}", _job['name'])
             return True
 
         while not passed:
+            if callable(should_stop) and should_stop():
+                logger.info("任务被取消: {}", _job['name'])
+                return False
             if play_time - last_log_time >= wait_time or play_time == duration:
                 passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration,
                                                         int(play_time), _type, headers=headers)
@@ -168,9 +173,14 @@ class ChaoxingMediaService:
                     refreshed_meta = self._recover_after_forbidden(_session, _job, _type, account, login_func)
                     if refreshed_meta:
                         _dtoken = refreshed_meta.get("dtoken", _dtoken)
-                        _duration = refreshed_meta.get("duration", duration)
+                        # 应用刷新后的 duration（旧代码赋给死变量 _duration，循环继续用旧值）。
+                        refreshed_duration = refreshed_meta.get("duration", duration)
+                        try:
+                            duration = int(refreshed_duration)
+                        except (TypeError, ValueError):
+                            logger.debug("刷新返回的 duration 非法，沿用旧值: {}", refreshed_duration)
                         play_time = refreshed_meta.get("playTime", play_time)
-                        logger.debug("Refreshed token: {}, duration: {}, play time: {}", _dtoken, _duration, play_time)
+                        logger.debug("Refreshed token: {}, duration: {}, play time: {}", _dtoken, duration, play_time)
                         continue
 
                 elif not passed and state != 200:

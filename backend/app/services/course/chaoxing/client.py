@@ -7,6 +7,7 @@ from .course_data_service import ChaoxingCourseDataService
 from .course_service import ChaoxingCourseService
 from .quiz_service import ChaoxingQuizService
 from .rate_limiter import RateLimiter
+from .session_manager import SessionManager
 from .video_service import ChaoxingVideoService
 from .work_legacy_service import ChaoxingWorkLegacyService
 from .constants import (
@@ -51,25 +52,33 @@ class Chaoxing:
         self.rate_limiter = RateLimiter(DEFAULT_RATE_LIMIT)
         self.video_log_limiter = RateLimiter(VIDEO_LOG_RATE_LIMIT)
 
-        self.auth_service = ChaoxingAuthService(account)
-        self.course_service = ChaoxingCourseService()
-        self.quiz_service = ChaoxingQuizService(tiku, self.rollback_times, kwargs)
+        # Each Chaoxing instance owns its own session for multi-tenant isolation.
+        self.session_manager = SessionManager()
+
+        self.auth_service = ChaoxingAuthService(account, session_manager=self.session_manager)
+        self.course_service = ChaoxingCourseService(session_manager=self.session_manager)
+        self.quiz_service = ChaoxingQuizService(
+            tiku, self.rollback_times, kwargs, session_manager=self.session_manager
+        )
 
         self.video_service = ChaoxingVideoService(
             get_fid_func=self.get_fid,
             get_uid_func=self.get_uid,
             rate_limiter=self.rate_limiter,
             video_log_limiter=self.video_log_limiter,
+            session_manager=self.session_manager,
         )
         self.course_data_service = ChaoxingCourseDataService(
             course_service=self.course_service,
             rate_limiter=self.rate_limiter,
             study_emptypage_func=self.study_emptypage,
+            session_manager=self.session_manager,
         )
         self.work_legacy_service = ChaoxingWorkLegacyService(
             tiku=tiku,
             rollback_times=self.rollback_times,
             kwargs=kwargs,
+            session_manager=self.session_manager,
         )
 
     # ------------------------------------------------------------------

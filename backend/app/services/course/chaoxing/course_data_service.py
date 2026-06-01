@@ -7,7 +7,6 @@ from loguru import logger
 
 from .decode import decode_course_point, decode_course_card, decode_course_folder
 from .rate_limiter import RateLimiter
-from .session_manager import SessionManager
 from .constants import CARD_FETCH_WORKERS
 
 # API URL constants
@@ -19,13 +18,14 @@ KNOWLEDGE_CARDS_URL = "https://mooc1.chaoxing.com/mooc-ans/knowledge/cards"
 class ChaoxingCourseDataService:
     """Fetches course lists, chapter points, and job lists."""
 
-    def __init__(self, course_service, rate_limiter: RateLimiter, study_emptypage_func):
+    def __init__(self, course_service, rate_limiter: RateLimiter, study_emptypage_func, session_manager=None):
         self.course_service = course_service
         self.rate_limiter = rate_limiter
         self._study_emptypage = study_emptypage_func
+        self.session_manager = session_manager
 
     def get_course_list(self):
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
         course_list = self.course_service.get_course_list()
 
         _interaction_url = COURSE_INTERACTION_URL
@@ -46,7 +46,7 @@ class ChaoxingCourseDataService:
         return course_list
 
     def get_course_point(self, _courseid, _clazzid, _cpi):
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
         _url = f"https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse?courseid={_courseid}&clazzid={_clazzid}&cpi={_cpi}&ut=s"
         logger.trace("开始读取课程所有章节...")
         _resp = _session.get(_url)
@@ -64,7 +64,7 @@ class ChaoxingCourseDataService:
         Returns:
             Tuple of (job_list: list of job dicts, job_info: metadata dict)
         """
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
         self.rate_limiter.limit_rate()
         job_list = []
         job_info = {}

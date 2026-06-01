@@ -3,14 +3,13 @@ import re
 import random
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from loguru import logger
 import requests
 from .answer import AI
 from .answer_check import cut
 from .decode import decode_questions_info
 from .exceptions import MaxRetryExceeded
-from .session_manager import SessionManager
 
 
 def random_answer(q, options: str) -> str:
@@ -216,6 +215,17 @@ class QuizAnswerProcessor:
         q["answerField"][f'answer{q["id"]}'] = answer
         logger.info(f'{q["title"]} 填写答案为 {answer}')
 
+    def _fallback_random_answer(self, q):
+        """当 handle_question 抛异常时，为该题填入随机答案，避免提交时该题留空。"""
+        try:
+            answer = random_answer(q, q.get("options", ""))
+            q[f'answerSource{q["id"]}'] = "random"
+            q.setdefault("answerField", {})[f'answer{q["id"]}'] = answer
+        except Exception as exc:  # noqa: BLE001 - 兜底，确保提交表单字段不缺失
+            logger.error("生成随机兜底答案失败 (id={}): {}", q.get("id"), exc)
+            q.setdefault("answerField", {})[f'answer{q["id"]}'] = ""
+            q[f'answerSource{q["id"]}'] = "random"
+
     def process_questions(self, questions, origin_html_content=""):
         total_questions = len(questions["questions"])
         found_answers = 0
@@ -236,10 +246,25 @@ class QuizAnswerProcessor:
             ai_concurrency = max(1, ai_concurrency)
 
             with ThreadPoolExecutor(max_workers=ai_concurrency) as executor:
-                for q in questions["questions"]:
-                    executor.submit(self.handle_question, q, inc_found_concurrent, origin_html_content)
-
-            executor.shutdown(wait=True)
+                future_to_q = {
+                    executor.submit(
+                        self.handle_question, q, inc_found_concurrent, origin_html_content
+                    ): q
+                    for q in questions["questions"]
+                }
+                # 收集 future 结果：ThreadPoolExecutor 会吞掉 worker 异常，
+                # 若不调用 .result() 则失败的题目会被静默留空并照常提交。
+                for future in as_completed(future_to_q):
+                    q = future_to_q[future]
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        logger.error(
+                            "AI 并发答题处理题目失败 (id={}), 回退随机答案: {}",
+                            q.get("id"),
+                            exc,
+                        )
+                        self._fallback_random_answer(q)
         else:
             def inc_found_seq():
                 nonlocal found_answers
@@ -254,16 +279,17 @@ class QuizAnswerProcessor:
 
 
 class ChaoxingQuizService:
-    def __init__(self, tiku, rollback_times, kwargs):
+    def __init__(self, tiku, rollback_times, kwargs, session_manager=None):
         self.tiku = tiku
         self.rollback_times = rollback_times
         self.kwargs = kwargs
+        self.session_manager = session_manager
 
     def study_work(self, _course, _job, _job_info):
         if not self.tiku or self.tiku.DISABLE:
             return True
 
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
         _url = "https://mooc1.chaoxing.com/mooc-ans/api/work"
 
         @with_retry(max_retries=3, delay=1)

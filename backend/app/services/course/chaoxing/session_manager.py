@@ -1,28 +1,22 @@
 # -*- coding: utf-8 -*-
 import functools
-import threading
-import time
-from typing import Self
 import requests
 from requests.adapters import HTTPAdapter
 from .config import GlobalConst as gc
-from .cookies import use_cookies
 
 
 class SessionManager:
-    _instance = None
-    _lock = threading.Lock()
-    _last_cookie_update = 0
-    _cookie_update_interval = 5.0
+    """Per-instance HTTP session holder.
 
-    def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-        return cls._instance
+    Each Chaoxing client owns its own SessionManager (and therefore its own
+    ``requests.Session`` / cookie jar). This is required for multi-tenant
+    isolation: when several users share a single process (uvicorn
+    ``--workers 1``), a process-wide shared session would let one user's login
+    cookies overwrite another user's in-flight session, leaking identity across
+    tenants.
+    """
 
-    def __init__(self):
+    def __init__(self, cookies: dict | None = None):
         self._session = requests.Session()
         adapter = HTTPAdapter(max_retries=3, pool_connections=50, pool_maxsize=100)
         self._session.mount("https://", adapter)
@@ -30,21 +24,15 @@ class SessionManager:
         self._session.request = functools.partial(self._session.request, timeout=5)
         self._session.headers.clear()
         self._session.headers.update(gc.HEADERS)
-        self._session.cookies.update(use_cookies())
+        if cookies:
+            self._session.cookies.update(cookies)
 
-    @classmethod
-    def get_instance(cls) -> Self:
-        return cls()
+    def get_session(self) -> requests.Session:
+        return self._session
 
-    @classmethod
-    def get_session(cls) -> requests.Session:
-        instance = cls.get_instance()
-        return instance._session
+    def set_cookies(self, cookies: dict):
+        self._session.cookies.update(cookies)
 
-    @classmethod
-    def update_cookies(cls):
-        now = time.time()
-        if now - cls._last_cookie_update < cls._cookie_update_interval:
-            return
-        cls._last_cookie_update = now
-        cls.get_instance()._session.cookies.update(use_cookies())
+    def update_cookies(self, cookies: dict | None = None):
+        if cookies:
+            self._session.cookies.update(cookies)

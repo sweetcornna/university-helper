@@ -4,19 +4,18 @@ import requests
 from requests import RequestException
 from .cipher import AESCipher
 from .config import GlobalConst as gc
-from .cookies import save_cookies
-from .session_manager import SessionManager
 
 
 class ChaoxingAuthService:
-    def __init__(self, account=None, cipher=None):
+    def __init__(self, account=None, cipher=None, session_manager=None):
         self.account = account
         self.cipher = cipher or AESCipher()
+        self.session_manager = session_manager
 
     def login(self, login_with_cookies=False):
         if login_with_cookies:
             logger.info("Logging in with cookies")
-            SessionManager.update_cookies()
+            self.session_manager.update_cookies()
             logger.debug("Cookie session loaded (cookies redacted)")
             if not self._validate_cookie_session():
                 logger.warning("Cookie 登录校验失败，尝试使用账号密码重新登录")
@@ -45,16 +44,20 @@ class ChaoxingAuthService:
             resp_data = resp.json()
         except ValueError:
             return {"status": False, "msg": "upstream returned non-JSON"}
-        if resp and resp_data["status"] == True:
-            save_cookies(_session)
-            SessionManager.update_cookies()
+        if not isinstance(resp_data, dict):
+            return {"status": False, "msg": "upstream returned unexpected response"}
+        if resp and resp_data.get("status") is True:
+            self.session_manager.set_cookies(_session.cookies.get_dict())
             logger.info("登录成功...")
             return {"status": True, "msg": "登录成功"}
         else:
-            return {"status": False, "msg": str(resp_data["msg2"])}
+            # 超星失败响应不保证包含 'msg2'（如验证码/风控/限流的不同结构），
+            # 直接索引会抛 KeyError 并被包装成模糊的 'Unexpected task failure'。
+            msg = resp_data.get("msg2") or resp_data.get("msg") or resp_data.get("msg1") or "登录失败"
+            return {"status": False, "msg": str(msg)}
 
     def _validate_cookie_session(self) -> bool:
-        session = SessionManager.get_instance()._session
+        session = self.session_manager.get_session()
         if not session.cookies.get("_uid"):
             return False
 
@@ -81,11 +84,11 @@ class ChaoxingAuthService:
         return True
 
     def get_fid(self):
-        _session = SessionManager.get_session()
+        _session = self.session_manager.get_session()
         return _session.cookies.get("fid")
 
     def get_uid(self):
-        s = SessionManager.get_session()
+        s = self.session_manager.get_session()
         if "_uid" in s.cookies:
             return s.cookies["_uid"]
         if "UID" in s.cookies:
