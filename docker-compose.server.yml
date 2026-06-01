@@ -101,8 +101,17 @@ services:
 
   # Opt-in Redis. Bring it up with: `docker compose --profile redis up -d redis`.
   # Then set REDIS_URL=redis://redis:6379/0 in .env and restart the app — the
-  # session store will start sharing state across workers, which unlocks
-  # `uvicorn --workers >1`. Until then the app uses in-process fallback.
+  # session store will route the handful of values explicitly wired through it
+  # (see app/core/session_store.py) to Redis.
+  #
+  # IMPORTANT: Redis alone does NOT make `uvicorn --workers >1` safe. Critical
+  # per-process in-memory state is still NOT shared across workers — notably
+  # ChaoxingSigninManager._clients (signin.py) and the per-user learning/signin
+  # managers — and the live httpx/requests sessions they hold cannot be
+  # serialized to Redis. Running >1 worker reintroduces the cross-worker login
+  # bug (a login on worker A is invisible to /courses on worker B). Keep
+  # `--workers 1` until that state is externalized (session_store.py tracks the
+  # remaining TODO). Without Redis the app uses in-process fallback.
   redis:
     image: redis:7-alpine
     container_name: shuake-easy-learning-redis

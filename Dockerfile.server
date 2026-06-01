@@ -63,5 +63,16 @@ EXPOSE 8000
 # own in-memory _clients dict, so a login on worker A is invisible to
 # /courses requests routed to workers B/C/D — see signin.py:1156. uvloop
 # and httptools still help in single-worker mode.
+#
+# --proxy-headers makes uvicorn honor X-Forwarded-Proto / X-Forwarded-For from
+# the upstream proxy so request.url.scheme reflects the real client scheme
+# (lets the app-level HTTPS redirect / HSTS work behind nginx without a redirect
+# loop, and feeds the rate limiter the real client IP). --forwarded-allow-ips
+# governs which immediate peers are trusted to set those headers. We use "*"
+# because this container is never exposed directly: docker-compose publishes it
+# only on 127.0.0.1:8000 behind the host nginx, which OVERWRITES X-Forwarded-For
+# with $remote_addr (see nginx/proxy_params.conf) so a client cannot spoof it.
+# PROD-VERIFY: if you ever expose this port beyond the local nginx, pin
+# --forwarded-allow-ips to the nginx/load-balancer container IP(s) instead of "*".
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--loop", "uvloop", "--http", "httptools"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--loop", "uvloop", "--http", "httptools", "--proxy-headers", "--forwarded-allow-ips", "*"]

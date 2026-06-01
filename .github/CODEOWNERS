@@ -1,5 +1,12 @@
 # Default owners for everything in the repo.
-# Replace with real GitHub handles once they're known.
+#
+# WARNING — INERT UNTIL REPLACED: the handles below (@maintainers, @devops,
+# @backend-team, @frontend-team) are PLACEHOLDERS and almost certainly do not
+# exist in this GitHub org. GitHub silently ignores CODEOWNERS lines that name
+# a non-existent user/team, so "Require review from Code Owners" branch
+# protection imposes NO required reviewer for any path below until these are
+# replaced with real org teams/handles. Treat review enforcement as OFF until
+# this is done. Verify with the repo Settings -> CODEOWNERS errors panel.
 *                       @maintainers
 
 # Backend

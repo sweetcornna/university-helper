@@ -35,6 +35,10 @@
 .vscode
 .DS_Store
 Thumbs.db
+# macOS AppleDouble metadata junk (created by `tar` on macOS). These are full of
+# null bytes and broke alembic's versions/*.py glob when shipped to the server.
+**/._*
+**/.DS_Store
 
 # Docs and dev-only assets
 docs/
@@ -46,6 +50,16 @@ LICENSE
 
 # Legacy / dev scripts (kept in repo but not needed inside image)
 scripts/_legacy/
+
+# Test suite — not needed in the runtime image (Dockerfile COPYs all of backend/)
+**/tests/
+backend/tests/
+
+# Local session cookies — never bake into the image. cookies.json is the app's
+# historical default cookie store; if ever populated with real Chaoxing session
+# cookies it would be a credential-at-rest leak inside the image.
+cookies.json
+**/cookies.json
 
 # Frontend (built separately and served by host nginx)
 frontend/

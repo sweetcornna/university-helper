@@ -70,6 +70,7 @@ htmlcov/
 # Runtime artifacts that must not be committed
 backend/cookies.json
 backend/cookies/
+backend/cache.json
 
 # Claude Code worktree metadata (per-machine, not project source)
 .claude/
