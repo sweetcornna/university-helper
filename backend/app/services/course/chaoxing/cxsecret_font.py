@@ -101,10 +101,24 @@ class FontHashDAO:
 
 
 # 初始化字体哈希DAO单例
+#
+# NOTE (audit F14): the data file resource/font_map_table.json (the font-hash ->
+# original-character mapping table) is NOT shipped in this repository and is not
+# generated/downloaded at build or startup. When it is absent, FontHashDAO falls
+# back to EMPTY char_map/hash_map below, which means decrypt() cannot reverse
+# Chaoxing's encrypted (anti-scrape) fonts and instead passes the garbled
+# characters through unchanged. This is a documented, known limitation rather
+# than a crash: encrypted-font question stems will appear garbled.
+#
+# To enable encrypted-font decoding, place a valid font_map_table.json under a
+# "resource/" directory resolvable from the process CWD (see resource_path()).
 try:
     fonthash_dao = FontHashDAO()
 except Exception as e:
-    logger.warning(f"初始化字体哈希数据失败 - {e}")
+    logger.warning(
+        "初始化字体哈希数据失败，加密字体解码功能将退化为原样返回 "
+        f"(缺少 resource/font_map_table.json) - {e}"
+    )
     fonthash_dao = FontHashDAO.__new__(FontHashDAO)
     fonthash_dao.char_map = {}
     fonthash_dao.hash_map = {}

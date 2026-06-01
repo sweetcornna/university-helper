@@ -30,6 +30,43 @@ except ImportError:
     PIL_AVAILABLE = False
 
 ENABLE_LOCAL_OCR = os.environ.get("CHAOXING_ENABLE_OCR", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+# SSRF guard for question-image OCR. The <img src> in quiz/work HTML is
+# attacker-influenceable content (a malicious course author can embed
+# <img src="http://169.254.169.254/...">). Because _ocr_image_to_text fetches
+# the URL with the logged-in Chaoxing session cookies attached, we must restrict
+# the request to known Chaoxing CDN/image hosts, require https, and disable
+# redirects (so an allowlisted host can't 302 us to an internal one).
+_OCR_ALLOWED_IMG_HOSTS = frozenset({
+    "p.ananas.chaoxing.com",
+    "mooc1.chaoxing.com",
+    "mooc1-1.chaoxing.com",
+    "mooc1-2.chaoxing.com",
+    "s3.ananas.chaoxing.com",
+    "photo.chaoxing.com",
+})
+
+
+def _is_allowed_ocr_img_url(img_url: str) -> bool:
+    """Return True only for https URLs whose host is an allowlisted Chaoxing host.
+
+    Subdomains of chaoxing.com are also permitted (e.g. *.ananas.chaoxing.com),
+    but private/loopback/metadata hosts and non-https schemes are rejected.
+    """
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(img_url)
+    except Exception:
+        return False
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if host in _OCR_ALLOWED_IMG_HOSTS:
+        return True
+    return host == "chaoxing.com" or host.endswith(".chaoxing.com")
 _PADDLE_OCR_ENGINE = None
 _PADDLE_OCR_INITIALIZED = False
 _PADDLE_OCR_DEVICE = None  # 记录当前 OCR 引擎运行的设备（gpu / cpu）
@@ -221,6 +258,12 @@ def _ocr_image_to_text(img_url: str) -> str:
     if not img_url:
         return ""
 
+    # SSRF 防护：题干 <img src> 来自攻击者可影响的课程/题目 HTML。由于下载时会带上
+    # 登录态 Cookie，必须在发起请求前限制到已知超星图片域名 + 仅 https，拒绝内网/元数据地址。
+    if not _is_allowed_ocr_img_url(img_url):
+        logger.debug(f"拒绝下载非白名单题目图片 (SSRF 防护): {img_url}")
+        return ""
+
     # 判断是否配置了外部 AI 视觉 OCR
     use_external_ocr = is_vision_ocr_enabled()
 
@@ -245,7 +288,14 @@ def _ocr_image_to_text(img_url: str) -> str:
         if "p.ananas.chaoxing.com" in img_url:
             extra_headers["Referer"] = "https://mooc1.chaoxing.com/"
 
-        resp = session.get(img_url, headers=extra_headers or None, timeout=8)
+        # allow_redirects=False so an allowlisted host cannot 30x-redirect the
+        # cookie-bearing request to an internal/metadata endpoint (SSRF bypass).
+        resp = session.get(
+            img_url,
+            headers=extra_headers or None,
+            timeout=8,
+            allow_redirects=False,
+        )
         if resp.status_code != 200:
             logger.debug(f"下载题目图片失败: {img_url} -> {resp.status_code}")
             return ""
