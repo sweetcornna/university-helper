@@ -360,6 +360,20 @@ class ZhihuishuAdapter:
         return self.answer.answer_question(question)
 
     @staticmethod
+    def _extract_questions(item: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Pull any embedded quiz questions attached to a video DTO.
+
+        Zhihuishu video DTOs may carry per-video questions under one of a few
+        keys depending on the endpoint/version. We collect whatever is present
+        so the task loop can drive answer.answer_question for them.
+        """
+        for key in ("questionList", "questions", "quizList", "workList"):
+            value = item.get(key)
+            if isinstance(value, list) and value:
+                return [q for q in value if isinstance(q, dict)]
+        return []
+
+    @staticmethod
     def _flatten_videos(chapters: List[Dict[str, Any]]) -> List[Dict]:
         videos: List[Dict[str, Any]] = []
         index = 1
@@ -379,6 +393,7 @@ class ZhihuishuAdapter:
                         "duration": item.get("videoSec") or item.get("duration") or 0,
                         "status": "pending",
                         "progress": 0,
+                        "questions": ZhihuishuAdapter._extract_questions(item),
                     }
                 )
                 index += 1
@@ -402,10 +417,30 @@ class ZhihuishuAdapter:
             logger.exception("Zhihuishu task crashed: task_id=%s", task_id)
             self._mark_task_error(task_id, f"{UNEXPECTED_TASK_ERROR_PREFIX}: {exc}")
 
+    def _recompute_percentage(self, task: Dict[str, Any]) -> None:
+        """Set task percentage from real completed-video counts (caller holds lock)."""
+        total = int(task.get("total") or 0)
+        completed = int(task.get("completed") or 0)
+        task["percentage"] = round((completed / total) * 100, 2) if total > 0 else 0.0
+
     def _run_task_loop(self, task_id: str) -> None:
+        """Drive the real Zhihuishu study flow for a started course task.
+
+        For each video the loop calls ``self.learning.watch_video`` (which reports
+        watch points to the Zhihuishu study API) and, when auto-answer is enabled,
+        ``self.answer.answer_question`` for any quiz questions embedded in the
+        video DTO. Progress (completed/failed/percentage/current_video) is derived
+        from the real platform responses rather than a fabricated timer. Pause,
+        resume, cancel, task-replacement and error handling are preserved.
+
+        End-to-end verification requires live Zhihuishu credentials (unavailable
+        here); unit tests in tests/unit/test_zhihuishu_adapter.py mock the HTTP
+        layer and assert watch_video/answer_question are actually invoked.
+        """
         current_index = 0
 
         while True:
+            # --- Phase 1: under lock, decide what to do next & pick the video ---
             with self._task_lock:
                 if not self._task_state or self._task_state.get("task_id") != task_id:
                     return
@@ -421,63 +456,46 @@ class ZhihuishuAdapter:
                 if current_index >= len(videos):
                     task["status"] = "completed"
                     task["message"] = "Task completed"
-                    task["percentage"] = 100.0 if task.get("total") else 0.0
                     task["current_video"] = None
+                    self._recompute_percentage(task)
                     task["updated_at"] = time.time()
                     return
 
                 if task.get("paused"):
                     task["status"] = "paused"
                     task["updated_at"] = time.time()
-                    need_sleep = True
-                else:
-                    current_video = videos[current_index]
-                    current_video["status"] = "learning"
-                    task["current_video"] = current_video.get("title")
-                    task["status"] = "running"
-                    task["message"] = "Task is running"
-                    speed = float(task.get("speed") or 1.0)
-                    need_sleep = False
+                    time.sleep(0.3)
+                    continue
 
-            if need_sleep:
-                time.sleep(0.3)
-                continue
+                current_video = videos[current_index]
+                current_video["status"] = "learning"
+                current_video["progress"] = 0
+                task["current_video"] = current_video.get("title")
+                task["status"] = "running"
+                task["message"] = "Task is running"
+                course_id = task.get("course_id")
+                auto_answer = bool(task.get("auto_answer", True))
+                video_id = current_video.get("id")
+                duration = int(current_video.get("duration") or 0)
+                questions = list(current_video.get("questions") or [])
 
-            steps = 5
-            paused_midway = False
-            for step in range(1, steps + 1):
-                with self._task_lock:
-                    if not self._task_state or self._task_state.get("task_id") != task_id:
-                        return
-                    task = self._task_state
+            # --- Phase 2: blocking platform call OUTSIDE the lock ---
+            watch_ok = False
+            watch_error: Optional[str] = None
+            try:
+                if self.learning is None:
+                    raise Exception("Not logged in")
+                watch_ok = bool(self.learning.watch_video(course_id, video_id, duration))
+            except Exception as exc:  # noqa: BLE001 - surface as failed video, keep going
+                logger.warning(
+                    "Zhihuishu watch_video failed: task_id=%s video_id=%s err=%s",
+                    task_id,
+                    video_id,
+                    exc,
+                )
+                watch_error = str(exc)
 
-                    if task.get("cancelled"):
-                        task["status"] = "cancelled"
-                        task["message"] = "Task cancelled"
-                        task["updated_at"] = time.time()
-                        return
-
-                    if task.get("paused"):
-                        task["status"] = "paused"
-                        task["updated_at"] = time.time()
-                        paused_midway = True
-                        break
-
-                    task_videos = task.get("videos", [])
-                    if current_index < len(task_videos):
-                        task_videos[current_index]["progress"] = step * 20
-
-                    completed = int(task.get("completed") or 0)
-                    total = int(task.get("total") or 0)
-                    if total > 0:
-                        task["percentage"] = round(((completed + step / steps) / total) * 100, 2)
-                    task["updated_at"] = time.time()
-
-                time.sleep(max(0.15, 0.35 / max(speed, 0.1)))
-
-            if paused_midway:
-                continue
-
+            # If the task was cancelled/replaced while watching, stop now.
             with self._task_lock:
                 if not self._task_state or self._task_state.get("task_id") != task_id:
                     return
@@ -487,17 +505,50 @@ class ZhihuishuAdapter:
                     task["message"] = "Task cancelled"
                     task["updated_at"] = time.time()
                     return
-                if task.get("paused"):
-                    continue
+
+            # --- Phase 3: answer embedded questions (outside lock; real HTTP) ---
+            if watch_ok and auto_answer and questions and self.answer is not None:
+                for question in questions:
+                    with self._task_lock:
+                        if not self._task_state or self._task_state.get("task_id") != task_id:
+                            return
+                        if self._task_state.get("cancelled"):
+                            break
+                    try:
+                        self.answer.answer_question(question)
+                    except Exception as exc:  # noqa: BLE001 - log, do not abort the course
+                        logger.warning(
+                            "Zhihuishu answer_question failed: task_id=%s err=%s",
+                            task_id,
+                            exc,
+                        )
+
+            # --- Phase 4: record the real result for this video ---
+            with self._task_lock:
+                if not self._task_state or self._task_state.get("task_id") != task_id:
+                    return
+                task = self._task_state
+                if task.get("cancelled"):
+                    task["status"] = "cancelled"
+                    task["message"] = "Task cancelled"
+                    task["updated_at"] = time.time()
+                    return
 
                 task_videos = task.get("videos", [])
                 if current_index < len(task_videos):
-                    task_videos[current_index]["status"] = "completed"
-                    task_videos[current_index]["progress"] = 100
+                    if watch_ok:
+                        task_videos[current_index]["status"] = "completed"
+                        task_videos[current_index]["progress"] = 100
+                    else:
+                        task_videos[current_index]["status"] = "failed"
+                        if watch_error:
+                            task_videos[current_index]["error"] = watch_error
 
-                task["completed"] = int(task.get("completed") or 0) + 1
-                total = int(task.get("total") or 0)
-                task["percentage"] = round((task["completed"] / total) * 100, 2) if total > 0 else 0.0
+                if watch_ok:
+                    task["completed"] = int(task.get("completed") or 0) + 1
+                else:
+                    task["failed"] = int(task.get("failed") or 0) + 1
+                self._recompute_percentage(task)
                 task["updated_at"] = time.time()
 
             current_index += 1
