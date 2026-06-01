@@ -316,6 +316,29 @@ class JobProcessor:
         self.worker_num = config["jobs"]
         self.config = config
         self._drain_lock = threading.Lock()
+        # Tasks that a worker has handed off to retry_queue but that retry_thread
+        # has not yet re-queued onto task_queue. During that hand-off window the
+        # task is NOT counted in task_queue.unfinished_tasks (the worker already
+        # called task_done()), so run() must also wait for this counter to drain
+        # before terminating. Otherwise unfinished_tasks transiently hits 0 and
+        # run() exits mid-retry (F05).
+        self._pending_retries = 0
+        self._retry_lock = threading.Lock()
+
+    def _enqueue_retry(self, task: "ChapterTask") -> None:
+        """Move a task into the retry pipeline.
+
+        Increments the pending-retry counter BEFORE the worker's task_done()
+        decrements unfinished_tasks, so the task is continuously accounted for.
+        """
+        with self._retry_lock:
+            self._pending_retries += 1
+        self.retry_queue.put(task)
+
+    def _has_outstanding_work(self) -> bool:
+        with self._retry_lock:
+            pending = self._pending_retries
+        return self.task_queue.unfinished_tasks > 0 or pending > 0
 
     def run(self):
         for task in self.tasks:
@@ -331,19 +354,25 @@ class JobProcessor:
         while True:
             if should_stop(self.config):
                 self._drain_pending_tasks()
-                if self.task_queue.unfinished_tasks <= 0:
+                if not self._has_outstanding_work():
                     break
-            elif self.task_queue.unfinished_tasks <= 0:
+            elif not self._has_outstanding_work():
                 break
             time.sleep(0.2)
         time.sleep(0.5)
 
     def _drain_pending_tasks(self):
         with self._drain_lock:
-            for queue_obj, mark_done in (
-                (self.task_queue, True),
-                (self.retry_queue, True),
-                (self.wait_queue, True),
+            # Only task_queue items carry an outstanding unfinished_tasks count
+            # (a put() not yet matched by task_done()). Items sitting in
+            # retry_queue have already had their task_done() issued by the worker
+            # when it decided to retry; draining them must NOT call task_done()
+            # again (over-decrement -> ValueError) but MUST release the
+            # pending-retry counter, since they will never be re-queued. See F05.
+            for queue_obj, mark_done, is_retry in (
+                (self.task_queue, True, False),
+                (self.retry_queue, False, True),
+                (self.wait_queue, False, False),
             ):
                 while True:
                     try:
@@ -358,6 +387,10 @@ class JobProcessor:
                                 self.task_queue.task_done()
                             except ValueError:
                                 pass
+                        if is_retry:
+                            with self._retry_lock:
+                                if self._pending_retries > 0:
+                                    self._pending_retries -= 1
 
     @log_error
     def worker_thread(self):
@@ -398,7 +431,16 @@ class JobProcessor:
                         continue
 
                     # self.wait_queue.put(task)
-                    self.retry_queue.put(task)
+                    # Hand the task to the retry pipeline and mark THIS processing
+                    # pass done. retry_thread will re-put() the task onto
+                    # task_queue (a fresh +1 to unfinished_tasks), so each
+                    # get()/process pass must be balanced by exactly one
+                    # task_done() — otherwise unfinished_tasks never returns to
+                    # 0 and run() hangs forever (F05). _enqueue_retry bumps the
+                    # pending-retry counter first so the task stays accounted for
+                    # across the hand-off window.
+                    self._enqueue_retry(task)
+                    self.task_queue.task_done()
 
                 case ChapterResult.ERROR:
                     task.tries += 1
@@ -409,7 +451,10 @@ class JobProcessor:
                         self.failed_tasks.append(task)
                         self.task_queue.task_done()
                         continue
-                    self.retry_queue.put(task)
+                    # See NOT_OPEN branch: balance this processing pass with a
+                    # task_done() because retry_thread re-puts the task.
+                    self._enqueue_retry(task)
+                    self.task_queue.task_done()
 
                 case ChapterResult.CANCELLED:
                     logger.info("Task cancelled: {}", task.point["title"])
@@ -433,12 +478,17 @@ class JobProcessor:
                     task = self.retry_queue.get(timeout=0.5)
                 except Empty:
                     continue
+                # Re-queueing increments unfinished_tasks by 1 (the matching +1
+                # for the task_done() the worker already issued on the retry
+                # decision). Put FIRST, then drop the pending-retry counter, so
+                # the task is never simultaneously absent from both
+                # unfinished_tasks and _pending_retries (which would let run()
+                # exit mid-retry). Do NOT call task_done() here — that lives in
+                # the worker so put/task_done stay balanced (1 get -> 1
+                # task_done, 1 retry -> 1 put). See F05.
                 self.task_queue.put(task)
-                # NOTE: do NOT call task_done() here. The original task remains
-                # unfinished until the worker re-processes it and marks it done
-                # (success / max-retries / cancelled). Calling task_done() here
-                # would decrement unfinished_tasks for a task that is still in
-                # flight, causing the main join() to return prematurely.
+                with self._retry_lock:
+                    self._pending_retries -= 1
                 time.sleep(1)
         except ShutDown:
             pass
@@ -641,23 +691,24 @@ def format_time(num, suffix='', divisor=''):
 
 def main():
     """主程序入口"""
+    # Bind a no-op notifier up front so the error handler below can always call
+    # notification.send(...) even if setup fails before the real notifier is
+    # built (avoids UnboundLocalError masking the real error).
+    notification = NotificationFactory.create_service(None)
     try:
         # 初始化配置
         common_config, tiku_config, notification_config = init_config()
-        
+
         # 强制播放按照配置文件调节
         common_config["speed"] = min(2.0, max(1.0, common_config.get("speed", 1.0)))
         common_config["notopen_action"] = common_config.get("notopen_action", "retry")
-        
+
         # 初始化超星实例
         chaoxing = init_chaoxing(common_config, tiku_config)
-        
-        # 设置外部通知
-        notification = Notification()
-        notification.config_set(notification_config)
-        notification = notification.get_notification_from_config()
-        notification.init_notification()
-        
+
+        # 设置外部通知（config_set + get_notification_from_config + init_notification）
+        notification = NotificationFactory.create_service(notification_config)
+
         # 检查当前登录状态
         _login_state = chaoxing.login(login_with_cookies=common_config.get("use_cookies", False))
         if not _login_state["status"]:

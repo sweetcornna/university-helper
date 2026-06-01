@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 import logging
 
+from app.services.notification import NotificationFactory
+from app.services.notification.providers import validate_notification_url
+
 from ..task_store import task_store
 from .learning import ChapterTask, JobProcessor, init_chaoxing
 from .payload_mapper import normalize_tiku_config
@@ -15,6 +18,12 @@ INTERRUPTED_STATUSES = {"running", "pending", "paused", "cancelling"}
 RESTART_INTERRUPTED_MESSAGE = "Task interrupted due to service restart"
 UNEXPECTED_WORKER_ERROR_PREFIX = "Unexpected task failure"
 USER_TASK_LOAD_LIMIT = 2000
+# Minimum seconds between throttled (high-frequency progress) main-DB upserts of
+# a single task's payload. Video progress callbacks fire ~1/sec per task and
+# each upsert re-serializes the whole growing logs+progress payload as JSONB, so
+# coalesce them. Status changes / logs / terminal writes bypass this throttle
+# (force=True) so final state is never lost. (F31)
+PROGRESS_PERSIST_INTERVAL = 5.0
 
 
 def _utc_now_iso() -> str:
@@ -479,24 +488,68 @@ class ChaoxingLearningManager:
             return
 
         if failed_courses > 0:
+            summary = f"Task finished with failures ({failed_courses} failed courses)"
             self._update_task(
                 task_id,
                 status="failed",
-                message=f"Task finished with failures ({failed_courses} failed courses)",
+                message=summary,
                 current_task="finished",
             )
             self._append_task_log(task_id, "Task finished with failures", "warning")
         else:
+            summary = "Task completed"
             self._update_task(
                 task_id,
                 status="completed",
-                message="Task completed",
+                message=summary,
                 current_task="finished",
             )
             self._append_task_log(task_id, "Task completed", "success")
 
-        if notify_config.get("service") and notify_config.get("url"):
-            self._append_task_log(task_id, "Notification config detected", "info")
+        self._send_completion_notification(task_id, notify_config, summary)
+
+    def _send_completion_notification(
+        self,
+        task_id: str,
+        notify_config: Dict[str, Any],
+        summary: str,
+    ) -> None:
+        """Deliver a completion notification via the configured provider.
+
+        The web `notify_config` carries `service` (provider name, e.g. ServerChan
+        /Qmsg/Bark/Telegram) and `url`, matching what app.services.notification
+        providers expect as {"provider": ..., "url": ...}. Best-effort: any
+        failure is logged into the task log and never propagated.
+        """
+        if not isinstance(notify_config, dict):
+            return
+        service = str(notify_config.get("service") or "").strip()
+        url = str(notify_config.get("url") or "").strip()
+        if not service or not url:
+            return
+
+        # SSRF guard: refuse to POST to internal/loopback/metadata hosts, mirroring
+        # the /notify/test endpoint guard.
+        if not validate_notification_url(url):
+            self._append_task_log(
+                task_id,
+                "Notification skipped: URL must be a public http(s) address",
+                "warning",
+            )
+            return
+
+        provider_config: Dict[str, Any] = {"provider": service, "url": url}
+        tg_chat_id = notify_config.get("tg_chat_id")
+        if tg_chat_id:
+            provider_config["tg_chat_id"] = str(tg_chat_id)
+
+        try:
+            notifier = NotificationFactory.create_service(provider_config)
+            notifier.send(f"chaoxing : {summary}")
+            self._append_task_log(task_id, f"Notification sent via {service}", "info")
+        except Exception as exc:  # pragma: no cover - best-effort, never fatal
+            logger.warning("send learning notification failed: %s", exc)
+            self._append_task_log(task_id, f"Notification failed: {exc}", "warning")
 
     def _run_task_worker_guarded(self, task_id: str, user_id: str, payload: Dict[str, Any]) -> None:
         try:
@@ -585,6 +638,12 @@ class ChaoxingLearningManager:
             task = self._tasks.get(task_id)
             if not task:
                 return
+            # Skip the (forced) main-DB upsert when nothing actually changed.
+            # _wait_for_resume calls this every 0.25s while paused with the same
+            # status/message; without this guard each tick would re-serialize and
+            # upsert the full payload pointlessly. (F31)
+            if all(task.get(key) == value for key, value in changes.items()):
+                return
             task.update(changes)
             task["updated_at"] = _utc_now_iso()
             snapshot = self._task_public_payload(task)
@@ -603,7 +662,10 @@ class ChaoxingLearningManager:
             task["updated_at"] = _utc_now_iso()
             snapshot = self._task_public_payload(task)
         if snapshot:
-            self._persist_task_state(snapshot)
+            # High-frequency (video) progress: throttle main-DB writes. The next
+            # forced write (status change / terminal) carries the latest
+            # progress, so the final state is never lost. (F31)
+            self._persist_task_state(snapshot, task_id=task_id, force=False)
 
     def _increase_progress(self, task_id: str, key: str, delta: int = 1) -> None:
         snapshot: Optional[Dict[str, Any]] = None
@@ -617,7 +679,7 @@ class ChaoxingLearningManager:
             task["updated_at"] = _utc_now_iso()
             snapshot = self._task_public_payload(task)
         if snapshot:
-            self._persist_task_state(snapshot)
+            self._persist_task_state(snapshot, task_id=task_id, force=False)
 
     @staticmethod
     def _task_public_payload(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -637,7 +699,35 @@ class ChaoxingLearningManager:
             "video_progress": None,
         }
 
-    def _persist_task_state(self, task_state_public: Dict[str, Any]) -> None:
+    def _should_persist_now(self, task_id: Optional[str], force: bool) -> bool:
+        """Throttle high-frequency (force=False) progress persistence.
+
+        Returns True if the caller should write to the store now. For throttled
+        callers we only allow a write once every PROGRESS_PERSIST_INTERVAL
+        seconds per task; intermediate ticks are dropped because the next forced
+        write (status change / terminal) carries the latest progress anyway.
+        """
+        if force or not task_id:
+            return True
+        now = time.monotonic()
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return True
+            last = float(task.get("_last_progress_persist_ts") or 0.0)
+            if now - last < PROGRESS_PERSIST_INTERVAL:
+                return False
+            task["_last_progress_persist_ts"] = now
+        return True
+
+    def _persist_task_state(
+        self,
+        task_state_public: Dict[str, Any],
+        task_id: Optional[str] = None,
+        force: bool = True,
+    ) -> None:
+        if not self._should_persist_now(task_id, force):
+            return
         try:
             task_store.upsert_task(LEARNING_TASK_KIND, task_state_public)
         except Exception as exc:  # pragma: no cover - defensive fallback
