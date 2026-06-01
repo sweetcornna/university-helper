@@ -4,12 +4,91 @@
 """
 
 import configparser
+import ipaddress
+import socket
 from abc import ABC, abstractmethod
 from typing import Dict, Optional
+from urllib.parse import urlparse
 
 import requests
 
 from loguru import logger
+
+# Hostnames that are never legitimate notification targets (cloud metadata, etc.).
+_BLOCKED_HOSTNAMES = frozenset(
+    {
+        "localhost",
+        "metadata.google.internal",
+        "metadata",
+    }
+)
+
+
+def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
+    """Return True for any address that must not be reachable from the server."""
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+        # IPv4-mapped/compatible IPv6 that wrap a blocked v4 address.
+        or (getattr(ip, "ipv4_mapped", None) is not None and _is_blocked_ip(ip.ipv4_mapped))
+    )
+
+
+def validate_notification_url(url: Optional[str]) -> bool:
+    """SSRF guard for outbound notification webhooks (F55).
+
+    Accept only http/https URLs whose host does not resolve to a
+    loopback/private/link-local/reserved/metadata address. This is a
+    best-effort guard against using the notification feature as an SSRF
+    primitive against cloud metadata or internal services.
+    """
+    if not url or not isinstance(url, str):
+        return False
+
+    try:
+        parsed = urlparse(url.strip())
+    except (ValueError, TypeError):
+        return False
+
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    if hostname.lower() in _BLOCKED_HOSTNAMES:
+        return False
+
+    # If the host is a literal IP, validate it directly.
+    try:
+        literal_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal_ip = None
+    if literal_ip is not None:
+        return not _is_blocked_ip(literal_ip)
+
+    # Otherwise resolve the hostname and reject if ANY resolved address is internal.
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        # Cannot resolve -> treat as unsafe rather than fetching blindly.
+        return False
+
+    for info in infos:
+        sockaddr = info[4]
+        try:
+            resolved = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            return False
+        if _is_blocked_ip(resolved):
+            return False
+
+    return True
 
 
 class NotificationService(ABC):
@@ -69,24 +148,38 @@ class NotificationService(ABC):
         pass
 
     @abstractmethod
-    def _send(self, message: str) -> None:
+    def _send(self, message: str) -> bool:
         """
         发送通知消息，由子类实现
-        
+
         Args:
             message: 要发送的消息内容
+
+        Returns:
+            发送成功返回True，失败返回False
         """
         pass
 
-    def send(self, message: str) -> None:
+    def _url_allowed(self) -> bool:
+        """Reject outbound POSTs to unvalidated/internal URLs (F55 SSRF guard)."""
+        if not validate_notification_url(self.url):
+            logger.error(f"拒绝向不被允许的通知地址发送请求: {self.url!r}")
+            return False
+        return True
+
+    def send(self, message: str) -> bool:
         """
         发送通知消息的公共接口
-        
+
         Args:
             message: 要发送的消息内容
+
+        Returns:
+            发送成功返回True，未发送或失败返回False
         """
-        if not self.disabled:
-            self._send(message)
+        if self.disabled:
+            return False
+        return bool(self._send(message))
 
 
 class NotificationFactory:
@@ -125,8 +218,8 @@ class DefaultNotification(NotificationService):
     def _init_service(self) -> None:
         pass
 
-    def _send(self, message: str) -> None:
-        pass
+    def _send(self, message: str) -> bool:
+        return False
 
     def get_notification_from_config(self) -> NotificationService:
         """
@@ -179,13 +272,16 @@ class ServerChan(NotificationService):
         self.url = self._conf['url']
         logger.info(f"已初始化Server酱通知服务，URL: {self.url}")
 
-    def _send(self, message: str) -> None:
+    def _send(self, message: str) -> bool:
         """
         通过Server酱发送通知
-        
+
         Args:
             message: 要发送的消息内容
         """
+        if not self._url_allowed():
+            return False
+
         params = {
             'text': message,  # 兼容两个版本的Server酱
             'desp': message,
@@ -199,10 +295,12 @@ class ServerChan(NotificationService):
             response.raise_for_status()
             result = response.json()
             logger.info(f"Server酱通知发送成功: {result}")
+            return True
         except requests.RequestException as e:
             logger.error(f"Server酱通知发送失败: {e}")
         except ValueError as e:
             logger.error(f"Server酱返回数据解析失败: {e}")
+        return False
 
 
 class Qmsg(NotificationService):
@@ -220,13 +318,16 @@ class Qmsg(NotificationService):
         self.url = self._conf['url']
         logger.info(f"已初始化Qmsg酱通知服务，URL: {self.url}")
 
-    def _send(self, message: str) -> None:
+    def _send(self, message: str) -> bool:
         """
         通过Qmsg酱发送通知
-        
+
         Args:
             message: 要发送的消息内容
         """
+        if not self._url_allowed():
+            return False
+
         params = {'msg': message}
         headers = {'Content-Type': 'application/json;charset=utf-8'}
 
@@ -235,10 +336,12 @@ class Qmsg(NotificationService):
             response.raise_for_status()
             result = response.json()
             logger.info(f"Qmsg酱通知发送成功: {result}")
+            return True
         except requests.RequestException as e:
             logger.error(f"Qmsg酱通知发送失败: {e}")
         except ValueError as e:
             logger.error(f"Qmsg酱返回数据解析失败: {e}")
+        return False
 
 
 class Bark(NotificationService):
@@ -256,13 +359,16 @@ class Bark(NotificationService):
         self.url = self._conf['url']
         logger.info(f"已初始化Bark通知服务，URL: {self.url}")
 
-    def _send(self, message: str) -> None:
+    def _send(self, message: str) -> bool:
         """
         通过Bark发送通知
-        
+
         Args:
             message: 要发送的消息内容
         """
+        if not self._url_allowed():
+            return False
+
         params = {'body': message}
 
         try:
@@ -270,10 +376,12 @@ class Bark(NotificationService):
             response.raise_for_status()
             result = response.json()
             logger.info(f"Bark通知发送成功: {result}")
+            return True
         except requests.RequestException as e:
             logger.error(f"Bark通知发送失败: {e}")
         except ValueError as e:
             logger.error(f"Bark返回数据解析失败: {e}")
+        return False
 
 class Telegram(NotificationService):
     """
@@ -290,13 +398,16 @@ class Telegram(NotificationService):
         self.url = self._conf['url']
         logger.info(f"已初始化Telegram通知服务，Chat_id: {self.tg_chat_id} URL: {self.url}")
 
-    def _send(self, message: str) -> None:
+    def _send(self, message: str) -> bool:
         """
         通过Telegram发送通知
-        
+
         Args:
             message: 要发送的消息内容
         """
+        if not self._url_allowed():
+            return False
+
         params = {
             'chat_id': self.tg_chat_id,
             'text': message,
@@ -309,12 +420,13 @@ class Telegram(NotificationService):
             result = response.json()
             if result.get('ok'):
                 logger.info(f"Telegram通知发送成功: {result}")
-            else:
-                logger.error(f"Telegram通知发送失败: {result}")
+                return True
+            logger.error(f"Telegram通知发送失败: {result}")
         except requests.RequestException as e:
             logger.error(f"Telegram通知发送失败: {e}")
         except ValueError as e:
             logger.error(f"Telegram返回数据解析失败: {e}")
+        return False
 
 # 为了向后兼容，保留原来的Notification类
 Notification = DefaultNotification

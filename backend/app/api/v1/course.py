@@ -13,6 +13,8 @@ from app.dependencies import get_current_user
 from app.services.course.chaoxing.course_portal_service import chaoxing_course_portal_service
 from app.services.course.chaoxing.signin import signin_manager
 from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
+from app.services.notification import NotificationFactory
+from app.services.notification.providers import validate_notification_url
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -386,9 +388,7 @@ def _register_zhihuishu_course_task(
 @router.post("/zhihuishu/qr-login", response_model=ZhihuishuQRLoginResponse)
 async def start_zhihuishu_qr_login(current_user: dict = Depends(get_current_user)):
     cleanup_expired_entries()
-    user_id = str(current_user.get("user_id"))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
+    user_id = _current_user_id(current_user)
 
     session_id = uuid4().hex
     adapter = ZhihuishuAdapter()
@@ -463,9 +463,7 @@ async def get_zhihuishu_login_status(
     session_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    user_id = str(current_user.get("user_id"))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
+    user_id = _current_user_id(current_user)
     cleanup_expired_entries()
 
     with _qr_sessions_lock:
@@ -487,9 +485,7 @@ async def zhihuishu_password_login(
     request: ZhihuishuPasswordLoginRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    user_id = str(current_user.get("user_id"))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
+    user_id = _current_user_id(current_user)
 
     adapter = ZhihuishuAdapter()
     try:
@@ -1091,11 +1087,42 @@ async def get_chapters(
 
 @router.post("/notify/test")
 async def test_notification(request: dict, current_user: dict = Depends(get_current_user)):
+    _current_user_id(current_user)
 
     service = request.get("service")
     url = request.get("url")
 
     if not service or not url:
         raise HTTPException(status_code=400, detail="service and url are required")
+
+    # SSRF guard: never let the test endpoint POST to an internal/loopback host.
+    if not validate_notification_url(url):
+        raise HTTPException(
+            status_code=400,
+            detail="Notification URL must be a public http(s) address",
+        )
+
+    config = {"provider": str(service), "url": str(url)}
+    tg_chat_id = request.get("tg_chat_id")
+    if tg_chat_id:
+        config["tg_chat_id"] = str(tg_chat_id)
+
+    def _deliver() -> bool:
+        provider = NotificationFactory.create_service(config)
+        if getattr(provider, "disabled", False):
+            return False
+        try:
+            return bool(provider.send("University-Helper 测试通知 / test notification"))
+        except Exception as exc:
+            logger.warning("Test notification delivery failed: %s", exc)
+            return False
+
+    delivered = await _run_blocking(_deliver)
+
+    if not delivered:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to send test notification via {service}",
+        )
 
     return {"status": "success", "message": f"Test notification sent via {service}"}

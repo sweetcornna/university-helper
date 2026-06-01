@@ -460,6 +460,164 @@ async def test_chaoxing_start_accepts_multipart_photo():
 
 
 @pytest.mark.asyncio
+async def test_notify_test_actually_sends_via_provider():
+    """F32: /notify/test must really invoke a provider, not return hardcoded success."""
+    sent = {}
+
+    class FakeProvider:
+        def __init__(self):
+            self.disabled = False
+
+        def send(self, message):
+            sent["message"] = message
+            return True
+
+    fake = FakeProvider()
+
+    with patch(
+        "app.api.v1.course.NotificationFactory.create_service", return_value=fake
+    ) as mock_create:
+        response = await course_api.test_notification(
+            {"service": "Bark", "url": "https://api.day.app/xxxx"},
+            current_user={"user_id": 1},
+        )
+
+    assert mock_create.called, "NotificationFactory.create_service was never invoked"
+    assert "message" in sent, "provider.send() was never called"
+    assert response["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_notify_test_reports_failure_when_send_raises():
+    """F32: a failed delivery must NOT report success."""
+
+    class FailingProvider:
+        disabled = False
+
+        def send(self, message):
+            raise RuntimeError("connection refused")
+
+    with patch(
+        "app.api.v1.course.NotificationFactory.create_service",
+        return_value=FailingProvider(),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await course_api.test_notification(
+                {"service": "Bark", "url": "https://api.day.app/xxxx"},
+                current_user={"user_id": 1},
+            )
+
+    assert exc_info.value.status_code in (502, 400)
+
+
+@pytest.mark.asyncio
+async def test_notify_test_rejects_internal_url():
+    """F32/F55: SSRF guard must reject loopback/metadata URLs before sending."""
+    with patch(
+        "app.api.v1.course.NotificationFactory.create_service"
+    ) as mock_create:
+        with pytest.raises(HTTPException) as exc_info:
+            await course_api.test_notification(
+                {"service": "Bark", "url": "http://169.254.169.254/latest/meta-data/"},
+                current_user={"user_id": 1},
+            )
+
+    assert exc_info.value.status_code == 400
+    assert not mock_create.called, "Provider must not be created for a blocked URL"
+
+
+@pytest.mark.asyncio
+async def test_zhihuishu_qr_login_rejects_missing_user_id():
+    """F58: str(None) == 'None' is truthy; missing user_id must be rejected."""
+    with pytest.raises(HTTPException) as exc_info:
+        await course_api.start_zhihuishu_qr_login(current_user={})
+    assert exc_info.value.status_code == 401
+    # The 'None' string must never become a real adapter key.
+    assert "None" not in course_api._user_adapters
+
+
+@pytest.mark.asyncio
+async def test_zhihuishu_login_status_rejects_missing_user_id():
+    """F58: get_zhihuishu_login_status must reject missing user_id."""
+    with pytest.raises(HTTPException) as exc_info:
+        await course_api.get_zhihuishu_login_status("sess", current_user={})
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_zhihuishu_password_login_rejects_missing_user_id():
+    """F58: zhihuishu_password_login must reject missing user_id."""
+    request = course_api.ZhihuishuPasswordLoginRequest(username="u", password="p")
+    with pytest.raises(HTTPException) as exc_info:
+        await course_api.zhihuishu_password_login(request, current_user={})
+    assert exc_info.value.status_code == 401
+    assert "None" not in course_api._user_adapters
+
+
+@pytest.mark.asyncio
+async def test_geocoding_endpoints_require_auth():
+    """F56: geocoding proxy endpoints must require authentication."""
+    import inspect
+
+    for fn in (
+        chaoxing_api.chaoxing_location_geocode,
+        chaoxing_api.chaoxing_location_search,
+        chaoxing_api.chaoxing_location_reverse_geocode,
+    ):
+        params = inspect.signature(fn).parameters
+        assert "user_id" in params, f"{fn.__name__} is missing the auth dependency"
+        default = params["user_id"].default
+        assert default is not inspect.Parameter.empty and hasattr(
+            default, "dependency"
+        ), f"{fn.__name__} user_id is not a Depends(...)"
+
+
+def test_geocoding_endpoints_reject_anonymous_via_client():
+    """F56 (e2e): anonymous requests to the geocoding proxy must be rejected."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app, base_url="http://localhost")
+    with patch("app.api.v1.chaoxing._request_photon_json") as mock_photon:
+        for path in (
+            "/api/v1/chaoxing/location/geocode?query=foo",
+            "/api/v1/chaoxing/location/search?query=foo",
+            "/api/v1/chaoxing/location/reverse-geocode?lat=1&lng=2",
+        ):
+            resp = client.get(path)
+            assert resp.status_code == 401, f"{path} returned {resp.status_code}, expected 401"
+    assert not mock_photon.called, "Photon was contacted on an unauthenticated request"
+
+
+def test_geocoding_geocode_works_with_token():
+    """F56 (e2e): an authenticated request still proxies normally."""
+    from fastapi.testclient import TestClient
+
+    from app.core.security import create_access_token
+    from app.main import app
+
+    token = create_access_token({"user_id": 1, "tenant_db_name": "tenant_testuser"})
+    client = TestClient(app, base_url="http://localhost")
+    photon_payload = {
+        "features": [
+            {
+                "geometry": {"coordinates": [116.4, 39.9]},
+                "properties": {"name": "Somewhere", "city": "Beijing"},
+            }
+        ]
+    }
+    with patch("app.api.v1.chaoxing._request_photon_json", return_value=photon_payload):
+        resp = client.get(
+            "/api/v1/chaoxing/location/geocode?query=foo",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["result"]["location"] == {"lat": 39.9, "lng": 116.4}
+
+
+@pytest.mark.asyncio
 async def test_chaoxing_sign_accepts_multipart_photo():
     form_data = FormData(
         [

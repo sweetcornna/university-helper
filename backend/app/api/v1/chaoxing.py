@@ -290,7 +290,10 @@ async def _run_blocking(func, *args, **kwargs):
 
 
 @router.get("/location/geocode")
-async def chaoxing_location_geocode(query: str):
+async def chaoxing_location_geocode(
+    query: str,
+    user_id: str = Depends(get_current_user_id),
+):
     keyword = query.strip()
     if not keyword:
         raise HTTPException(status_code=422, detail="query is required")
@@ -323,7 +326,10 @@ async def chaoxing_location_geocode(query: str):
 
 
 @router.get("/location/search")
-async def chaoxing_location_search(query: str):
+async def chaoxing_location_search(
+    query: str,
+    user_id: str = Depends(get_current_user_id),
+):
     keyword = query.strip()
     if not keyword:
         raise HTTPException(status_code=422, detail="query is required")
@@ -362,7 +368,11 @@ async def chaoxing_location_search(query: str):
 
 
 @router.get("/location/reverse-geocode")
-async def chaoxing_location_reverse_geocode(lat: float, lng: float):
+async def chaoxing_location_reverse_geocode(
+    lat: float,
+    lng: float,
+    user_id: str = Depends(get_current_user_id),
+):
 
     data = await _run_blocking(
         _request_photon_json,
