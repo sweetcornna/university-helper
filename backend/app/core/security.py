@@ -7,13 +7,40 @@ from typing import Dict
 from app.config import settings
 
 
+# bcrypt only considers the first 72 bytes of the password and silently
+# ignores (truncates) the rest. Without an explicit guard, two distinct
+# passwords sharing the first 72 bytes would hash/verify identically, and a
+# password whose char length passes the schema check (<=128 chars) can still
+# exceed 72 bytes once UTF-8 encoded (e.g. multibyte CJK). Reject such inputs
+# rather than pre-hashing, which would invalidate existing stored hashes.
+BCRYPT_MAX_PASSWORD_BYTES = 72
+
+
+def _encode_password(password: str) -> bytes:
+    encoded = password.encode("utf-8")
+    if len(encoded) > BCRYPT_MAX_PASSWORD_BYTES:
+        raise ValueError(
+            f"Password must not exceed {BCRYPT_MAX_PASSWORD_BYTES} bytes"
+        )
+    return encoded
+
+
 def hash_password(password: str) -> str:
     rounds = max(4, min(settings.BCRYPT_ROUNDS, 15))
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=rounds)).decode()
+    return bcrypt.hashpw(_encode_password(password), bcrypt.gensalt(rounds=rounds)).decode()
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
+    # Fail closed on missing/non-string input rather than raising; callers run
+    # this on the login path against a dummy hash even when the user is unknown.
+    if not isinstance(plain_password, str) or not isinstance(hashed_password, str):
+        return False
+    # An over-long candidate can never match a hash produced by hash_password
+    # (which rejects them), so fail closed instead of letting bcrypt truncate.
+    encoded = plain_password.encode("utf-8")
+    if len(encoded) > BCRYPT_MAX_PASSWORD_BYTES:
+        return False
+    return bcrypt.checkpw(encoded, hashed_password.encode())
 
 
 def create_access_token(data: Dict) -> str:
