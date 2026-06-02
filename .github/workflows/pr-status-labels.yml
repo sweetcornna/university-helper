@@ -26,23 +26,6 @@ jobs:
             const issue_number = context.payload.pull_request?.number || context.payload.issue?.number;
             if (!issue_number) return;
 
-            const codexLabels = [
-              'codex:needs-review',
-              'codex:review-requested',
-              'codex:reviewed',
-              'codex:needs-rerun',
-              'codex:setup-issue',
-            ];
-            const statusLabels = [
-              'status: 📣 needs proof',
-              'status: 🔁 re-review loop',
-              'status: 🛠️ actively grinding',
-              'status: 👀 ready for maintainer look',
-              'status: ⏳ waiting on author',
-              'status: ✅ merge-ready',
-              'status: 🚧 blocked',
-            ];
-
             async function addLabels(labels) {
               const unique = [...new Set(labels)].filter(Boolean);
               if (!unique.length) return;
@@ -76,13 +59,11 @@ jobs:
                 }
                 return;
               }
-
               if (action === 'converted_to_draft') {
                 await removeLabels(['status: 👀 ready for maintainer look', 'status: ✅ merge-ready']);
                 await addLabels(['status: 🛠️ actively grinding']);
                 return;
               }
-
               if (['opened', 'reopened', 'synchronize', 'ready_for_review'].includes(action)) {
                 await removeLabels(['codex:reviewed', 'codex:setup-issue', 'status: 👀 ready for maintainer look', 'status: ✅ merge-ready', 'status: 🚧 blocked']);
                 await addLabels(['codex:review-requested', action === 'synchronize' ? 'codex:needs-rerun' : 'codex:needs-review', 'status: 🔁 re-review loop']);
@@ -93,13 +74,11 @@ jobs:
             if (context.eventName === 'issue_comment') {
               const body = context.payload.comment?.body || '';
               const actor = context.payload.comment?.user?.login || '';
-
               if (/@codex\s+review/i.test(body)) {
                 await removeLabels(['codex:reviewed', 'codex:setup-issue', 'status: 👀 ready for maintainer look', 'status: 🚧 blocked']);
                 await addLabels(['codex:review-requested', 'status: 🔁 re-review loop']);
                 return;
               }
-
               if (isCodexActor(actor)) {
                 await removeLabels(['codex:review-requested', 'codex:needs-review', 'codex:needs-rerun', 'status: 🔁 re-review loop']);
                 if (looksLikeCodexSetupIssue(body)) {
