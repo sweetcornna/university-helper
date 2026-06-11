@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>University Helper — 你睡觉，它上课</title>
+<meta name="description" content="University Helper：自托管的校园课程自动化平台。夜里替你完成超星学习通与智慧树的签到与课程任务，凭据加密，多租户隔离，开源 MIT。" />
+<meta property="og:title" content="University Helper — 你睡觉，它上课" />
+<meta property="og:description" content="自托管的校园课程自动化平台：超星学习通 · 智慧树 · 多租户隔离 · 开源 MIT" />
+<meta property="og:type" content="website" />
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body class="night" id="top">
+
+<!-- 夜空：随滚动从深夜过渡到黎明 -->
+<div class="sky" aria-hidden="true">
+  <div class="sky-layer sky-night"></div>
+  <div class="sky-layer sky-predawn"></div>
+  <div class="sky-layer sky-dawn"></div>
+  <div class="stars" id="stars"></div>
+  <div class="meteor" id="meteor"></div>
+</div>
+
+<!-- 顶栏：时钟随滚动走字 -->
+<header class="hud">
+  <a class="hud-brand" href="#top">
+    <img src="assets/favicon.svg" alt="" width="22" height="22" />
+    <span>University&nbsp;Helper</span>
+  </a>
+  <div class="hud-right">
+    <span class="hud-phase mono" id="hud-phase">晚自习</span>
+    <span class="hud-clock mono" id="hud-clock" aria-hidden="true">22:00</span>
+    <nav class="hud-nav" aria-label="站点导航">
+      <a class="hud-link" href="wiki.html">帮助文档</a>
+      <a class="hud-link" href="https://github.com/sweetcornna/university-helper" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="night-progress" aria-hidden="true"><i id="night-progress-fill"></i></div>
+
+<!-- 左侧时刻导航 -->
+<nav class="hour-rail" aria-label="夜间时刻导航">
+  <a href="#top" data-rail="top"><time class="mono">22:00</time><span>开夜</span></a>
+  <a href="#access" data-rail="access"><time class="mono">23:30</time><span>接入</span></a>
+  <a href="#engine" data-rail="engine"><time class="mono">01:00</time><span>夜班</span></a>
+  <a href="#isolation" data-rail="isolation"><time class="mono">03:00</time><span>隔离</span></a>
+  <a href="#start" data-rail="start"><time class="mono">04:30</time><span>启动</span></a>
+  <a href="#dawn" data-rail="dawn"><time class="mono">06:00</time><span>天亮</span></a>
+</nav>
+
+<main>
+
+  <!-- ███ 22:00 · 开夜 ███ -->
+  <section class="hero">
+    <div class="container hero-inner">
+      <div class="hero-copy">
+        <p class="eyebrow mono" data-hero>22:00 · 晚自习 · 任务已入队</p>
+        <p class="hero-sub" data-hero>
+          <strong>University Helper</strong> 是一个自托管的校园课程自动化平台：
+          夜里替你完成超星学习通与智慧树的签到和课程任务。
+          凭据加密落库，每位用户一座独立数据库，代码全部开源。
+        </p>
+        <div class="hero-cta" data-hero>
+          <a class="btn btn-primary" href="wiki.html">阅读帮助文档</a>
+          <a class="btn btn-ghost" href="https://github.com/sweetcornna/university-helper" target="_blank" rel="noopener">GitHub&nbsp;↗</a>
+        </div>
+        <p class="hero-tags mono" data-hero>FastAPI 0.115&ensp;·&ensp;React 18&ensp;·&ensp;PostgreSQL 15&ensp;·&ensp;MIT License</p>
+
+        <div class="ticket" data-hero aria-hidden="true">
+          <div class="ticket-head mono"><span class="ticket-dot"></span>正在进行 · 超星学习通</div>
+          <div class="ticket-course" id="ticket-course">形势与政策 · 第 3 章</div>
+          <div class="ticket-bar"><i id="ticket-fill"></i></div>
+          <div class="ticket-meta mono"><span id="ticket-pct">0%</span><span id="ticket-state">视频播放中</span></div>
+        </div>
+      </div>
+
+      <div class="hero-couplet">
+        <p class="couplet-banner mono">横批 · 一夜之间</p>
+        <h1 class="couplet" aria-label="你睡觉，它上课。">
+          <span class="couplet-strips" aria-hidden="true">
+            <span class="strip"><b>你</b><b>睡</b><b>觉</b></span>
+            <span class="strip"><b>它</b><b>上</b><b>课</b></span>
+          </span>
+        </h1>
+      </div>
+    </div>
+    <a class="scroll-cue mono" href="#access" data-hero>往下滚动，让夜过去&ensp;↓</a>
+  </section>
+
+  <!-- ███ 23:30 · 接入 ███ -->
+  <section class="section" id="access">
+    <div class="container">
+      <header class="sec-head" data-reveal>
+        <time class="sec-time mono">23:30</time>
+        <h2 class="sec-title">两个平台，一次接入</h2>
+        <p class="sec-sub">登录一次，签到、视频、测验从此排进夜里的队列。</p>
+      </header>
+
+      <div class="platform-grid">
+        <article class="platform" data-reveal>
+          <h3 class="platform-name"><span class="platform-zh">超星学习通</span><span class="platform-en mono">Chaoxing</span></h3>
+          <ul class="feature-list">
+            <li>手机号登录，课程一键拉取</li>
+            <li>位置 / 二维码 / 普通签到，支持「一键全签」</li>
+            <li>泛雅课程任务：视频与章节测验自动推进</li>
+            <li>内置地图检索，签到坐标即点即用</li>
+          </ul>
+          <p class="platform-api mono">POST /chaoxing/login&ensp;·&ensp;POST /chaoxing/sign-all</p>
+        </article>
+
+        <article class="platform" data-reveal data-delay="0.12">
+          <h3 class="platform-name"><span class="platform-zh">智慧树</span><span class="platform-en mono">Zhihuishu</span></h3>
+          <ul class="feature-list">
+            <li>扫码登录，或手机号密码登录</li>
+            <li>课程任务编排：排队、暂停、续跑、停止</li>
+            <li>实时日志流与进度查询接口</li>
+            <li>任务状态落在你自己的租户库里</li>
+          </ul>
+          <p class="platform-api mono">POST /course/zhihuishu/qr-login&ensp;·&ensp;POST /course/start</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ███ 01:00 · 夜班（滚动驱动的任务队列）███ -->
+  <section class="section engine" id="engine">
+    <div class="engine-pin">
+      <div class="container">
+        <header class="sec-head">
+          <time class="sec-time mono">01:00</time>
+          <h2 class="sec-title">你已经睡了，队列还醒着</h2>
+          <p class="sec-sub">继续滚动 —— 看任务在凌晨被逐项做完。</p>
+        </header>
+
+        <div class="shift">
+          <ol class="shift-list" aria-label="夜间任务队列演示">
+            <li class="shift-item">
+              <time class="mono">01:12</time>
+              <span class="shift-name">视频 · 大学生心理健康 · 第 4 讲</span>
+              <span class="shift-bar"><i></i></span>
+              <span class="shift-done mono">✓ 完成</span>
+            </li>
+            <li class="shift-item">
+              <time class="mono">01:47</time>
+              <span class="shift-name">视频 · 军事理论 · 第 9 讲</span>
+              <span class="shift-bar"><i></i></span>
+              <span class="shift-done mono">✓ 完成</span>
+            </li>
+            <li class="shift-item">
+              <time class="mono">02:30</time>
+              <span class="shift-name">章节测验 · 创新创业基础</span>
+              <span class="shift-bar"><i></i></span>
+              <span class="shift-done mono">✓ 92 分</span>
+            </li>
+            <li class="shift-item">
+              <time class="mono">03:05</time>
+              <span class="shift-name">视频 · 形势与政策 · 第 3 章</span>
+              <span class="shift-bar"><i></i></span>
+              <span class="shift-done mono">✓ 完成</span>
+            </li>
+            <li class="shift-item">
+              <time class="mono">03:58</time>
+              <span class="shift-name">智慧树 · 视频课 × 2 节</span>
+              <span class="shift-bar"><i></i></span>
+              <span class="shift-done mono">✓ 完成</span>
+            </li>
+          </ol>
+
+          <aside class="shift-log mono" aria-hidden="true">
+            <p class="log-line">01:12:03&ensp;task#a41f&ensp;resume&ensp;chapter=4</p>
+            <p class="log-line">01:46:51&ensp;task#a41f&ensp;done&ensp;watched=100%</p>
+            <p class="log-line">01:47:02&ensp;task#b287&ensp;start&ensp;chapter=9</p>
+            <p class="log-line">02:29:48&ensp;task#c9d3&ensp;quiz&ensp;submit&ensp;score=92</p>
+            <p class="log-line">03:05:11&ensp;task#d50a&ensp;start&ensp;chapter=3</p>
+            <p class="log-line">03:58:27&ensp;task#e7b1&ensp;zhihuishu&ensp;lesson=2/2</p>
+            <p class="log-line">04:07:00&ensp;queue&ensp;empty&ensp;·&ensp;sleep&ensp;well</p>
+          </aside>
+        </div>
+
+        <p class="shift-clear mono" id="shift-clear">04:07 · 队列清空，今晚共完成 5 项任务。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ███ 03:00 · 隔离 ███ -->
+  <section class="section" id="isolation">
+    <div class="container">
+      <header class="sec-head" data-reveal>
+        <time class="sec-time mono">03:00</time>
+        <h2 class="sec-title">各睡各的</h2>
+        <p class="sec-sub">每位用户，一座物理隔离的数据库。串号？不存在的。</p>
+      </header>
+
+      <div class="iso">
+        <div class="iso-grid" aria-hidden="true">
+          <div class="iso-cell" data-reveal><span class="mono">tenant_chen</span></div>
+          <div class="iso-cell" data-reveal data-delay="0.06"><span class="mono">tenant_lin</span></div>
+          <div class="iso-cell iso-you" data-reveal data-delay="0.12"><span class="mono">tenant_you</span><em>你的库</em></div>
+          <div class="iso-cell" data-reveal data-delay="0.18"><span class="mono">tenant_wang</span></div>
+          <div class="iso-cell" data-reveal data-delay="0.24"><span class="mono">tenant_zhao</span></div>
+          <div class="iso-cell" data-reveal data-delay="0.30"><span class="mono">tenant_liu</span></div>
+        </div>
+
+        <ul class="iso-points">
+          <li data-reveal>注册即建库：每位用户独占 <code class="mono">tenant_&lt;username&gt;</code>，跨租户读取在物理上不可能。</li>
+          <li data-reveal data-delay="0.08">第三方平台凭据 Fernet 加密后才落库，密钥只存在于环境变量。</li>
+          <li data-reveal data-delay="0.16">后端容器以非 root（UID 10001）运行，只读根文件系统，能力全部裁剪。</li>
+          <li data-reveal data-delay="0.24">nginx 对登录接口限速 5 次/分，CSP、HSTS、frame-ancestors 全部就位。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03:50 · 技术栈跑马灯 -->
+  <div class="marquee" aria-hidden="true">
+    <div class="marquee-track mono" id="marquee-track">
+      <span>FASTAPI 0.115&ensp;✦&ensp;REACT 18&ensp;✦&ensp;VITE 5&ensp;✦&ensp;POSTGRESQL 15&ensp;✦&ensp;ALEMBIC&ensp;✦&ensp;TAILWIND&ensp;✦&ensp;DOCKER COMPOSE&ensp;✦&ensp;GITHUB ACTIONS&ensp;✦&ensp;CODEQL&ensp;✦&ensp;TRIVY&ensp;✦&ensp;</span><span>FASTAPI 0.115&ensp;✦&ensp;REACT 18&ensp;✦&ensp;VITE 5&ensp;✦&ensp;POSTGRESQL 15&ensp;✦&ensp;ALEMBIC&ensp;✦&ensp;TAILWIND&ensp;✦&ensp;DOCKER COMPOSE&ensp;✦&ensp;GITHUB ACTIONS&ensp;✦&ensp;CODEQL&ensp;✦&ensp;TRIVY&ensp;✦&ensp;</span>
+    </div>
+  </div>
+
+  <!-- ███ 04:30 · 启动 ███ -->
+  <section class="section" id="start">
+    <div class="container">
+      <header class="sec-head" data-reveal>
+        <time class="sec-time mono">04:30</time>
+        <h2 class="sec-title">趁天没亮，把它跑起来</h2>
+        <p class="sec-sub">三行命令，自己的服务器自己开。数据从头到尾归你。</p>
+      </header>
+
+      <div class="codeblock" data-reveal>
+        <div class="codeblock-head mono"><span>terminal</span><button class="copy-btn mono" type="button" data-copy="git clone https://github.com/sweetcornna/university-helper.git
+cp .env.example .env
+docker compose -f docker-compose.server.yml -p university-helper up -d --build">复制</button></div>
+        <pre class="mono"><code><span class="c-prompt">$</span> git clone https://github.com/sweetcornna/university-helper.git
+<span class="c-prompt">$</span> cp .env.example .env   <span class="c-comment"># 填 SECRET_KEY · POSTGRES_PASSWORD · CREDENTIAL_ENCRYPTION_KEY · CORS_ORIGINS</span>
+<span class="c-prompt">$</span> docker compose -f docker-compose.server.yml -p university-helper up -d --build</code></pre>
+      </div>
+
+      <p class="start-more" data-reveal>本地开发、环境变量、API 细节，都在 <a href="wiki.html">帮助文档</a> 里写清楚了。</p>
+    </div>
+  </section>
+
+  <!-- ███ 06:00 · 天亮 ███ -->
+  <section class="section dawn" id="dawn">
+    <div class="container dawn-inner">
+      <time class="sec-time mono" data-reveal>06:00</time>
+      <h2 class="dawn-title" data-reveal>天亮了。</h2>
+      <p class="dawn-sub" data-reveal data-delay="0.1">昨晚排队的课，都看完了。<br />剩下的白天，是你的。</p>
+      <div class="hero-cta dawn-cta" data-reveal data-delay="0.2">
+        <a class="btn btn-primary" href="wiki.html">阅读帮助文档</a>
+        <a class="btn btn-ghost" href="https://github.com/sweetcornna/university-helper" target="_blank" rel="noopener">去 GitHub 点个星&nbsp;↗</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="container foot-inner">
+    <p class="foot-brand"><img src="assets/favicon.svg" alt="" width="18" height="18" /> University Helper · MIT License</p>
+    <nav class="foot-links" aria-label="页脚导航">
+      <a href="wiki.html">帮助文档</a>
+      <a href="https://github.com/sweetcornna/university-helper" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/sweetcornna/university-helper/issues" target="_blank" rel="noopener">反馈问题</a>
+    </nav>
+    <p class="foot-note">合规提示：请仅在符合学校规定、平台规则与当地法律的前提下使用本项目；对第三方平台启用自动化前，请自行评估相应风险。本项目自托管运行，你的数据只属于你。</p>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+<script src="assets/night.js"></script>
+</body>
+</html>

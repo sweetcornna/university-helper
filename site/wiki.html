@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>帮助文档 — University Helper</title>
+<meta name="description" content="University Helper 帮助文档：快速开始、本地开发、Docker 部署、超星学习通与智慧树功能指南、API 参考、常见问题。" />
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body class="day">
+
+<div class="day-topline" aria-hidden="true"></div>
+
+<header class="day-head">
+  <a class="day-brand" href="./">
+    <img src="assets/favicon.svg" alt="" width="22" height="22" />
+    <span>University&nbsp;Helper</span>
+    <span class="day-tag">帮助文档</span>
+  </a>
+  <nav class="day-nav" aria-label="站点导航">
+    <a class="to-night" href="./">☾ 回到夜里</a>
+    <a href="https://github.com/sweetcornna/university-helper" target="_blank" rel="noopener">GitHub</a>
+  </nav>
+</header>
+
+<div class="wiki-layout">
+
+  <aside class="wiki-side">
+    <p class="wiki-side-title mono">目录</p>
+    <ul class="wiki-toc" id="wiki-toc">
+      <li><a href="#overview">概览</a></li>
+      <li><a href="#quickstart">快速开始</a></li>
+      <li class="sub"><a href="#qs-backend">后端</a></li>
+      <li class="sub"><a href="#qs-frontend">前端</a></li>
+      <li class="sub"><a href="#qs-db">数据库</a></li>
+      <li><a href="#env">环境变量</a></li>
+      <li><a href="#deploy">Docker 部署</a></li>
+      <li><a href="#chaoxing">超星学习通</a></li>
+      <li><a href="#zhihuishu">智慧树</a></li>
+      <li><a href="#api">API 参考</a></li>
+      <li><a href="#faq">常见问题</a></li>
+      <li><a href="#security">安全与合规</a></li>
+    </ul>
+  </aside>
+
+  <main class="wiki-main">
+
+    <header class="wiki-hero">
+      <p class="wiki-kicker mono">DOCS · 晨读版</p>
+      <h1 class="wiki-title">把它跑起来，然后去睡觉。</h1>
+      <p class="wiki-lede">
+        这里是 University Helper 的完整帮助：从本地起服务、配环境变量，到 Docker
+        部署和两个平台的功能用法。仓库内的
+        <a href="https://github.com/sweetcornna/university-helper/tree/main/docs" target="_blank" rel="noopener">docs/</a>
+        目录始终是最权威的版本。
+      </p>
+    </header>
+
+    <!-- ============ 概览 ============ -->
+    <section class="wiki-sec" id="overview">
+      <h2>概览</h2>
+      <p>
+        University Helper 是一个<strong>自托管</strong>的校园课程自动化平台，基于
+        FastAPI + React 构建。它替你完成超星学习通的签到与泛雅课程任务、智慧树的课程任务，
+        并把所有任务状态保存在<strong>属于你自己的</strong>租户数据库里。
+      </p>
+      <ul>
+        <li><strong>多租户隔离</strong> —— 每位用户一座 PostgreSQL 数据库（<code>tenant_&lt;username&gt;</code>），跨租户数据泄露在物理上不可能。</li>
+        <li><strong>凭据加密</strong> —— 第三方平台账号密码使用 Fernet 对称加密后才写入数据库。</li>
+        <li><strong>JWT 认证</strong> —— REST API 全部走 <code>Authorization: Bearer</code>，令牌默认 30 分钟过期。</li>
+        <li><strong>加固部署</strong> —— 非 root 容器、只读根文件系统、nginx 限速与安全响应头。</li>
+      </ul>
+      <p class="note">仓库名为 <code>university-helper</code>；部分源码仍保留历史内部名 <code>easy_learning</code>（容器名、环境变量前缀），正在逐步统一。</p>
+    </section>
+
+    <!-- ============ 快速开始 ============ -->
+    <section class="wiki-sec" id="quickstart">
+      <h2>快速开始</h2>
+      <p>一条龙引导脚本会创建 <code>.env</code> 并安装 Python / Node 依赖：</p>
+
+      <div class="wiki-code">
+        <div class="wiki-code-head"><span>terminal</span><button class="copy-btn mono" type="button" data-copy="bash scripts/setup.sh
+make start
+make test">复制</button></div>
+        <pre><code><span class="c-prompt">$</span> bash scripts/setup.sh        <span class="c-comment"># 创建 .env，安装依赖</span>
+<span class="c-prompt">$</span> make start                   <span class="c-comment"># docker-compose 栈（应用 + postgres）</span>
+<span class="c-prompt">$</span> make test                    <span class="c-comment"># pytest + vitest</span></code></pre>
+      </div>
+
+      <h3 id="qs-backend">只跑后端</h3>
+      <div class="wiki-code">
+        <div class="wiki-code-head"><span>terminal</span><button class="copy-btn mono" type="button" data-copy="cd backend
+cp .env.example .env
+python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000">复制</button></div>
+        <pre><code><span class="c-prompt">$</span> cd backend
+<span class="c-prompt">$</span> cp .env.example .env         <span class="c-comment"># 编辑 SECRET_KEY / CORS_ORIGINS / 数据库凭据</span>
+<span class="c-prompt">$</span> python -m venv .venv &amp;&amp; source .venv/bin/activate
+<span class="c-prompt">$</span> pip install -r requirements.txt -r requirements-dev.txt
+<span class="c-prompt">$</span> uvicorn app.main:app --reload --host 0.0.0.0 --port 8000</code></pre>
+      </div>
+
+      <h3 id="qs-frontend">只跑前端</h3>
+      <div class="wiki-code">
+        <div class="wiki-code-head"><span>terminal</span><button class="copy-btn mono" type="button" data-copy="cd frontend
+npm install
+npm run dev">复制</button></div>
+        <pre><code><span class="c-prompt">$</span> cd frontend
+<span class="c-prompt">$</span> npm install
+<span class="c-prompt">$</span> npm run dev          <span class="c-comment"># http://localhost:3000，/api 自动代理到 :8000</span></code></pre>
+      </div>
+
+      <h3 id="qs-db">数据库</h3>
+      <p>
+        需要 PostgreSQL 15+。<code>database/</code> 下的 schema 文件会被 docker
+        entrypoint 自动执行；Alembic 迁移位于
+        <code>backend/alembic/versions/</code>，用 <code>alembic upgrade head</code> 应用。
+      </p>
+    </section>
+
+    <!-- ============ 环境变量 ============ -->
+    <section class="wiki-sec" id="env">
+      <h2>环境变量</h2>
+      <p>后端启动前，至少要配置下面这些键（参考根目录 <code>.env.example</code>）：</p>
+
+      <div class="wiki-table-wrap">
+        <table class="wiki-table">
+          <thead><tr><th>变量</th><th>必填</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>MAIN_DB_HOST / NAME / USER / PASSWORD</code></td><td>是</td><td>主库连接信息。</td></tr>
+            <tr><td><code>SECRET_KEY</code></td><td>是</td><td>JWT 签名密钥，长度 ≥ 16 字符（生产建议 ≥ 32）。</td></tr>
+            <tr><td><code>CORS_ORIGINS</code></td><td>是</td><td>JSON 数组，例如 <code>["http://localhost:3000"]</code>。</td></tr>
+            <tr><td><code>CREDENTIAL_ENCRYPTION_KEY</code></td><td>生产必填</td><td>Fernet 密钥（urlsafe-base64）。生产环境缺少它应用会拒绝启动；开发环境可省略。</td></tr>
+            <tr><td><code>POSTGRES_PASSWORD</code></td><td>Docker 部署必填</td><td>容器内 Postgres 超级用户密码。</td></tr>
+            <tr><td><code>APP_PORT</code></td><td>否</td><td>后端监听端口，默认 <code>8000</code>。</td></tr>
+            <tr><td><code>ENV</code></td><td>否</td><td>设为 <code>production</code> 启用生产模式校验。</td></tr>
+            <tr><td><code>SHUAKE_COMPAT_SECRET</code></td><td>否</td><td>≥ 32 字符时启用 7 天兼容令牌接口 <code>GET /auth/shuake-token</code>。</td></tr>
+            <tr><td><code>DOCS_ENABLED</code></td><td>否</td><td>设为 <code>true</code> 时在 <code>/docs</code> 暴露 Swagger UI。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="wiki-code">
+        <div class="wiki-code-head"><span>生成 Fernet 密钥</span><button class="copy-btn mono" type="button" data-copy='python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'>复制</button></div>
+        <pre><code><span class="c-prompt">$</span> python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code></pre>
+      </div>
+
+      <div class="callout callout-warn"><div>永远不要提交填好真实密钥的 <code>.env</code>。首次对外部署前，立即更换数据库密码与 JWT 密钥。</div></div>
+    </section>
+
+    <!-- ============ Docker 部署 ============ -->
+    <section class="wiki-sec" id="deploy">
+      <h2>Docker 部署</h2>
+      <p>
+        生产部署使用 <code>docker-compose.server.yml</code> + <code>Dockerfile.server</code>，
+        由宿主机 nginx 负责 TLS 终止与前端静态文件（栈内<strong>没有</strong> nginx 容器）。
+        权威文档见仓库内 <a href="https://github.com/sweetcornna/university-helper/blob/main/docs/DEPLOYMENT.md" target="_blank" rel="noopener">docs/DEPLOYMENT.md</a>。
+      </p>
+
+      <div class="wiki-code">
+        <div class="wiki-code-head"><span>terminal</span><button class="copy-btn mono" type="button" data-copy="git clone https://github.com/sweetcornna/university-helper.git
+cd university-helper
+cp .env.example .env
+docker compose -f docker-compose.server.yml -p university-helper up -d --build">复制</button></div>
+        <pre><code><span class="c-prompt">$</span> git clone https://github.com/sweetcornna/university-helper.git
+<span class="c-prompt">$</span> cd university-helper
+<span class="c-prompt">$</span> cp .env.example .env   <span class="c-comment"># 填 SECRET_KEY · POSTGRES_PASSWORD · CREDENTIAL_ENCRYPTION_KEY · CORS_ORIGINS</span>
+<span class="c-prompt">$</span> docker compose -f docker-compose.server.yml -p university-helper up -d --build</code></pre>
+      </div>
+
+      <p>首次部署的检查顺序：</p>
+      <ol>
+        <li>手动创建并填好 <code>.env</code>（见上节，密钥不进仓库）。</li>
+        <li><code>docker compose … up -d --build</code> 起栈。</li>
+        <li>配置宿主机 nginx：TLS 终止、<code>root frontend/dist;</code>、<code>/api/</code> 反代到 <code>http://127.0.0.1:8000</code>。</li>
+        <li>验证：<code>curl -fsS http://127.0.0.1:8000/health</code>。</li>
+      </ol>
+
+      <div class="callout callout-info"><div>日常小改动用 <code>scripts/hotfix_publish.sh</code> 单文件热更新（SSH-key 认证优先），不要重复整栈重建。仓库根目录的旧 <code>deploy.*</code> 脚本已归档至 <code>scripts/_legacy/</code>，禁止运行。</div></div>
+    </section>
+
+    <!-- ============ 超星学习通 ============ -->
+    <section class="wiki-sec" id="chaoxing">
+      <h2>功能指南 · 超星学习通</h2>
+      <h3>登录</h3>
+      <p>在「超星」页面使用手机号 + 密码登录。登录成功后即可拉取课程列表，凭据按需加密保存。</p>
+      <h3>签到</h3>
+      <ul>
+        <li><strong>普通 / 二维码 / 位置签到</strong>均支持；位置签到内置地图检索，搜索地点即可取得坐标。</li>
+        <li>「一键全签」会对当前所有进行中的签到逐一提交（<code>POST /chaoxing/sign-all</code>）。</li>
+      </ul>
+      <h3>泛雅课程任务</h3>
+      <p>
+        在课程页选择要推进的课程后发起任务（<code>POST /course/start</code>，<code>platform: "chaoxing"</code>）。
+        视频与章节测验会按章节顺序自动推进，进度与日志可随时查询，任务支持暂停 / 续跑 / 停止。
+      </p>
+    </section>
+
+    <!-- ============ 智慧树 ============ -->
+    <section class="wiki-sec" id="zhihuishu">
+      <h2>功能指南 · 智慧树</h2>
+      <h3>登录</h3>
+      <ul>
+        <li><strong>扫码登录</strong>：发起 <code>POST /course/zhihuishu/qr-login</code> 后页面会展示二维码，用智慧树 App 扫码确认。</li>
+        <li><strong>密码登录</strong>：手机号 + 密码（<code>POST /course/zhihuishu/password-login</code>）。</li>
+      </ul>
+      <h3>课程任务</h3>
+      <p>
+        选好课程后入队（<code>POST /course/zhihuishu/tasks/course</code>）。任务在后台逐节推进视频，
+        与超星任务共用同一套进度 / 日志 / 暂停 / 续跑 / 停止接口。
+      </p>
+    </section>
+
+    <!-- ============ API 参考 ============ -->
+    <section class="wiki-sec" id="api">
+      <h2>API 参考</h2>
+      <p>
+        Base URL：<code>http://localhost:8000/api/v1</code>（本地）。所有接口返回 JSON，错误统一为
+        <code>{ "code": "ErrorClassName", "message": "…" }</code>。
+        除公共路由外，所有接口需要 <code>Authorization: Bearer &lt;jwt&gt;</code>。
+      </p>
+      <div class="callout callout-info"><div>设 <code>DOCS_ENABLED=true</code> 后，<code>/docs</code> 有可交互的 Swagger UI，<code>/openapi.json</code> 是原始 spec —— 在线探索请优先用它们。</div></div>
+
+      <h3>认证</h3>
+      <div class="wiki-table-wrap">
+        <table class="wiki-table">
+          <thead><tr><th>方法</th><th>路径</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST</code></td><td><code>/auth/register</code></td><td>注册：创建用户并自动建租户库，返回 JWT。用户名需匹配 <code>^[a-z0-9]+$</code>；密码 ≥ 8 位且含大小写与数字。</td></tr>
+            <tr><td><code>POST</code></td><td><code>/auth/login</code></td><td>邮箱 + 密码登录，返回与注册相同的结构。</td></tr>
+            <tr><td><code>GET</code></td><td><code>/auth/shuake-token</code></td><td>签发 7 天兼容令牌（需配置 <code>SHUAKE_COMPAT_SECRET</code>）。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>超星</h3>
+      <div class="wiki-table-wrap">
+        <table class="wiki-table">
+          <thead><tr><th>方法</th><th>路径</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST</code></td><td><code>/chaoxing/login</code></td><td>手机号 + 密码登录，预热客户端缓存。</td></tr>
+            <tr><td><code>GET</code></td><td><code>/chaoxing/courses</code></td><td>列出当前账号的课程。</td></tr>
+            <tr><td><code>POST</code></td><td><code>/chaoxing/sign</code></td><td>提交单个进行中的签到。</td></tr>
+            <tr><td><code>POST</code></td><td><code>/chaoxing/sign-all</code></td><td>提交所有进行中的签到。</td></tr>
+            <tr><td><code>GET</code></td><td><code>/chaoxing/location/*</code></td><td>地理编码 / 地点搜索 / 逆地理编码（公共路由，供地图选点）。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>课程任务（超星泛雅 + 智慧树）</h3>
+      <div class="wiki-table-wrap">
+        <table class="wiki-table">
+          <thead><tr><th>方法</th><th>路径</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST</code></td><td><code>/course/start</code></td><td>启动课程任务，<code>platform</code> 取 <code>"chaoxing"</code> 或 <code>"zhihuishu"</code>。</td></tr>
+            <tr><td><code>GET</code></td><td><code>/course/status/{task_id}</code></td><td>轮询任务进度。</td></tr>
+            <tr><td><code>GET</code></td><td><code>/course/tasks</code></td><td>列出当前用户的任务。</td></tr>
+            <tr><td><code>GET</code></td><td><code>/course/logs/{task_id}</code></td><td>读取任务日志行。</td></tr>
+            <tr><td><code>POST</code></td><td><code>/course/task/{task_id}/pause · /resume · /stop</code></td><td>暂停 / 续跑 / 停止任务。</td></tr>
+            <tr><td><code>POST</code></td><td><code>/course/zhihuishu/qr-login</code></td><td>发起智慧树扫码登录，返回会话 id 与二维码 PNG。</td></tr>
+            <tr><td><code>POST</code></td><td><code>/course/zhihuishu/password-login</code></td><td>智慧树手机号 + 密码登录。</td></tr>
+            <tr><td><code>POST</code></td><td><code>/course/zhihuishu/tasks/course</code></td><td>入队智慧树课程任务。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">轮询 <code>status</code> 与 <code>logs</code> 时请带退避间隔；任务数据以 JSONB 存于你的租户库（<code>course_task_store</code>）。</p>
+    </section>
+
+    <!-- ============ 常见问题 ============ -->
+    <section class="wiki-sec faq" id="faq">
+      <h2>常见问题</h2>
+
+      <details>
+        <summary>注册时提示用户名或密码不合法？</summary>
+        <div class="faq-body"><p>用户名只允许小写字母与数字（<code>^[a-z0-9]+$</code>）；密码至少 8 位，且必须同时包含大写字母、小写字母和数字。</p></div>
+      </details>
+
+      <details>
+        <summary>后端起不来，日志说缺环境变量？</summary>
+        <div class="faq-body"><p>检查 <code>MAIN_DB_*</code>、<code>SECRET_KEY</code>（≥ 16 字符）、<code>CORS_ORIGINS</code> 是否齐全。<code>ENV=production</code> 时还必须提供 <code>CREDENTIAL_ENCRYPTION_KEY</code>，否则应用会拒绝启动 —— 这是有意设计。</p></div>
+      </details>
+
+      <details>
+        <summary>前端请求 /api 报跨域或 404？</summary>
+        <div class="faq-body"><p>开发模式下 Vite 把 <code>/api</code> 代理到 <code>http://localhost:8000</code>，先确认后端在 8000 端口活着。跨域错误通常是 <code>CORS_ORIGINS</code> 没把前端地址（如 <code>http://localhost:3000</code>）加进去 —— 注意它是 JSON 数组格式。</p></div>
+      </details>
+
+      <details>
+        <summary>课程任务的进度去哪里看？</summary>
+        <div class="faq-body"><p>界面上每个任务卡片都有实时进度；接口层面用 <code>GET /course/status/{task_id}</code> 轮询，<code>GET /course/logs/{task_id}</code> 看逐行日志。任务可随时 <code>pause</code> / <code>resume</code> / <code>stop</code>。</p></div>
+      </details>
+
+      <details>
+        <summary>Swagger / 接口调试页面在哪里？</summary>
+        <div class="faq-body"><p>设置 <code>DOCS_ENABLED=true</code> 后访问 <code>/docs</code>（Swagger UI），原始 OpenAPI spec 在 <code>/openapi.json</code>。生产环境建议保持关闭。</p></div>
+      </details>
+
+      <details>
+        <summary>我的平台账号密码安全吗？</summary>
+        <div class="faq-body"><p>第三方平台凭据在写入数据库前先用 Fernet 对称加密，密钥只存在于服务器环境变量中，不进仓库、不进镜像。另外每位用户的数据存在独立的租户库里，应用层越权也读不到别人的数据。</p></div>
+      </details>
+
+      <details>
+        <summary>8000 端口被占了怎么办？</summary>
+        <div class="faq-body"><p>改 <code>.env</code> 里的 <code>APP_PORT</code>，同时记得同步前端代理与 nginx 反代的上游端口。</p></div>
+      </details>
+
+      <details>
+        <summary>怎么更新已部署的服务？</summary>
+        <div class="faq-body"><p>整体升级：拉新代码后重新 <code>docker compose -f docker-compose.server.yml up -d --build</code>。单文件热修复：<code>scripts/hotfix_publish.sh backend/app/main.py</code>（需要配置 <code>SERVER_IP</code> 与 SSH key），后端文件会同步进容器并自动重启，依赖层变更会触发整镜像重建。</p></div>
+      </details>
+    </section>
+
+    <!-- ============ 安全与合规 ============ -->
+    <section class="wiki-sec" id="security">
+      <h2>安全与合规</h2>
+      <h3>安全基线</h3>
+      <ul>
+        <li>后端容器非 root（UID/GID 10001）运行，只读根文件系统，Linux capabilities 全部裁剪。</li>
+        <li>nginx 强制 <code>Content-Security-Policy</code>、HSTS、<code>frame-ancestors deny</code>，登录接口限速 5 次/分。</li>
+        <li>Postgres 限制最大连接数、开启慢查询日志与 WAL 压缩；备份加密存储。</li>
+        <li>安全漏洞请按 <a href="https://github.com/sweetcornna/university-helper/blob/main/.github/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a> 流程私下报告。</li>
+      </ul>
+      <h3>合规声明</h3>
+      <div class="callout callout-warn"><div>
+        请仅在符合<strong>学校规定、平台规则与当地法律</strong>的前提下使用本项目。
+        对第三方平台启用自动化之前，请自行评估风险与合规影响。本项目以 MIT 协议开源、自托管运行，
+        使用产生的一切后果由使用者自行承担。
+      </div></div>
+    </section>
+
+  </main>
+</div>
+
+<footer class="day-foot">
+  <span>University Helper · MIT License</span>
+  <span><a href="./">☾ 展示页</a>&ensp;·&ensp;<a href="https://github.com/sweetcornna/university-helper" target="_blank" rel="noopener">GitHub</a>&ensp;·&ensp;<a href="https://github.com/sweetcornna/university-helper/issues" target="_blank" rel="noopener">反馈问题</a></span>
+</footer>
+
+<script src="assets/wiki.js"></script>
+</body>
+</html>
