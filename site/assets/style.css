@@ -74,6 +74,49 @@ body.night {
     radial-gradient(90% 60% at 10% 110%, #081226 0%, transparent 60%),
     var(--night);
 }
+/* 银河：一条斜过夜空的微光带 */
+.sky-night::after {
+  content: "";
+  position: absolute; inset: -25%;
+  background: linear-gradient(112deg,
+    transparent 38%,
+    rgba(150, 180, 230, 0.030) 46%,
+    rgba(214, 226, 248, 0.065) 50%,
+    rgba(150, 180, 230, 0.030) 54%,
+    transparent 62%);
+}
+
+/* ---------- 月亮与太阳（位置由滚动驱动） ---------- */
+.moon {
+  position: absolute; top: 0; left: 0;
+  width: clamp(72px, 9vw, 120px); aspect-ratio: 1;
+  will-change: transform, opacity;
+}
+.moon i {
+  display: block; width: 100%; height: 100%; border-radius: 50%;
+  background:
+    radial-gradient(circle at 63% 58%, rgba(112, 122, 142, 0.38) 0 7%, transparent 8%),
+    radial-gradient(circle at 41% 70%, rgba(112, 122, 142, 0.30) 0 5%, transparent 6%),
+    radial-gradient(circle at 53% 33%, rgba(112, 122, 142, 0.32) 0 4%, transparent 5%),
+    radial-gradient(circle at 30% 48%, rgba(112, 122, 142, 0.22) 0 3.4%, transparent 4.4%),
+    radial-gradient(circle at 36% 35%, #FBF8EE 0%, #E7E2D4 55%, #C3C0B5 100%);
+  box-shadow:
+    0 0 46px 14px rgba(235, 230, 215, 0.22),
+    0 0 170px 64px rgba(190, 200, 226, 0.10);
+}
+.sun {
+  position: absolute; top: 0; left: 0;
+  width: clamp(96px, 11vw, 152px); aspect-ratio: 1;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.sun i {
+  display: block; width: 100%; height: 100%; border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%, #FFF9E8 0%, #FFE3A1 45%, #FFB35C 78%, #F88E54 100%);
+  box-shadow:
+    0 0 70px 26px rgba(255, 205, 120, 0.50),
+    0 0 240px 110px rgba(255, 160, 110, 0.28);
+}
 .sky-predawn {
   background: linear-gradient(180deg, #0A1730 0%, #11244A 55%, #1B3261 100%);
 }
@@ -234,15 +277,12 @@ body.night {
   text-shadow: 0 0 44px rgba(91, 157, 255, 0.35);
 }
 
-/* 任务票 */
+/* 任务便签：一截虚线之下，不加框 */
 .ticket {
-  margin-top: 44px;
+  margin-top: 46px;
   max-width: 380px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(13, 26, 51, 0.6);
-  padding: 16px 18px 14px;
-  backdrop-filter: blur(4px);
+  border-top: 1px dashed rgba(143, 163, 192, 0.3);
+  padding-top: 18px;
 }
 .ticket-head {
   display: flex; align-items: center; gap: 8px;
@@ -305,145 +345,199 @@ body.night {
 }
 .sec-sub { color: var(--muted); font-size: clamp(0.95rem, 1.2vw, 1.05rem); }
 
-/* ---------- 23:30 接入 ---------- */
+/* ---------- 23:30 接入：编辑部式双栏，中央一条发丝线 ---------- */
 .platform-grid {
+  position: relative;
   display: grid; grid-template-columns: 1fr 1fr;
-  gap: clamp(18px, 3vw, 32px);
+  gap: clamp(40px, 7vw, 110px);
 }
-.platform {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: linear-gradient(170deg, rgba(13, 26, 51, 0.85), rgba(13, 26, 51, 0.35));
-  padding: clamp(24px, 3.4vw, 40px);
-  transition: transform 0.4s var(--ease-premium), border-color 0.4s var(--ease-premium);
+.platform-grid::before {
+  content: "";
+  position: absolute; left: 50%; top: -8px; bottom: -8px; width: 1px;
+  background: linear-gradient(180deg, transparent, rgba(143, 163, 192, 0.35) 18%, rgba(143, 163, 192, 0.35) 82%, transparent);
 }
-.platform:hover { transform: translateY(-4px); border-color: rgba(91, 157, 255, 0.45); }
+.platform { position: relative; padding: 8px 0; }
+.platform:nth-child(2) { margin-top: clamp(40px, 6vw, 76px); }
+/* 巨大的水印字：星 / 树 */
+.platform::before {
+  content: attr(data-glyph);
+  position: absolute; right: -0.08em; top: -0.42em;
+  font-family: var(--serif); font-weight: 900;
+  font-size: clamp(9rem, 15vw, 14rem);
+  line-height: 1;
+  color: var(--paper);
+  opacity: 0.045;
+  pointer-events: none;
+}
 .platform-name {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
-  margin-bottom: 20px;
+  display: flex; align-items: baseline; gap: 16px;
+  margin-bottom: 26px;
 }
-.platform-zh { font-family: var(--serif); font-weight: 900; font-size: 1.45rem; }
-.platform-en { font-size: 0.7rem; color: var(--muted); letter-spacing: 0.2em; text-transform: uppercase; }
+.platform-zh { font-family: var(--serif); font-weight: 900; font-size: clamp(1.6rem, 2.6vw, 2.2rem); }
+.platform-en { font-size: 0.68rem; color: var(--lamp); letter-spacing: 0.3em; text-transform: uppercase; }
 .feature-list { list-style: none; }
 .feature-list li {
   position: relative;
-  padding: 9px 0 9px 26px;
-  color: var(--paper); font-size: 0.95rem;
-  border-bottom: 1px dashed rgba(143, 163, 192, 0.14);
+  padding: 8px 0 8px 30px;
+  color: var(--paper); font-size: 0.98rem;
 }
-.feature-list li:last-child { border-bottom: 0; }
 .feature-list li::before {
-  content: "◦";
-  position: absolute; left: 4px; color: var(--signal);
+  content: "—";
+  position: absolute; left: 0; color: var(--signal); opacity: 0.7;
 }
 .platform-api {
-  margin-top: 18px;
+  margin-top: 24px;
   font-size: 0.68rem; color: var(--muted);
   overflow-wrap: anywhere;
 }
 
-/* ---------- 01:00 夜班 ---------- */
+/* ---------- 01:00 夜班：一条「夜之线」垂直时间轴 ---------- */
 .engine { padding: 0; }
 .engine-pin { padding: clamp(110px, 14vh, 170px) 0; }
 .shift {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: clamp(20px, 3.4vw, 44px);
+  gap: clamp(28px, 5vw, 72px);
   align-items: start;
 }
-.shift-list { list-style: none; counter-reset: none; }
+.shift-flow { position: relative; }
+.shift-thread {
+  position: absolute;
+  left: calc(64px + 18px + 4px); /* time 列宽 + 间距 + 节点半径 */
+  top: 10px; bottom: 10px; width: 1px;
+  background: rgba(143, 163, 192, 0.16);
+}
+.shift-thread i {
+  display: block; width: 100%; height: 100%;
+  background: linear-gradient(180deg, var(--lamp), var(--signal));
+  transform: scaleY(0); transform-origin: top center;
+}
+.shift-list { list-style: none; }
 .shift-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 120px auto;
-  align-items: center;
-  gap: clamp(10px, 1.6vw, 20px);
-  padding: 16px 18px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(13, 26, 51, 0.5);
-  margin-bottom: 12px;
+  grid-template-columns: 64px 9px minmax(0, 1fr);
+  column-gap: 18px;
+  align-items: start;
+  padding: 17px 0;
 }
 .shift-item time {
   font-size: 0.74rem; color: var(--lamp);
   font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding-top: 3px;
 }
-.shift-name { font-size: 0.95rem; }
+.shift-node {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #22324F;
+  margin-top: 8px;
+  position: relative; z-index: 1;
+}
+.shift-body { min-width: 0; padding-left: 4px; }
+.shift-name { font-size: 1rem; }
+.shift-done {
+  font-size: 0.72rem; color: var(--done);
+  white-space: nowrap;
+  display: inline-block;
+  margin-left: 14px;
+}
 .shift-bar {
-  height: 4px; border-radius: 2px; overflow: hidden;
-  background: rgba(143, 163, 192, 0.16);
+  display: block;
+  margin-top: 10px;
+  height: 2px;
+  max-width: 360px;
+  background: rgba(143, 163, 192, 0.14);
+  overflow: hidden;
 }
 .shift-bar i {
   display: block; height: 100%; width: 100%;
-  background: var(--signal); border-radius: 2px;
+  background: var(--signal);
   transform: scaleX(0); transform-origin: left center;
 }
-.shift-done {
-  font-size: 0.74rem; color: var(--done);
-  white-space: nowrap;
-}
+/* 机器的低语：不加框的日志，行首错落 */
 .shift-log {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(5, 10, 20, 0.75);
-  padding: 18px 20px;
-  font-size: 0.72rem; line-height: 2.1;
+  padding-top: 86px;
+  font-size: 0.72rem; line-height: 2.4;
   color: var(--muted);
+  opacity: 0.85;
   overflow-wrap: anywhere;
 }
+.log-line:nth-child(2n) { margin-left: 1.6em; }
+.log-line:nth-child(3n) { margin-left: 0.7em; }
 .log-line:last-child { color: var(--done); }
 .shift-clear {
-  margin-top: 28px;
+  margin-top: 34px;
   font-size: 0.8rem; color: var(--done); letter-spacing: 0.1em;
 }
 
-/* ---------- 03:00 隔离 ---------- */
+/* ---------- 03:00 隔离：凌晨的宿舍楼 ---------- */
 .iso {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(28px, 4.6vw, 60px);
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: clamp(36px, 6vw, 84px);
   align-items: center;
 }
-.iso-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+.dorm-wrap {
+  display: flex; flex-direction: column; align-items: center;
+  margin: 0;
 }
-.iso-cell {
-  aspect-ratio: 1 / 0.82;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(13, 26, 51, 0.85), rgba(13, 26, 51, 0.3));
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 6px;
-  transition: border-color 0.4s var(--ease-premium);
-}
-.iso-cell span { font-size: 0.62rem; color: var(--muted); }
-.iso-cell::before {
-  content: "";
-  width: 22px; height: 14px;
-  border: 1.5px solid var(--muted);
-  border-radius: 3px;
+.dorm {
   position: relative;
-  background:
-    linear-gradient(transparent 45%, currentColor 45%, currentColor 55%, transparent 55%);
-  opacity: 0.7;
+  width: min(320px, 86%);
+  background: #02060D;
+  padding: clamp(22px, 3vw, 32px) clamp(20px, 2.6vw, 28px);
+  box-shadow: inset 0 1px 0 rgba(143, 163, 192, 0.14);
 }
-.iso-you {
-  border-color: rgba(91, 157, 255, 0.6);
-  box-shadow: 0 0 34px rgba(91, 157, 255, 0.12) inset, 0 0 24px rgba(91, 157, 255, 0.1);
+/* 楼顶水箱 */
+.dorm-tank {
+  position: absolute; top: -22px; right: 38px;
+  width: 34px; height: 22px;
+  background: #02060D;
+  box-shadow: inset 0 1px 0 rgba(143, 163, 192, 0.12);
 }
-.iso-you span { color: var(--signal); }
-.iso-you em {
-  font-style: normal; font-size: 0.68rem; color: var(--paper);
+.dorm-tank::after {
+  content: "";
+  position: absolute; left: 6px; right: 6px; bottom: -1px; top: 18px;
+  border-left: 3px solid #02060D; border-right: 3px solid #02060D;
+}
+.dorm-windows {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: clamp(10px, 1.4vw, 14px) clamp(12px, 1.8vw, 18px);
+}
+.win {
+  aspect-ratio: 1 / 1.05;
+  background: #0A1322;
+  border-radius: 1px;
+}
+.win-late {
+  background: #E8A04C;
+  box-shadow: 0 0 16px rgba(255, 180, 84, 0.4);
+}
+.win-you {
+  background: #5B9DFF;
+  box-shadow: 0 0 20px rgba(91, 157, 255, 0.6);
+}
+.js-anim .win-you { animation: winwork 3.4s ease-in-out infinite; }
+@keyframes winwork {
+  0%, 100% { box-shadow: 0 0 20px rgba(91, 157, 255, 0.6); }
+  50%      { box-shadow: 0 0 11px rgba(91, 157, 255, 0.32); }
+}
+.dorm-ground {
+  display: block;
+  width: 135%; max-width: 440px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(143, 163, 192, 0.3) 18%, rgba(143, 163, 192, 0.3) 82%, transparent);
+}
+.dorm-cap {
+  margin-top: 20px;
+  font-size: 0.7rem; color: var(--muted); letter-spacing: 0.06em;
+  text-align: center;
+  max-width: 30em;
 }
 .iso-points { list-style: none; }
 .iso-points li {
   position: relative;
-  padding: 13px 0 13px 30px;
-  font-size: 0.96rem;
-  border-bottom: 1px dashed rgba(143, 163, 192, 0.14);
+  padding: 14px 0 14px 30px;
+  font-size: 0.98rem;
 }
-.iso-points li:last-child { border-bottom: 0; }
 .iso-points li::before {
   content: "▸";
   position: absolute; left: 2px; color: var(--lamp);
@@ -469,18 +563,11 @@ body.night {
 }
 .marquee-track > span { flex-shrink: 0; }
 
-/* ---------- 04:30 启动 ---------- */
+/* ---------- 04:30 启动：命令直接写在夜上，只留一条琥珀左缘线 ---------- */
 .codeblock {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  overflow: hidden;
-  background: rgba(5, 10, 20, 0.8);
-}
-.codeblock-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 18px;
-  font-size: 0.68rem; color: var(--muted); letter-spacing: 0.18em;
-  border-bottom: 1px solid var(--line);
+  position: relative;
+  border-left: 1px solid rgba(255, 180, 84, 0.5);
+  padding: 10px 0 10px clamp(22px, 3.4vw, 40px);
 }
 .copy-btn {
   background: none; border: 1px solid var(--line);
@@ -490,10 +577,10 @@ body.night {
 }
 .copy-btn:hover { color: var(--paper); border-color: var(--muted); }
 .copy-btn.copied { color: var(--done); border-color: var(--done); }
+.codeblock .copy-btn { position: absolute; top: 2px; right: 0; }
 .codeblock pre {
-  padding: 22px 24px;
   overflow-x: auto;
-  font-size: 0.84rem; line-height: 2;
+  font-size: clamp(0.8rem, 1.1vw, 0.94rem); line-height: 2.4;
 }
 .c-prompt { color: var(--lamp); user-select: none; }
 .c-comment { color: var(--muted); opacity: 0.7; }
@@ -546,10 +633,18 @@ body.lit .btn-ghost { border-color: rgba(58, 43, 28, 0.45); color: #3A2B1C; }
 .js-anim .shift-done { opacity: 0; }
 .js-anim .log-line { opacity: 0; }
 .js-anim .shift-clear { opacity: 0; }
+.js-anim .dorm-cap { opacity: 0; }
+.js-anim .dorm-wrap { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   .js-anim [data-reveal], .js-anim [data-hero], .js-anim .strip b,
-  .js-anim .shift-done, .js-anim .log-line, .js-anim .shift-clear { opacity: 1; }
-  .js-anim .shift-bar i, .js-anim .ticket-bar i, .js-anim .night-progress i { transform: none; }
+  .js-anim .shift-done, .js-anim .log-line, .js-anim .shift-clear,
+  .js-anim .dorm-cap, .js-anim .dorm-wrap { opacity: 1; }
+  .js-anim .shift-bar i, .js-anim .ticket-bar i, .js-anim .night-progress i,
+  .js-anim .shift-thread i { transform: none; }
+  .js-anim .win-you { animation: none; }
+  /* 故事的最终状态：晚归的窗也熄了 */
+  .win-late { background: #0A1322; box-shadow: none; }
+  .js-anim .shift-node { background: var(--done); }
 }
 
 /* ---------- 夜 · 响应式 ---------- */
@@ -559,16 +654,20 @@ body.lit .btn-ghost { border-color: rgba(58, 43, 28, 0.45); color: #3A2B1C; }
   .couplet-strips { gap: 16px; }
   .strip b { font-size: clamp(2.2rem, 9vw, 3rem); }
   .hero { padding-top: 100px; }
-  .platform-grid { grid-template-columns: 1fr; }
+  .platform-grid { grid-template-columns: 1fr; gap: 56px; }
+  .platform-grid::before { display: none; }
+  .platform:nth-child(2) { margin-top: 0; }
   .shift { grid-template-columns: 1fr; }
-  .shift-log { order: 2; }
+  .shift-log { order: 2; padding-top: 10px; }
   .iso { grid-template-columns: 1fr; }
+  .dorm-wrap { margin-bottom: 14px; }
   .hud-phase { display: none; }
   .scroll-cue { display: none; }
 }
 @media (max-width: 560px) {
-  .shift-item { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .shift-bar { display: none; }
+  .shift-item { grid-template-columns: 48px 9px minmax(0, 1fr); column-gap: 12px; }
+  .shift-thread { left: calc(48px + 12px + 4px); }
+  .shift-item time { font-size: 0.68rem; }
   .hud-nav { gap: 12px; }
   .hud-link { font-size: 0.78rem; }
 }

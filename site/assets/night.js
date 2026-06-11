@@ -40,6 +40,8 @@
   var predawn = document.querySelector('.sky-predawn');
   var dawnSky = document.querySelector('.sky-dawn');
   var nightSky = document.querySelector('.sky-night');
+  var moonEl = document.getElementById('moon');
+  var sunEl = document.getElementById('sun');
 
   function ramp(p, a, b) { return Math.min(1, Math.max(0, (p - a) / (b - a))); }
 
@@ -62,6 +64,27 @@
     if (starsBox) starsBox.style.opacity = 1 - ramp(p, 0.62, 0.88);
     if (hudEl) hudEl.style.setProperty('--hud-a', (0.82 * (1 - ramp(p, 0.66, 0.92))).toFixed(3));
     document.body.classList.toggle('lit', p > 0.82);
+
+    /* 月亮：自东边升起，划一道弧，凌晨西沉。
+       01:00–03:00 任务最密，云遮月让出可读性。 */
+    if (moonEl) {
+      var tm = ramp(p, 0, 0.72);
+      var mx = 88 - 74 * tm;                              // vw：右 → 左
+      var my = 80 - Math.sin(tm * Math.PI) * 54;          // vh：弧线
+      var cloud = 1 - 0.72 * (ramp(mins, 1485, 1515) * (1 - ramp(mins, 1605, 1645)));
+      moonEl.style.transform =
+        'translate(' + mx.toFixed(2) + 'vw,' + my.toFixed(2) + 'vh) translate(-50%,-50%)' +
+        ' scale(' + (0.82 + 0.18 * cloud).toFixed(3) + ')';
+      moonEl.style.opacity = ((1 - ramp(p, 0.6, 0.74)) * cloud).toFixed(3);
+    }
+    /* 太阳：黎明时从地平线下升起 */
+    if (sunEl) {
+      var ts = ramp(p, 0.78, 1);
+      var sy = 112 - 44 * ts;                             // vh：112 → 68
+      sunEl.style.transform =
+        'translate(50vw,' + sy.toFixed(2) + 'vh) translate(-50%,-50%) scale(' + (0.85 + 0.25 * ts).toFixed(3) + ')';
+      sunEl.style.opacity = ramp(p, 0.78, 0.86).toFixed(3);
+    }
   }
 
   /* ---------- 时刻导航高亮 ---------- */
@@ -253,15 +276,28 @@
         anticipatePin: 1
       }
     });
+    // 夜之线随整段进度向下生长
+    tl.to('#shift-thread-fill', { scaleY: 1, duration: items.length, ease: 'none' }, 0);
     items.forEach(function (item, i) {
       var bar = item.querySelector('.shift-bar i');
       var done = item.querySelector('.shift-done');
+      var node = item.querySelector('.shift-node');
       var t = i * 1.0;
-      tl.from(item, { autoAlpha: 0.18, x: 26, duration: 0.3, ease: 'power2.out' }, t)
+      tl.from(item, { autoAlpha: 0.22, x: 22, duration: 0.3, ease: 'power2.out' }, t)
+        .to(node, {
+          backgroundColor: '#FFB454',
+          boxShadow: '0 0 12px rgba(255,180,84,0.8)',
+          scale: 1.3, duration: 0.12
+        }, t + 0.06)
         .to(bar, { scaleX: 1, duration: 0.55, ease: 'none' }, t + 0.18)
         .fromTo(done,
           { autoAlpha: 0, scale: 0.4 },
-          { autoAlpha: 1, scale: 1, duration: 0.18, ease: 'back.out(2.5)' }, t + 0.74);
+          { autoAlpha: 1, scale: 1, duration: 0.18, ease: 'back.out(2.5)' }, t + 0.74)
+        .to(node, {
+          backgroundColor: '#3DDC97',
+          boxShadow: '0 0 10px rgba(61,220,151,0.7)',
+          scale: 1, duration: 0.15
+        }, t + 0.74);
       if (logs[i]) tl.fromTo(logs[i], { autoAlpha: 0, y: 8 }, { autoAlpha: 1, y: 0, duration: 0.2 }, t + 0.2);
       if (logs[i + 1] && i === items.length - 1) {
         tl.fromTo(logs[i + 1], { autoAlpha: 0, y: 8 }, { autoAlpha: 1, y: 0, duration: 0.2 }, t + 0.8);
@@ -279,9 +315,14 @@
 
   mm.add('(max-width: 860px)', function () {
     /* 小屏：不固定，逐项进入视口即完成 */
+    gsap.to('#shift-thread-fill', {
+      scaleY: 1, duration: 1.8, ease: 'power1.inOut',
+      scrollTrigger: { trigger: '.shift-flow', start: 'top 75%', once: true }
+    });
     gsap.utils.toArray('.shift-item').forEach(function (item, i) {
       var bar = item.querySelector('.shift-bar i');
       var done = item.querySelector('.shift-done');
+      var node = item.querySelector('.shift-node');
       var tl = gsap.timeline({
         scrollTrigger: { trigger: item, start: 'top 86%', once: true }
       });
@@ -289,7 +330,12 @@
         .to(bar, { scaleX: 1, duration: 0.7, ease: 'power1.inOut' }, 0.15)
         .fromTo(done,
           { autoAlpha: 0, scale: 0.4 },
-          { autoAlpha: 1, scale: 1, duration: 0.3, ease: 'back.out(2.2)' }, 0.8);
+          { autoAlpha: 1, scale: 1, duration: 0.3, ease: 'back.out(2.2)' }, 0.8)
+        .to(node, {
+          backgroundColor: '#3DDC97',
+          boxShadow: '0 0 10px rgba(61,220,151,0.7)',
+          duration: 0.25
+        }, 0.8);
     });
     gsap.utils.toArray('.log-line').forEach(function (line, i) {
       gsap.fromTo(line, { autoAlpha: 0 }, {
@@ -303,6 +349,27 @@
     });
     return function () {};
   });
+
+  /* ---------- 03:00 宿舍楼：最后几盏灯，一盏盏熄掉 ---------- */
+  (function dormStory() {
+    if (!document.getElementById('dorm')) return;
+    gsap.timeline({
+      scrollTrigger: { trigger: '#isolation', start: 'top 62%', once: true }
+    })
+      .fromTo('.dorm-wrap',
+        { autoAlpha: 0, y: 36 },
+        { autoAlpha: 1, y: 0, duration: 1, ease: 'expo.out' }, 0)
+      .to('.win-late', {
+        backgroundColor: '#0A1322',
+        boxShadow: '0 0 0 rgba(0,0,0,0)',
+        duration: 0.5,
+        stagger: 0.9,
+        ease: 'power1.inOut'
+      }, 0.6)
+      .fromTo('#dorm-cap',
+        { autoAlpha: 0, y: 10 },
+        { autoAlpha: 1, y: 0, duration: 0.9, ease: 'expo.out' }, '-=0.3');
+  })();
 
   /* ---------- 03:50 跑马灯 ---------- */
   gsap.to('#marquee-track', { xPercent: -50, repeat: -1, ease: 'none', duration: 36 });

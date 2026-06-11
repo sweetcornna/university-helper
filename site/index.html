@@ -22,6 +22,8 @@
   <div class="sky-layer sky-predawn"></div>
   <div class="sky-layer sky-dawn"></div>
   <div class="stars" id="stars"></div>
+  <div class="moon" id="moon"><i></i></div>
+  <div class="sun" id="sun"><i></i></div>
   <div class="meteor" id="meteor"></div>
 </div>
 
@@ -101,7 +103,7 @@
       </header>
 
       <div class="platform-grid">
-        <article class="platform" data-reveal>
+        <article class="platform" data-reveal data-glyph="星">
           <h3 class="platform-name"><span class="platform-zh">超星学习通</span><span class="platform-en mono">Chaoxing</span></h3>
           <ul class="feature-list">
             <li>手机号登录，课程一键拉取</li>
@@ -112,7 +114,7 @@
           <p class="platform-api mono">POST /chaoxing/login&ensp;·&ensp;POST /chaoxing/sign-all</p>
         </article>
 
-        <article class="platform" data-reveal data-delay="0.12">
+        <article class="platform" data-reveal data-delay="0.12" data-glyph="树">
           <h3 class="platform-name"><span class="platform-zh">智慧树</span><span class="platform-en mono">Zhihuishu</span></h3>
           <ul class="feature-list">
             <li>扫码登录，或手机号密码登录</li>
@@ -137,38 +139,51 @@
         </header>
 
         <div class="shift">
-          <ol class="shift-list" aria-label="夜间任务队列演示">
-            <li class="shift-item">
-              <time class="mono">01:12</time>
-              <span class="shift-name">视频 · 大学生心理健康 · 第 4 讲</span>
-              <span class="shift-bar"><i></i></span>
-              <span class="shift-done mono">✓ 完成</span>
-            </li>
-            <li class="shift-item">
-              <time class="mono">01:47</time>
-              <span class="shift-name">视频 · 军事理论 · 第 9 讲</span>
-              <span class="shift-bar"><i></i></span>
-              <span class="shift-done mono">✓ 完成</span>
-            </li>
-            <li class="shift-item">
-              <time class="mono">02:30</time>
-              <span class="shift-name">章节测验 · 创新创业基础</span>
-              <span class="shift-bar"><i></i></span>
-              <span class="shift-done mono">✓ 92 分</span>
-            </li>
-            <li class="shift-item">
-              <time class="mono">03:05</time>
-              <span class="shift-name">视频 · 形势与政策 · 第 3 章</span>
-              <span class="shift-bar"><i></i></span>
-              <span class="shift-done mono">✓ 完成</span>
-            </li>
-            <li class="shift-item">
-              <time class="mono">03:58</time>
-              <span class="shift-name">智慧树 · 视频课 × 2 节</span>
-              <span class="shift-bar"><i></i></span>
-              <span class="shift-done mono">✓ 完成</span>
-            </li>
-          </ol>
+          <div class="shift-flow">
+            <span class="shift-thread" aria-hidden="true"><i id="shift-thread-fill"></i></span>
+            <ol class="shift-list" aria-label="夜间任务队列演示">
+              <li class="shift-item">
+                <time class="mono">01:12</time>
+                <span class="shift-node" aria-hidden="true"></span>
+                <div class="shift-body">
+                  <p class="shift-name">视频 · 大学生心理健康 · 第 4 讲<span class="shift-done mono">✓ 完成</span></p>
+                  <span class="shift-bar" aria-hidden="true"><i></i></span>
+                </div>
+              </li>
+              <li class="shift-item">
+                <time class="mono">01:47</time>
+                <span class="shift-node" aria-hidden="true"></span>
+                <div class="shift-body">
+                  <p class="shift-name">视频 · 军事理论 · 第 9 讲<span class="shift-done mono">✓ 完成</span></p>
+                  <span class="shift-bar" aria-hidden="true"><i></i></span>
+                </div>
+              </li>
+              <li class="shift-item">
+                <time class="mono">02:30</time>
+                <span class="shift-node" aria-hidden="true"></span>
+                <div class="shift-body">
+                  <p class="shift-name">章节测验 · 创新创业基础<span class="shift-done mono">✓ 92 分</span></p>
+                  <span class="shift-bar" aria-hidden="true"><i></i></span>
+                </div>
+              </li>
+              <li class="shift-item">
+                <time class="mono">03:05</time>
+                <span class="shift-node" aria-hidden="true"></span>
+                <div class="shift-body">
+                  <p class="shift-name">视频 · 形势与政策 · 第 3 章<span class="shift-done mono">✓ 完成</span></p>
+                  <span class="shift-bar" aria-hidden="true"><i></i></span>
+                </div>
+              </li>
+              <li class="shift-item">
+                <time class="mono">03:58</time>
+                <span class="shift-node" aria-hidden="true"></span>
+                <div class="shift-body">
+                  <p class="shift-name">智慧树 · 视频课 × 2 节<span class="shift-done mono">✓ 完成</span></p>
+                  <span class="shift-bar" aria-hidden="true"><i></i></span>
+                </div>
+              </li>
+            </ol>
+          </div>
 
           <aside class="shift-log mono" aria-hidden="true">
             <p class="log-line">01:12:03&ensp;task#a41f&ensp;resume&ensp;chapter=4</p>
@@ -196,14 +211,35 @@
       </header>
 
       <div class="iso">
-        <div class="iso-grid" aria-hidden="true">
-          <div class="iso-cell" data-reveal><span class="mono">tenant_chen</span></div>
-          <div class="iso-cell" data-reveal data-delay="0.06"><span class="mono">tenant_lin</span></div>
-          <div class="iso-cell iso-you" data-reveal data-delay="0.12"><span class="mono">tenant_you</span><em>你的库</em></div>
-          <div class="iso-cell" data-reveal data-delay="0.18"><span class="mono">tenant_wang</span></div>
-          <div class="iso-cell" data-reveal data-delay="0.24"><span class="mono">tenant_zhao</span></div>
-          <div class="iso-cell" data-reveal data-delay="0.30"><span class="mono">tenant_liu</span></div>
-        </div>
+        <figure class="dorm-wrap" aria-hidden="true">
+          <div class="dorm" id="dorm">
+            <i class="dorm-tank"></i>
+            <div class="dorm-windows">
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win win-late"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win win-late"></span>
+              <span class="win"></span>
+              <span class="win win-you"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win win-late"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+              <span class="win"></span>
+            </div>
+          </div>
+          <span class="dorm-ground"></span>
+          <figcaption class="dorm-cap mono" id="dorm-cap">03:12 · 整栋楼都睡了，只有 tenant_you 还亮着——你的库在替你上课。</figcaption>
+        </figure>
 
         <ul class="iso-points">
           <li data-reveal>注册即建库：每位用户独占 <code class="mono">tenant_&lt;username&gt;</code>，跨租户读取在物理上不可能。</li>
@@ -232,9 +268,9 @@
       </header>
 
       <div class="codeblock" data-reveal>
-        <div class="codeblock-head mono"><span>terminal</span><button class="copy-btn mono" type="button" data-copy="git clone https://github.com/sweetcornna/university-helper.git
+        <button class="copy-btn mono" type="button" data-copy="git clone https://github.com/sweetcornna/university-helper.git
 cp .env.example .env
-docker compose -f docker-compose.server.yml -p university-helper up -d --build">复制</button></div>
+docker compose -f docker-compose.server.yml -p university-helper up -d --build">复制命令</button>
         <pre class="mono"><code><span class="c-prompt">$</span> git clone https://github.com/sweetcornna/university-helper.git
 <span class="c-prompt">$</span> cp .env.example .env   <span class="c-comment"># 填 SECRET_KEY · POSTGRES_PASSWORD · CREDENTIAL_ENCRYPTION_KEY · CORS_ORIGINS</span>
 <span class="c-prompt">$</span> docker compose -f docker-compose.server.yml -p university-helper up -d --build</code></pre>
