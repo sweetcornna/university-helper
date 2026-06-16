@@ -7,9 +7,9 @@
 <h1 align="center">University Helper</h1>
 
 <p align="center">
-  <a href="../../actions/workflows/test.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/OWNER/REPO/test.yml?branch=main&label=ci&style=flat-square" /></a>
-  <a href="../../actions/workflows/codeql.yml"><img alt="CodeQL" src="https://img.shields.io/github/actions/workflow/status/OWNER/REPO/codeql.yml?branch=main&label=codeql&style=flat-square" /></a>
-  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/OWNER/REPO?style=flat-square" /></a>
+  <a href="../../actions/workflows/test.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/sweetcornna/university-helper/test.yml?branch=main&label=ci&style=flat-square" /></a>
+  <a href="../../actions/workflows/codeql.yml"><img alt="CodeQL" src="https://img.shields.io/github/actions/workflow/status/sweetcornna/university-helper/codeql.yml?branch=main&label=codeql&style=flat-square" /></a>
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/sweetcornna/university-helper?style=flat-square" /></a>
   <img alt="python" src="https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white&style=flat-square" />
   <img alt="react" src="https://img.shields.io/badge/react-18-61DAFB?logo=react&logoColor=black&style=flat-square" />
   <img alt="fastapi" src="https://img.shields.io/badge/fastapi-0.115-009688?logo=fastapi&logoColor=white&style=flat-square" />
@@ -128,6 +128,30 @@ SERVER_IP=… SSH_KEY=~/.ssh/uh ./scripts/hotfix_publish.sh backend/app/main.py
 Use this project only within the rules of your school, platform, and local
 laws. Review the risk and compliance implications before enabling automation
 against third-party services.
+
+## Acknowledgements
+
+University Helper stands on the shoulders of the open-source community. Its
+Chaoxing and Zhihuishu automation studies, learns from, and in places adapts the
+protocol research of these excellent projects — sincere thanks to their authors:
+
+**Chaoxing 学习通 — sign-in**
+- [cxOrz/chaoxing-signin](https://github.com/cxOrz/chaoxing-signin) — protocol reference for normal / photo / gesture / location / QR sign-in.
+
+**Chaoxing 学习通 — course automation (刷课)**
+- [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing) — unattended task-point completion for Chaoxing / Erya / Fanya; our Chaoxing course module follows its overall approach.
+
+**Zhihuishu 智慧树 / Zhidao 知到 — course automation (刷课)**
+- [luoyily/zhihuishu-tool](https://github.com/luoyily/zhihuishu-tool) — Zhihuishu / Zhidao API tooling reference.
+
+**Question banks, font de-obfuscation & OCR (used directly)**
+- [SocialSisterYi/xuexiaoyi-to-xuexitong-tampermonkey-proxy](https://github.com/SocialSisterYi/xuexiaoyi-to-xuexitong-tampermonkey-proxy) — Chaoxing encrypted-font de-obfuscation & answer proxy (see `backend/app/services/course/chaoxing/cxsecret_font.py`, `answer_cache.py`).
+- [DokiDoki1103/tikuAdapter](https://github.com/DokiDoki1103/tikuAdapter) — pluggable question-bank adapter (see `answer_providers/adapter.py`).
+- [sml2h3/ddddocr](https://github.com/sml2h3/ddddocr) — captcha OCR (see `captcha.py`).
+
+Each upstream project is distributed under its own license — please respect
+those terms. If your project is listed here and you'd like the attribution
+adjusted or removed, please open an issue.
 
 ## License
 

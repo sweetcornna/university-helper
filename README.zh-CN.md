@@ -117,6 +117,26 @@ cd frontend && npm run lint
 - `node_modules`、`dist`、`__pycache__`、`%TEMP%` 等生成目录默认已忽略。
 - 如果要对外提供服务，请在首次部署前立即更换数据库密码和 JWT 密钥。
 
+## 致谢
+
+University Helper 站在开源社区的肩膀上。本项目中超星学习通与智慧树的自动化能力，参考、学习并在部分实现上借鉴了以下优秀开源项目的协议研究成果，在此向各位作者致以诚挚谢意：
+
+**超星学习通 · 签到**
+- [cxOrz/chaoxing-signin](https://github.com/cxOrz/chaoxing-signin) —— 普通 / 拍照 / 手势 / 位置 / 二维码签到协议参考。
+
+**超星学习通 · 刷课**
+- [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing) —— 超星 / 尔雅 / 泛雅全自动完成任务点；本项目超星刷课模块整体思路与其一脉相承。
+
+**智慧树 / 知到 · 刷课**
+- [luoyily/zhihuishu-tool](https://github.com/luoyily/zhihuishu-tool) —— 知到 / 智慧树 API 与工具参考。
+
+**题库 / 字体解密 / 验证码（直接使用）**
+- [SocialSisterYi/xuexiaoyi-to-xuexitong-tampermonkey-proxy](https://github.com/SocialSisterYi/xuexiaoyi-to-xuexitong-tampermonkey-proxy) —— 超星加密字体反混淆与题库代理（见 `backend/app/services/course/chaoxing/cxsecret_font.py`、`answer_cache.py`）。
+- [DokiDoki1103/tikuAdapter](https://github.com/DokiDoki1103/tikuAdapter) —— 可插拔题库适配器（见 `answer_providers/adapter.py`）。
+- [sml2h3/ddddocr](https://github.com/sml2h3/ddddocr) —— 验证码 OCR 识别（见 `captcha.py`）。
+
+以上各上游项目均遵循其各自的开源许可证，请在使用时遵守相应条款。若您的项目被列于此处、希望调整或移除署名，请提交 issue 告知。
+
 ## 合规提示
 
 请仅在符合学校规定、平台规则和当地法律的前提下使用本项目。在对第三方平台启用自动化前，请先评估相应的风险与合规要求。
