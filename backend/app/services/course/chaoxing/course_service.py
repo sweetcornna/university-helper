@@ -1,7 +1,8 @@
-# -*- coding: utf-8 -*-
 import re
 import time
+
 from loguru import logger
+
 from .decode import decode_course_list
 
 
@@ -48,10 +49,9 @@ class ChaoxingCourseService:
         if _resp.status_code != 200:
             logger.error(f"阅读任务学习失败 -> [{_resp.status_code}]{_resp.text}")
             return False
-        else:
-            _resp_json = _resp.json()
-            logger.info(f"阅读任务学习 -> {_resp_json['msg']}")
-            return True
+        _resp_json = _resp.json()
+        logger.info(f"阅读任务学习 -> {_resp_json['msg']}")
+        return True
 
     def study_emptypage(self, _course, point):
         _session = self.session_manager.get_session()
@@ -71,6 +71,5 @@ class ChaoxingCourseService:
         if _resp.status_code != 200:
             logger.error(f"空页面任务失败 -> [{_resp.status_code}]{point['title']}")
             return False
-        else:
-            logger.info(f"空页面任务完成 -> {point['title']}")
-            return True
+        logger.info(f"空页面任务完成 -> {point['title']}")
+        return True

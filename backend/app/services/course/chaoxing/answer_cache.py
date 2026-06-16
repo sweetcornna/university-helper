@@ -5,10 +5,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 from loguru import logger
-
 
 # Persist the answer cache under a writable path. In production the container
 # runs with a read-only rootfs (docker-compose.server.yml: read_only: true) and
@@ -37,7 +35,7 @@ class CacheDAO:
     _shared: dict = {}
     _shared_guard = threading.RLock()
 
-    def __init__(self, file: Optional[str] = None):
+    def __init__(self, file: str | None = None):
         self.cache_file = Path(file if file is not None else DEFAULT_CACHE_FILE)
         key = str(self.cache_file)
         with CacheDAO._shared_guard:
@@ -78,11 +76,11 @@ class CacheDAO:
                     try:
                         raw = self.cache_file.read_bytes()
                         text = raw.decode("utf-8", errors="ignore")
-                        start = text.find('{')
-                        end = text.rfind('}')
+                        start = text.find("{")
+                        end = text.rfind("}")
                         if start != -1 and end != -1 and start < end:
                             try:
-                                return json.loads(text[start:end+1])
+                                return json.loads(text[start : end + 1])
                             except Exception:
                                 pass
                     except Exception:
@@ -101,11 +99,11 @@ class CacheDAO:
                     try:
                         raw = self.cache_file.read_bytes()
                         text = raw.decode("utf-8", errors="ignore")
-                        start = text.find('{')
-                        end = text.rfind('}')
+                        start = text.find("{")
+                        end = text.rfind("}")
                         if start != -1 and end != -1 and start < end:
                             try:
-                                return json.loads(text[start:end+1])
+                                return json.loads(text[start : end + 1])
                             except Exception:
                                 pass
                     except Exception:
@@ -144,10 +142,10 @@ class CacheDAO:
                     except Exception:
                         pass
                     logger.error(f"Failed to write cache atomically: {e}")
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to write cache: {e}")
 
-    def get_cache(self, question: str) -> Optional[str]:
+    def get_cache(self, question: str) -> str | None:
         # Serve from the in-memory snapshot (loaded once per file path) so a quiz
         # of N questions does O(1) disk reads instead of O(N) full re-parses.
         with self._lock:

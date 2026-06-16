@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any
 
 
 def _as_float(value: Any, default: float, minimum: float, maximum: float) -> float:
@@ -18,11 +18,11 @@ def _as_csv_text(value: Any) -> str:
     return str(value).strip()
 
 
-def normalize_tiku_config(raw_config: Any) -> Dict[str, Any]:
+def normalize_tiku_config(raw_config: Any) -> dict[str, Any]:
     if not isinstance(raw_config, dict):
         return {}
 
-    config: Dict[str, Any] = dict(raw_config)
+    config: dict[str, Any] = dict(raw_config)
 
     token_text = _as_csv_text(config.get("tokens") or config.get("token"))
     if token_text:

@@ -1,22 +1,24 @@
 """智慧树自动学习模块"""
-import time
+
 import json
-from typing import Optional, Dict, List
+import time
+
 import requests
-from .crypto import Cipher, WatchPoint, VIDEO_KEY, HOME_KEY, encrypt_secret_str
+
+from .crypto import HOME_KEY, VIDEO_KEY, Cipher, WatchPoint, encrypt_secret_str
 
 
 class ZhihuishuLearning:
     """智慧树自动学习服务"""
 
-    def __init__(self, cookies: dict, proxies: Optional[dict] = None):
+    def __init__(self, cookies: dict, proxies: dict | None = None):
         self.cookies = cookies
         self.proxies = proxies or {}
         self.session = requests.Session()
         self.session.cookies.update(cookies)
         self.cipher = Cipher(VIDEO_KEY)
 
-    def get_course_list(self) -> List[Dict]:
+    def get_course_list(self) -> list[dict]:
         """获取课程列表（共享课）
 
         Zhihuishu 的 AppInterfaceSign 拦截器现在强制要求 AES 签名参数 ``secretStr``：
@@ -38,7 +40,7 @@ class ZhihuishuLearning:
         except Exception as e:
             raise Exception(f"Failed to get course list: {e}")
 
-    def get_video_list(self, course_id: str) -> List[Dict]:
+    def get_video_list(self, course_id: str) -> list[dict]:
         """获取课程视频列表（studyservice-api）
 
         响应优先读 ``result``，回退 ``rt``（与共享课接口一致的兼容处理）。
@@ -53,8 +55,7 @@ class ZhihuishuLearning:
         """
         url = "https://studyservice-api.zhihuishu.com/gateway/t/v1/learning/queryStudyInfo"
         try:
-            resp = self.session.post(url, json={"recruitAndCourseId": course_id},
-                                     proxies=self.proxies, timeout=10)
+            resp = self.session.post(url, json={"recruitAndCourseId": course_id}, proxies=self.proxies, timeout=10)
             data = resp.json()
             result = data.get("result") or data.get("rt") or {}
             return result.get("videoChapterDtos") or []
@@ -130,12 +131,11 @@ class ZhihuishuLearning:
                     "recruitAndCourseId": course_id,
                     "videoId": video_id,
                     "watchPoint": watch_point.get(),
-                    "studyTime": current_time
+                    "studyTime": current_time,
                 }
 
                 encrypted = self.cipher.encrypt(json.dumps(data))
-                resp = self.session.post(url, json={"data": encrypted},
-                                       proxies=self.proxies, timeout=10)
+                resp = self.session.post(url, json={"data": encrypted}, proxies=self.proxies, timeout=10)
                 result = resp.json()
 
                 if result.get("status") != 200:
@@ -146,7 +146,7 @@ class ZhihuishuLearning:
         except Exception as e:
             raise Exception(f"Failed to watch video: {e}")
 
-    def complete_course(self, course_id: str) -> Dict:
+    def complete_course(self, course_id: str) -> dict:
         """
         完成整个课程
 

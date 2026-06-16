@@ -8,7 +8,7 @@ StudyResult = None
 CourseProcessor = None
 
 try:  # Optional legacy exports for environments that include full dependencies.
-    from .client import Chaoxing, Account, StudyResult  # type: ignore[assignment]
+    from .client import Account, Chaoxing, StudyResult  # type: ignore[assignment]
 except Exception:
     pass
 
@@ -26,4 +26,3 @@ __all__ = [
     "StudyResult",
     "CourseProcessor",
 ]
-

@@ -11,7 +11,7 @@ import os
 import sys
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, IO, Optional, Union
+from typing import IO
 
 from fontTools.ttLib.tables._g_l_y_f import Glyph, table__g_l_y_f
 from fontTools.ttLib.ttFont import TTFont
@@ -74,23 +74,23 @@ class FontHashDAO:
 
         Args:
             file_path: 字体映射表JSON文件路径，相对于资源目录
-        
+
         Raises:
             FileNotFoundError: 当字体映射表文件不存在时
             json.JSONDecodeError: 当字体映射表JSON格式错误时
         """
-        self.char_map: Dict[str, str] = {}  # unicode -> hash
-        self.hash_map: Dict[str, str] = {}  # hash -> unicode
-        
+        self.char_map: dict[str, str] = {}  # unicode -> hash
+        self.hash_map: dict[str, str] = {}  # hash -> unicode
+
         full_path = resource_path(file_path)
         try:
-            with open(full_path, "r", encoding="utf-8") as fp:
+            with open(full_path, encoding="utf-8") as fp:
                 self.char_map = json.load(fp)
                 self.hash_map = {hash_val: char for char, hash_val in self.char_map.items()}
         except (FileNotFoundError, json.JSONDecodeError) as e:
             raise FontDecodeError(f"加载字体映射表失败: {full_path} - {e}") from e
 
-    def find_char(self, font_hash: str) -> Optional[str]:
+    def find_char(self, font_hash: str) -> str | None:
         """
         通过字体哈希值查找对应的Unicode字符编码
 
@@ -102,7 +102,7 @@ class FontHashDAO:
         """
         return self.hash_map.get(font_hash)
 
-    def find_hash(self, char: str) -> Optional[str]:
+    def find_hash(self, char: str) -> str | None:
         """
         通过Unicode字符编码查找对应的字体哈希值
 
@@ -131,8 +131,7 @@ try:
     fonthash_dao = FontHashDAO()
 except Exception as e:
     logger.warning(
-        "初始化字体哈希数据失败，加密字体解码功能将退化为原样返回 "
-        f"(缺少 resource/font_map_table.json) - {e}"
+        "初始化字体哈希数据失败，加密字体解码功能将退化为原样返回 " f"(缺少 resource/font_map_table.json) - {e}"
     )
     fonthash_dao = FontHashDAO.__new__(FontHashDAO)
     fonthash_dao.char_map = {}
@@ -142,19 +141,19 @@ except Exception as e:
 def hash_glyph(glyph: Glyph) -> str:
     """
     计算TTF字体字形的哈希值
-    
+
     Args:
         glyph: TTF字体字形对象
-    
+
     Returns:
         字形的MD5哈希值
     """
     if glyph.numberOfContours <= 0:
         return ""
-    
+
     pos_data = []
     last_index = 0
-    
+
     for i in range(glyph.numberOfContours):
         end_point = glyph.endPtsOfContours[i]
         for j in range(last_index, end_point + 1):
@@ -162,26 +161,26 @@ def hash_glyph(glyph: Glyph) -> str:
             flag = glyph.flags[j] & 0x01
             pos_data.append(f"{x}{y}{flag}")
         last_index = end_point + 1
-    
+
     pos_bin = "".join(pos_data)
     return hashlib.md5(pos_bin.encode()).hexdigest()
 
 
-def font2map(font_data: Union[IO, Path, str]) -> Dict[str, str]:
+def font2map(font_data: IO | Path | str) -> dict[str, str]:
     """
     从字体文件或Base64编码的字体数据中提取字形哈希映射表
-    
+
     Args:
         font_data: 字体文件路径、文件对象或Base64编码的字体数据
-    
+
     Returns:
         字形名称到哈希值的映射字典 ({"uni4E00": "hash值", ...})
-    
+
     Raises:
         ValueError: 当无法解析字体数据时
     """
     font_hashmap = {}
-    
+
     # 处理Base64编码的字体数据
     if isinstance(font_data, str) and font_data.startswith("data:application/font-ttf;charset=utf-8;base64,"):
         try:
@@ -203,23 +202,23 @@ def font2map(font_data: Union[IO, Path, str]) -> Dict[str, str]:
     return font_hashmap
 
 
-def decrypt(dst_fontmap: Dict[str, str], encrypted_text: str) -> str:
+def decrypt(dst_fontmap: dict[str, str], encrypted_text: str) -> str:
     """
     解密超星学习通加密字体的文本
-    
+
     Args:
         dst_fontmap: 目标字体的字形哈希映射表
         encrypted_text: 加密的文本
-    
+
     Returns:
         解密后的文本
     """
     result = []
-    
+
     for char in encrypted_text:
         # 构造Unicode字符名称 (如 "uni4E00")
         char_code = f"uni{ord(char):X}"
-        
+
         # 查找字符在目标字体中的哈希值
         if char_code in dst_fontmap:
             dst_hash = dst_fontmap[char_code]
@@ -233,10 +232,10 @@ def decrypt(dst_fontmap: Dict[str, str], encrypted_text: str) -> str:
                     continue
                 except (ValueError, IndexError):
                     pass
-        
+
         # 如果无法解密，则保留原字符
         result.append(char)
-    
+
     # 替换解密后的康熙部首
     decrypted_text = "".join(result).translate(KX_RADICALS_TAB)
     return decrypted_text

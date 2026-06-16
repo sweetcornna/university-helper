@@ -17,7 +17,6 @@ import threading
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Optional
 
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
@@ -26,7 +25,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-main_pool: Optional[ThreadedConnectionPool] = None
+main_pool: ThreadedConnectionPool | None = None
 
 
 @dataclass
@@ -38,7 +37,7 @@ class _TenantPoolEntry:
 # tenant_pools is LRU-ordered; `_tenant_lock` guards the map itself plus the
 # `in_use` refcounts. ThreadedConnectionPool already serializes its own
 # internal state so the outer lock only covers the map mutation window.
-tenant_pools: "OrderedDict[str, _TenantPoolEntry]" = OrderedDict()
+tenant_pools: OrderedDict[str, _TenantPoolEntry] = OrderedDict()
 _tenant_lock = threading.Lock()
 MAX_TENANT_POOLS = 100
 _TENANT_NAME_RE = re.compile(r"^tenant_[a-z0-9]+$")
@@ -66,10 +65,7 @@ def get_main_db_connection():
 
 def _validate_tenant_db_name(tenant_db_name: str) -> None:
     if not _TENANT_NAME_RE.match(tenant_db_name):
-        raise ValueError(
-            f"Invalid tenant database name: {tenant_db_name!r}. "
-            "Must match pattern: tenant_[a-z0-9]+"
-        )
+        raise ValueError(f"Invalid tenant database name: {tenant_db_name!r}. " "Must match pattern: tenant_[a-z0-9]+")
 
 
 def _build_tenant_pool(tenant_db_name: str) -> ThreadedConnectionPool:
@@ -168,7 +164,7 @@ def get_tenant_db_connection(tenant_db_name: str):
 
 
 @contextmanager
-def get_db_session(db_name: Optional[str] = None):
+def get_db_session(db_name: str | None = None):
     """Acquire a pooled connection; commit on success, rollback on error."""
     if db_name:
         _validate_tenant_db_name(db_name)

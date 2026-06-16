@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 外部 AI 视觉模型 OCR 模块
 
@@ -20,10 +19,8 @@
 import base64
 import os
 import threading
-from typing import Optional, Dict, Any
 
 import requests
-
 from loguru import logger
 
 # ============== 配置常量 ==============
@@ -53,7 +50,7 @@ DEFAULT_OCR_PROMPT = """你是一个专业的 OCR 文字识别引擎。请严格
 现在请识别图片内容："""
 
 # 提供商默认配置
-PROVIDER_DEFAULTS: Dict[str, Dict[str, str]] = {
+PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     "openai": {
         "endpoint": "https://api.openai.com/v1/chat/completions",
         "model": "gpt-4o",
@@ -78,12 +75,12 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str]] = {
 
 # ============== 全局状态 ==============
 
-_VISION_OCR_ENABLED: Optional[bool] = None
-_VISION_OCR_CONFIG: Optional[Dict[str, str]] = None
+_VISION_OCR_ENABLED: bool | None = None
+_VISION_OCR_CONFIG: dict[str, str] | None = None
 _VISION_OCR_LOCK = threading.Lock()
 
 
-def _load_vision_ocr_config() -> Optional[Dict[str, str]]:
+def _load_vision_ocr_config() -> dict[str, str] | None:
     """从环境变量加载视觉 OCR 配置"""
     global _VISION_OCR_ENABLED, _VISION_OCR_CONFIG
 
@@ -139,19 +136,18 @@ def _image_to_base64(image_bytes: bytes) -> str:
 
 def _detect_image_type(image_bytes: bytes) -> str:
     """检测图片类型"""
-    if image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+    if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
-    elif image_bytes[:2] == b'\xff\xd8':
+    if image_bytes[:2] == b"\xff\xd8":
         return "image/jpeg"
-    elif image_bytes[:6] in (b'GIF87a', b'GIF89a'):
+    if image_bytes[:6] in (b"GIF87a", b"GIF89a"):
         return "image/gif"
-    elif image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
         return "image/webp"
-    else:
-        return "image/png"  # 默认
+    return "image/png"  # 默认
 
 
-def _call_openai_compatible(config: Dict[str, str], image_bytes: bytes) -> str:
+def _call_openai_compatible(config: dict[str, str], image_bytes: bytes) -> str:
     """调用 OpenAI 兼容 API（包括 OpenAI、硅基流动、通义千问等）"""
     image_base64 = _image_to_base64(image_bytes)
     image_type = _detect_image_type(image_bytes)
@@ -168,13 +164,8 @@ def _call_openai_compatible(config: Dict[str, str], image_bytes: bytes) -> str:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": config["prompt"]},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{image_type};base64,{image_base64}"
-                        }
-                    }
-                ]
+                    {"type": "image_url", "image_url": {"url": f"data:{image_type};base64,{image_base64}"}},
+                ],
             }
         ],
         "max_tokens": 1024,
@@ -182,12 +173,7 @@ def _call_openai_compatible(config: Dict[str, str], image_bytes: bytes) -> str:
     }
 
     try:
-        resp = requests.post(
-            config["endpoint"],
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
+        resp = requests.post(config["endpoint"], headers=headers, json=payload, timeout=30)
         if resp.status_code != 200:
             logger.debug(f"OpenAI 兼容 API 返回异常: {resp.status_code} - {resp.text[:200]}")
             return ""
@@ -210,7 +196,7 @@ def _call_openai_compatible(config: Dict[str, str], image_bytes: bytes) -> str:
         return ""
 
 
-def _call_claude(config: Dict[str, str], image_bytes: bytes) -> str:
+def _call_claude(config: dict[str, str], image_bytes: bytes) -> str:
     """调用 Claude API (Anthropic)"""
     image_base64 = _image_to_base64(image_bytes)
     image_type = _detect_image_type(image_bytes)
@@ -234,21 +220,16 @@ def _call_claude(config: Dict[str, str], image_bytes: bytes) -> str:
                             "type": "base64",
                             "media_type": image_type,
                             "data": image_base64,
-                        }
+                        },
                     },
-                    {"type": "text", "text": config["prompt"]}
-                ]
+                    {"type": "text", "text": config["prompt"]},
+                ],
             }
-        ]
+        ],
     }
 
     try:
-        resp = requests.post(
-            config["endpoint"],
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
+        resp = requests.post(config["endpoint"], headers=headers, json=payload, timeout=30)
         if resp.status_code != 200:
             logger.debug(f"Claude API 返回异常: {resp.status_code} - {resp.text[:200]}")
             return ""
@@ -288,9 +269,8 @@ def vision_ocr(image_bytes: bytes) -> str:
 
     if provider == "claude":
         return _call_claude(config, image_bytes)
-    else:
-        # openai, qwen, siliconflow, openai_compatible 都使用 OpenAI 兼容格式
-        return _call_openai_compatible(config, image_bytes)
+    # openai, qwen, siliconflow, openai_compatible 都使用 OpenAI 兼容格式
+    return _call_openai_compatible(config, image_bytes)
 
 
 def is_vision_ocr_enabled() -> bool:

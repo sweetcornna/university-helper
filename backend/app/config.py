@@ -1,4 +1,3 @@
-from typing import Optional
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -47,14 +46,14 @@ class Settings(BaseSettings):
     # Docs / Swagger UI — default off; opt in via env for local dev
     DOCS_ENABLED: bool = False
 
-    BAIDU_MAP_API_KEY: Optional[str] = None
+    BAIDU_MAP_API_KEY: str | None = None
 
     # Optional bearer token guarding the /metrics endpoint. When set, requests
     # to /metrics must present `Authorization: Bearer <METRICS_TOKEN>`. When
     # unset (default), /metrics is open — acceptable only because the documented
     # nginx topology does not proxy /metrics externally. Set this in any
     # deployment where the uvicorn container is otherwise reachable.
-    METRICS_TOKEN: Optional[str] = None
+    METRICS_TOKEN: str | None = None
 
     @field_validator("SECRET_KEY")
     @classmethod

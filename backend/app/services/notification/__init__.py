@@ -1,4 +1,4 @@
 # Notification Service
-from .providers import NotificationService, NotificationFactory
+from .providers import NotificationFactory, NotificationService
 
 __all__ = ["NotificationService", "NotificationFactory"]

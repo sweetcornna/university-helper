@@ -15,6 +15,7 @@ def _is_valid_tenant_db_name(name: object) -> bool:
     pattern (single source of truth in app.db.session)."""
     return isinstance(name, str) and bool(_TENANT_NAME_RE.match(name))
 
+
 # Public-route set is built once at import. Also allow /docs + /redoc subroutes
 # without re-listing them in app/config.py.
 #
@@ -23,9 +24,7 @@ def _is_valid_tenant_db_name(name: object) -> bool:
 # (/docs/oauth2-redirect, etc.), but /metrics is a single endpoint — a prefix
 # match would silently make any future "/metrics*" route public. The /metrics
 # endpoint enforces its own optional bearer-token guard (METRICS_TOKEN).
-_PUBLIC_PATHS = frozenset(
-    [*(route.rstrip("/") or "/" for route in PUBLIC_ROUTES), "/metrics"]
-)
+_PUBLIC_PATHS = frozenset([*(route.rstrip("/") or "/" for route in PUBLIC_ROUTES), "/metrics"])
 _PUBLIC_PREFIXES = ("/docs", "/redoc")
 
 

@@ -1,15 +1,15 @@
-﻿"""Zhihuishu adapter with minimal task orchestration for API polling."""
+"""Zhihuishu adapter with minimal task orchestration for API polling."""
 
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
 from .answer import ZhihuishuAnswer
 from .auth import ZhihuishuAuth
 from .learning import ZhihuishuLearning
-
 
 logger = logging.getLogger(__name__)
 UNEXPECTED_TASK_ERROR_PREFIX = "Unexpected task failure"
@@ -18,28 +18,28 @@ UNEXPECTED_TASK_ERROR_PREFIX = "Unexpected task failure"
 class ZhihuishuAdapter:
     """Zhihuishu adapter with login/course/video/progress controls."""
 
-    def __init__(self, ai_config: Optional[dict] = None, proxies: Optional[dict] = None):
+    def __init__(self, ai_config: dict | None = None, proxies: dict | None = None):
         self.proxies = proxies or {}
         self.ai_config = ai_config or {"enabled": False}
-        self._config: Dict[str, Any] = {
+        self._config: dict[str, Any] = {
             "speed": 1.0,
             "auto_answer": True,
             "ai_config": dict(self.ai_config),
             "proxies": dict(self.proxies),
         }
         self.auth = ZhihuishuAuth(proxies=self.proxies)
-        self.learning: Optional[ZhihuishuLearning] = None
-        self.answer: Optional[ZhihuishuAnswer] = None
+        self.learning: ZhihuishuLearning | None = None
+        self.answer: ZhihuishuAnswer | None = None
         self._task_lock = threading.Lock()
-        self._task_state: Optional[Dict[str, Any]] = None
-        self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._task_state: dict[str, Any] | None = None
+        self._tasks: dict[str, dict[str, Any]] = {}
 
-    def login_with_qr(self, qr_callback: Callable[[bytes], None]) -> Dict:
+    def login_with_qr(self, qr_callback: Callable[[bytes], None]) -> dict:
         cookies = self.auth.qr_login(qr_callback)
         self._init_services(cookies)
         return {"success": True, "cookies": cookies}
 
-    def login_with_password(self, username: str, password: str) -> Dict:
+    def login_with_password(self, username: str, password: str) -> dict:
         cookies = self.auth.password_login(username, password)
         self._init_services(cookies)
         return {"success": True, "cookies": cookies}
@@ -49,7 +49,7 @@ class ZhihuishuAdapter:
         self.answer = ZhihuishuAnswer(cookies, self.ai_config, self.proxies)
 
     @staticmethod
-    def _task_payload(task: Dict[str, Any], include_videos: bool = False) -> Dict[str, Any]:
+    def _task_payload(task: dict[str, Any], include_videos: bool = False) -> dict[str, Any]:
         payload = {
             "task_id": task.get("task_id"),
             "task_type": task.get("task_type", "course"),
@@ -72,29 +72,23 @@ class ZhihuishuAdapter:
             payload["videos"] = list(task.get("videos", []))
         return payload
 
-    def get_courses(self) -> List[Dict]:
+    def get_courses(self) -> list[dict]:
         if not self.learning:
             raise Exception("Not logged in")
         return self.learning.get_course_list()
 
-    def get_grouped_courses(self) -> List[Dict[str, Any]]:
+    def get_grouped_courses(self) -> list[dict[str, Any]]:
         courses = self.get_courses()
-        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        grouped: dict[str, list[dict[str, Any]]] = {}
         for course in courses:
             group_key = str(
-                course.get("semesterName")
-                or course.get("termName")
-                or course.get("courseTypeName")
-                or "default"
+                course.get("semesterName") or course.get("termName") or course.get("courseTypeName") or "default"
             )
             grouped.setdefault(group_key, []).append(course)
 
-        return [
-            {"group": name, "count": len(items), "courses": items}
-            for name, items in grouped.items()
-        ]
+        return [{"group": name, "count": len(items), "courses": items} for name, items in grouped.items()]
 
-    def get_course_detail(self, course_id: str) -> Dict[str, Any]:
+    def get_course_detail(self, course_id: str) -> dict[str, Any]:
         target = str(course_id)
         for course in self.get_courses():
             current_id = str(course.get("courseId") or course.get("id") or "")
@@ -102,7 +96,7 @@ class ZhihuishuAdapter:
                 return course
         raise Exception("Course not found")
 
-    def get_videos(self, course_id: str) -> List[Dict]:
+    def get_videos(self, course_id: str) -> list[dict]:
         if not self.learning:
             raise Exception("Not logged in")
 
@@ -113,7 +107,7 @@ class ZhihuishuAdapter:
         chapters = self.learning.get_video_list(course_id)
         return self._flatten_videos(chapters)
 
-    def start_course(self, course_id: str, speed: float = 1.0, auto_answer: bool = True) -> Dict:
+    def start_course(self, course_id: str, speed: float = 1.0, auto_answer: bool = True) -> dict:
         if not self.learning:
             raise Exception("Not logged in")
 
@@ -121,7 +115,7 @@ class ZhihuishuAdapter:
         task_id = uuid4().hex
         total = len(videos)
         now = time.time()
-        task_state: Dict[str, Any] = {
+        task_state: dict[str, Any] = {
             "task_id": task_id,
             "course_id": course_id,
             "status": "completed" if total == 0 else "running",
@@ -157,7 +151,7 @@ class ZhihuishuAdapter:
             "progress": self.get_progress(course_id),
         }
 
-    def get_progress(self, course_id: str) -> Dict[str, Any]:
+    def get_progress(self, course_id: str) -> dict[str, Any]:
         with self._task_lock:
             task = dict(self._task_state) if self._task_state else None
 
@@ -195,7 +189,7 @@ class ZhihuishuAdapter:
             "paused": bool(task.get("paused")),
         }
 
-    def pause_task(self) -> Dict[str, Any]:
+    def pause_task(self) -> dict[str, Any]:
         with self._task_lock:
             if not self._task_state:
                 return {"status": "idle", "message": "No running task"}
@@ -207,7 +201,7 @@ class ZhihuishuAdapter:
             self._task_state["updated_at"] = time.time()
             return {"status": "paused", "message": "Task paused"}
 
-    def resume_task(self) -> Dict[str, Any]:
+    def resume_task(self) -> dict[str, Any]:
         with self._task_lock:
             if not self._task_state:
                 return {"status": "idle", "message": "No running task"}
@@ -221,7 +215,7 @@ class ZhihuishuAdapter:
             self._task_state["updated_at"] = time.time()
             return {"status": "running", "message": "Task resumed"}
 
-    def cancel_task(self) -> Dict[str, Any]:
+    def cancel_task(self) -> dict[str, Any]:
         with self._task_lock:
             if not self._task_state:
                 return {"status": "idle", "message": "No running task"}
@@ -232,7 +226,7 @@ class ZhihuishuAdapter:
             self._task_state["updated_at"] = time.time()
             return {"status": "cancelled", "message": "Task cancelled"}
 
-    def list_tasks(self, task_type: Optional[str] = None, course_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_tasks(self, task_type: str | None = None, course_id: str | None = None) -> list[dict[str, Any]]:
         with self._task_lock:
             tasks = [self._task_payload(task) for task in self._tasks.values()]
 
@@ -243,14 +237,14 @@ class ZhihuishuAdapter:
 
         return sorted(tasks, key=lambda item: item.get("updated_at") or 0, reverse=True)
 
-    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._task_lock:
             task = self._tasks.get(task_id)
             if not task:
                 return None
             return self._task_payload(task, include_videos=True)
 
-    def cancel_task_by_id(self, task_id: str) -> Dict[str, Any]:
+    def cancel_task_by_id(self, task_id: str) -> dict[str, Any]:
         with self._task_lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -271,7 +265,7 @@ class ZhihuishuAdapter:
         speed: float = 1.0,
         auto_answer: bool = True,
         task_type: str = "course",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         result = self.start_course(course_id, speed=speed, auto_answer=auto_answer)
         task_id = str(result.get("task_id") or "")
         if task_id:
@@ -283,7 +277,7 @@ class ZhihuishuAdapter:
                     task["updated_at"] = time.time()
         return result
 
-    def start_ai_course_task(self, course_id: str, speed: float = 1.0) -> Dict[str, Any]:
+    def start_ai_course_task(self, course_id: str, speed: float = 1.0) -> dict[str, Any]:
         with self._task_lock:
             self.ai_config["enabled"] = True
             self._config["ai_config"] = dict(self.ai_config)
@@ -291,12 +285,12 @@ class ZhihuishuAdapter:
                 self.answer.ai_enabled = True
         return self.start_course_task(course_id, speed=speed, auto_answer=True, task_type="ai-course")
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         with self._task_lock:
             current_task = dict(self._task_state) if self._task_state else None
             logged_in = self.learning is not None
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "logged_in": logged_in,
             "status": "online" if logged_in else "offline",
             "has_task": bool(current_task),
@@ -306,7 +300,7 @@ class ZhihuishuAdapter:
             payload["progress"] = self.get_progress(str(current_task.get("course_id") or ""))
         return payload
 
-    def logout(self) -> Dict[str, Any]:
+    def logout(self) -> dict[str, Any]:
         with self._task_lock:
             if self._task_state:
                 self._task_state["cancelled"] = True
@@ -319,14 +313,14 @@ class ZhihuishuAdapter:
             self.answer = None
         return {"status": "success", "message": "Logout successful"}
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         with self._task_lock:
             config = dict(self._config)
             config["ai_config"] = dict(self.ai_config)
             config["proxies"] = dict(self.proxies)
             return config
 
-    def update_config(self, update_data: Dict[str, Any]) -> Dict[str, Any]:
+    def update_config(self, update_data: dict[str, Any]) -> dict[str, Any]:
         with self._task_lock:
             if "speed" in update_data and update_data.get("speed") is not None:
                 speed = float(update_data["speed"])
@@ -354,13 +348,13 @@ class ZhihuishuAdapter:
             config["proxies"] = dict(self.proxies)
             return config
 
-    def answer_question(self, question: Dict) -> Optional[str]:
+    def answer_question(self, question: dict) -> str | None:
         if not self.answer:
             raise Exception("Not logged in")
         return self.answer.answer_question(question)
 
     @staticmethod
-    def _extract_questions(item: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_questions(item: dict[str, Any]) -> list[dict[str, Any]]:
         """Pull any embedded quiz questions attached to a video DTO.
 
         Zhihuishu video DTOs may carry per-video questions under one of a few
@@ -374,18 +368,13 @@ class ZhihuishuAdapter:
         return []
 
     @staticmethod
-    def _flatten_videos(chapters: List[Dict[str, Any]]) -> List[Dict]:
-        videos: List[Dict[str, Any]] = []
+    def _flatten_videos(chapters: list[dict[str, Any]]) -> list[dict]:
+        videos: list[dict[str, Any]] = []
         index = 1
         for chapter in chapters or []:
             chapter_videos = chapter.get("videoLearningDtos") or chapter.get("videoDtos") or []
             for item in chapter_videos:
-                title = (
-                    item.get("videoName")
-                    or item.get("name")
-                    or item.get("lessonVideoName")
-                    or f"Video {index}"
-                )
+                title = item.get("videoName") or item.get("name") or item.get("lessonVideoName") or f"Video {index}"
                 videos.append(
                     {
                         "id": str(item.get("videoId") or item.get("id") or index),
@@ -429,7 +418,7 @@ class ZhihuishuAdapter:
             logger.exception("Zhihuishu task crashed: task_id=%s", task_id)
             self._mark_task_error(task_id, f"{UNEXPECTED_TASK_ERROR_PREFIX}: {exc}")
 
-    def _recompute_percentage(self, task: Dict[str, Any]) -> None:
+    def _recompute_percentage(self, task: dict[str, Any]) -> None:
         """Set task percentage from real completed-video counts (caller holds lock)."""
         total = int(task.get("total") or 0)
         completed = int(task.get("completed") or 0)
@@ -494,7 +483,7 @@ class ZhihuishuAdapter:
 
             # --- Phase 2: blocking platform call OUTSIDE the lock ---
             watch_ok = False
-            watch_error: Optional[str] = None
+            watch_error: str | None = None
             try:
                 if self.learning is None:
                     raise Exception("Not logged in")
@@ -547,8 +536,7 @@ class ZhihuishuAdapter:
                         # not silently discarded and the limitation is observable.
                         if computed:
                             logger.info(
-                                "Zhihuishu answer computed but NOT submitted "
-                                "(submission unimplemented): task_id=%s",
+                                "Zhihuishu answer computed but NOT submitted " "(submission unimplemented): task_id=%s",
                                 task_id,
                             )
                     except Exception as exc:  # noqa: BLE001 - log, do not abort the course

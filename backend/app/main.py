@@ -1,21 +1,24 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from urllib.parse import urlparse
+
+from app.api.v1 import auth, chaoxing
+from app.api.v1.course import cleanup_expired_entries
+from app.api.v1.metrics import record_request
+from app.api.v1.metrics import router as metrics_router
 from app.config import settings
-from app.core.exceptions import AppException
 from app.core.credential_crypto import init_cipher
+from app.core.exceptions import AppException
 from app.core.logging_setup import configure_logging
 from app.core.tracing import configure_tracing
 from app.db.session import get_db_session
 from app.middleware.tenant_isolation import tenant_isolation_middleware
-from app.api.v1 import auth, chaoxing
-from app.api.v1.course import cleanup_expired_entries
-from app.api.v1.metrics import router as metrics_router, record_request
 
 logger = logging.getLogger(__name__)
 _CLEANUP_INTERVAL_SECONDS = 60
@@ -188,6 +191,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 
 from app.api.v1 import course
+
 app.include_router(course.router, prefix="/api/v1/course", tags=["course"])
 app.include_router(chaoxing.router, prefix="/api/v1/chaoxing", tags=["chaoxing"])
 app.include_router(metrics_router, tags=["metrics"])
@@ -217,8 +221,6 @@ def health():
                 # for the next caller that reuses it.
                 conn.autocommit = False
     except Exception as e:
-        raise HTTPException(
-            status_code=503, detail=f"db unavailable: {type(e).__name__}"
-        )
+        raise HTTPException(status_code=503, detail=f"db unavailable: {type(e).__name__}")
     status = "ok" if cleanup_alive else "degraded"
     return {"status": status, "db": "ok", "cleanup_task": "alive" if cleanup_alive else "dead"}

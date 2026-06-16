@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -51,7 +51,7 @@ class _FernetCipher:
     def decrypt(self, value: str) -> str:
         if not value.startswith(_PREFIX):
             return value
-        token = value[len(_PREFIX):].encode("ascii")
+        token = value[len(_PREFIX) :].encode("ascii")
         return self._fernet.decrypt(token).decode("utf-8")
 
 
@@ -85,12 +85,9 @@ def _build_cipher() -> _FernetCipher | _NoopCipher:
         return _FernetCipher(raw.encode("ascii"))
     except (ValueError, TypeError) as exc:
         if _is_production():
-            raise CredentialCryptoError(
-                f"{_ENV_VAR} is invalid: {exc}. Expected a urlsafe-base64 Fernet key."
-            ) from exc
+            raise CredentialCryptoError(f"{_ENV_VAR} is invalid: {exc}. Expected a urlsafe-base64 Fernet key.") from exc
         logger.warning(
-            "!!! %s is invalid (%s) — using NO-OP cipher. Credentials will be "
-            "stored in PLAINTEXT. !!!",
+            "!!! %s is invalid (%s) — using NO-OP cipher. Credentials will be " "stored in PLAINTEXT. !!!",
             _ENV_VAR,
             exc,
         )

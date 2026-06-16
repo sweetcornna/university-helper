@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Chaoxing remote course endpoints exposed to the web frontend."""
 
 from __future__ import annotations
@@ -6,9 +5,10 @@ from __future__ import annotations
 import html
 import re
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlencode, urljoin
 
 from bs4 import BeautifulSoup
@@ -37,7 +37,7 @@ class ChaoxingCourseContext:
     def selector(self) -> str:
         return f"{self.course_id}_{self.class_id}_{self.cpi}" if self.cpi else f"{self.course_id}_{self.class_id}"
 
-    def as_dict(self) -> Dict[str, str]:
+    def as_dict(self) -> dict[str, str]:
         return {
             "id": self.selector,
             "courseId": self.course_id,
@@ -57,13 +57,15 @@ class ChaoxingPortalTab:
     key: str
     label: str
     page_header: int
-    frame_builder: Optional[Callable[["ChaoxingCoursePortalService", ChaoxingCourseContext], str]] = None
+    frame_builder: Callable[[ChaoxingCoursePortalService, ChaoxingCourseContext], str] | None = None
     item_key: str = "items"
     fetch_kind: str = "html"
 
-    def as_dict(self, service: "ChaoxingCoursePortalService", context: Optional[ChaoxingCourseContext] = None) -> Dict[str, Any]:
+    def as_dict(
+        self, service: ChaoxingCoursePortalService, context: ChaoxingCourseContext | None = None
+    ) -> dict[str, Any]:
         fetchable = self.frame_builder is not None or self.fetch_kind == "api"
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "key": self.key,
             "label": self.label,
             "pageHeader": self.page_header,
@@ -109,7 +111,7 @@ def _first_text(*values: Any) -> str:
     return ""
 
 
-def _course_value(course: Dict[str, Any], *keys: str) -> str:
+def _course_value(course: dict[str, Any], *keys: str) -> str:
     for key in keys:
         if key in course:
             value = _clean_text(course.get(key))
@@ -118,7 +120,7 @@ def _course_value(course: Dict[str, Any], *keys: str) -> str:
     return ""
 
 
-def _split_selector(selector: str) -> Dict[str, str]:
+def _split_selector(selector: str) -> dict[str, str]:
     parts = [part.strip() for part in str(selector or "").split("_") if part.strip()]
     return {
         "course_id": parts[0] if len(parts) >= 1 else "",
@@ -127,7 +129,7 @@ def _split_selector(selector: str) -> Dict[str, str]:
     }
 
 
-def _to_iso(value: Any) -> Optional[str]:
+def _to_iso(value: Any) -> str | None:
     try:
         parsed = int(value)
     except (TypeError, ValueError):
@@ -135,10 +137,10 @@ def _to_iso(value: Any) -> Optional[str]:
     if parsed <= 0:
         return None
     timestamp = parsed / 1000 if parsed > 1_000_000_000_000 else parsed
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
 
 
-def _safe_json(response: Any) -> Dict[str, Any]:
+def _safe_json(response: Any) -> dict[str, Any]:
     try:
         data = response.json()
     except Exception:
@@ -146,7 +148,7 @@ def _safe_json(response: Any) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _request_url(base_url: str, params: Dict[str, Any]) -> str:
+def _request_url(base_url: str, params: dict[str, Any]) -> str:
     clean_params = {key: value for key, value in params.items() if value not in (None, "")}
     query = urlencode(clean_params)
     return f"{base_url}?{query}" if query else base_url
@@ -199,24 +201,32 @@ class ChaoxingCoursePortalService:
     """Build and fetch Chaoxing course tabs using desktop-client routes."""
 
     def __init__(self) -> None:
-        self.tabs: List[ChaoxingPortalTab] = [
-            ChaoxingPortalTab("activities", "活动", 0, ChaoxingCoursePortalService.build_activities_url, "activities", "api"),
-            ChaoxingPortalTab("chapters", "章节", 1, ChaoxingCoursePortalService.build_chapters_url, "chapters", "html"),
+        self.tabs: list[ChaoxingPortalTab] = [
+            ChaoxingPortalTab(
+                "activities", "活动", 0, ChaoxingCoursePortalService.build_activities_url, "activities", "api"
+            ),
+            ChaoxingPortalTab(
+                "chapters", "章节", 1, ChaoxingCoursePortalService.build_chapters_url, "chapters", "html"
+            ),
             ChaoxingPortalTab("discussions", "讨论", 2, None, "items", "shell"),
-            ChaoxingPortalTab("resources", "资料", 3, ChaoxingCoursePortalService.build_resources_url, "resources", "html"),
+            ChaoxingPortalTab(
+                "resources", "资料", 3, ChaoxingCoursePortalService.build_resources_url, "resources", "html"
+            ),
             ChaoxingPortalTab("wrong_set", "错题集", 4, None, "items", "shell"),
             ChaoxingPortalTab("learning_record", "学习记录", 6, None, "items", "shell"),
-            ChaoxingPortalTab("homework", "作业", 8, ChaoxingCoursePortalService.build_homework_url, "homework", "html"),
+            ChaoxingPortalTab(
+                "homework", "作业", 8, ChaoxingCoursePortalService.build_homework_url, "homework", "html"
+            ),
             ChaoxingPortalTab("tests", "考试", 9, ChaoxingCoursePortalService.build_tests_url, "tests", "html"),
         ]
         self._tab_index = {tab.key: tab for tab in self.tabs}
 
-    def list_tabs(self) -> List[Dict[str, Any]]:
+    def list_tabs(self) -> list[dict[str, Any]]:
         return [tab.as_dict(self) for tab in self.tabs]
 
-    def resolve_course(self, selector: str, courses: Iterable[Dict[str, Any]]) -> ChaoxingCourseContext:
+    def resolve_course(self, selector: str, courses: Iterable[dict[str, Any]]) -> ChaoxingCourseContext:
         requested = _split_selector(selector)
-        matched: Optional[Dict[str, Any]] = None
+        matched: dict[str, Any] | None = None
 
         for course in courses or []:
             course_id = _course_value(course, "courseId", "course_id", "rawCourseId")
@@ -276,7 +286,7 @@ class ChaoxingCoursePortalService:
         }
         return _request_url(COURSE_SHELL_URL, params)
 
-    def build_portal_urls(self, context: ChaoxingCourseContext) -> Dict[str, Any]:
+    def build_portal_urls(self, context: ChaoxingCourseContext) -> dict[str, Any]:
         return {
             "course": context.as_dict(),
             "tabs": [tab.as_dict(self, context) for tab in self.tabs],
@@ -376,7 +386,7 @@ class ChaoxingCoursePortalService:
             },
         )
 
-    def fetch_tab(self, session: Any, context: ChaoxingCourseContext, tab_key: str) -> Dict[str, Any]:
+    def fetch_tab(self, session: Any, context: ChaoxingCourseContext, tab_key: str) -> dict[str, Any]:
         tab = self._get_tab(tab_key)
         if tab.key == "activities":
             return self.fetch_activities(session, context)
@@ -404,7 +414,7 @@ class ChaoxingCoursePortalService:
             tab.item_key: items,
         }
 
-    def fetch_activities(self, session: Any, context: ChaoxingCourseContext) -> Dict[str, Any]:
+    def fetch_activities(self, session: Any, context: ChaoxingCourseContext) -> dict[str, Any]:
         tab = self._get_tab("activities")
         response = session.get(
             ACTIVE_API_URL,
@@ -430,7 +440,7 @@ class ChaoxingCoursePortalService:
             "raw": data,
         }
 
-    def fetch_chapters(self, session: Any, context: ChaoxingCourseContext) -> Dict[str, Any]:
+    def fetch_chapters(self, session: Any, context: ChaoxingCourseContext) -> dict[str, Any]:
         tab = self._get_tab("chapters")
         frame_url = self.build_chapters_url(context)
         response = session.get(frame_url, timeout=12)
@@ -449,23 +459,25 @@ class ChaoxingCoursePortalService:
             "raw": parsed,
         }
 
-    def parse_activities(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def parse_activities(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         active_list = payload.get("data", {}).get("activeList", []) if isinstance(payload.get("data"), dict) else []
         if not isinstance(active_list, list):
             return []
         return [self._normalize_activity(item) for item in active_list if isinstance(item, dict)]
 
-    def parse_html_tab(self, tab_key: str, html_text: str, base_url: str) -> List[Dict[str, Any]]:
+    def parse_html_tab(self, tab_key: str, html_text: str, base_url: str) -> list[dict[str, Any]]:
         if not html_text:
             return []
         soup = BeautifulSoup(html_text, "lxml")
         if tab_key == "resources":
             return self._parse_link_items(soup, base_url, status_tokens=())
         if tab_key in {"homework", "tests"}:
-            return self._parse_link_items(soup, base_url, status_tokens=("未开始", "未提交", "已提交", "待批阅", "已完成", "已结束"))
+            return self._parse_link_items(
+                soup, base_url, status_tokens=("未开始", "未提交", "已提交", "待批阅", "已完成", "已结束")
+            )
         return self._parse_link_items(soup, base_url, status_tokens=())
 
-    def _normalize_activity(self, activity: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_activity(self, activity: dict[str, Any]) -> dict[str, Any]:
         status_code = int(activity.get("status") or 0)
         active_id = _clean_text(activity.get("id") or activity.get("activeId"))
         other_id = int(activity.get("otherId") or 0)
@@ -496,8 +508,8 @@ class ChaoxingCoursePortalService:
         soup: BeautifulSoup,
         base_url: str,
         status_tokens: Iterable[str],
-    ) -> List[Dict[str, Any]]:
-        items: List[Dict[str, Any]] = []
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
 
         for link in soup.select("a[href]"):

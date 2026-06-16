@@ -1,9 +1,11 @@
 """智慧树二维码登录模块"""
-import time
+
 import json
+import time
 from base64 import b64decode
-from typing import Callable, Optional
+from collections.abc import Callable
 from urllib.parse import unquote
+
 import requests
 from requests.adapters import HTTPAdapter, Retry
 
@@ -11,12 +13,12 @@ from requests.adapters import HTTPAdapter, Retry
 class ZhihuishuAuth:
     """智慧树认证服务"""
 
-    def __init__(self, proxies: Optional[dict] = None):
+    def __init__(self, proxies: dict | None = None):
         self.proxies = proxies or {}
         self.session = requests.Session()
         retry = Retry(total=5, backoff_factor=0.1, status_forcelist=[500, 502, 503, 504])
-        self.session.mount('http://', HTTPAdapter(max_retries=retry))
-        self.session.mount('https://', HTTPAdapter(max_retries=retry))
+        self.session.mount("http://", HTTPAdapter(max_retries=retry))
+        self.session.mount("https://", HTTPAdapter(max_retries=retry))
         self.uuid = None
         self._cookies = None
 
@@ -66,7 +68,9 @@ class ZhihuishuAuth:
         if _retries <= 0:
             raise TimeoutError("QR login retries exhausted")
 
-        login_page = "https://passport.zhihuishu.com/login?service=https://onlineservice-api.zhihuishu.com/login/gologin"
+        login_page = (
+            "https://passport.zhihuishu.com/login?service=https://onlineservice-api.zhihuishu.com/login/gologin"
+        )
         qr_page = "https://passport.zhihuishu.com/qrCodeLogin/getLoginQrImg"
         query_page = "https://passport.zhihuishu.com/qrCodeLogin/getLoginQrInfo"
 
@@ -84,13 +88,12 @@ class ZhihuishuAuth:
                 status = msg.get("status")
                 if status == -1:
                     continue  # 未扫描
-                elif status == 0:
+                if status == 0:
                     if not scanned:
                         scanned = True
                 elif status == 1:
                     # 登录成功
-                    self.session.get(login_page, params={"pwd": msg["oncePassword"]},
-                                   proxies=self.proxies, timeout=10)
+                    self.session.get(login_page, params={"pwd": msg["oncePassword"]}, proxies=self.proxies, timeout=10)
                     self.cookies = self.session.cookies
                     if not self.cookies:
                         raise Exception("No cookies found")
@@ -118,7 +121,9 @@ class ZhihuishuAuth:
         Returns:
             登录后的 cookies 字典
         """
-        login_page = "https://passport.zhihuishu.com/login?service=https://onlineservice-api.zhihuishu.com/login/gologin"
+        login_page = (
+            "https://passport.zhihuishu.com/login?service=https://onlineservice-api.zhihuishu.com/login/gologin"
+        )
         valid_url = "https://passport.zhihuishu.com/user/validateAccountAndPassword"
 
         try:
@@ -131,10 +136,9 @@ class ZhihuishuAuth:
                 self.session.get(login_page, params=params, proxies=self.proxies, timeout=10)
                 self.cookies = self.session.cookies
                 return self.cookies
-            elif user_info.get("status") == -2:
+            if user_info.get("status") == -2:
                 raise ValueError("Username or password invalid")
-            else:
-                raise Exception(f"Login failed: {user_info.get('msg')}")
+            raise Exception(f"Login failed: {user_info.get('msg')}")
 
         except Exception as e:
             raise Exception(f"Password login failed: {e}") from e

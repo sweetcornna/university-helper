@@ -1,8 +1,10 @@
 [project]
 name = "university-helper-backend"
-version = "1.0.0"
+version = "1.1.0"
 description = "Multi-tenant campus helper backend (Chaoxing + Zhihuishu)"
-requires-python = ">=3.10"
+# Runtime is uniformly 3.11 (Docker python:3.11-slim, ruff target-version py311,
+# mypy 3.11) and the code uses 3.11-only stdlib (datetime.UTC) plus 3.10 `match`.
+requires-python = ">=3.11"
 readme = { file = "../README.md", content-type = "text/markdown" }
 license = { file = "../LICENSE" }
 
@@ -52,6 +54,31 @@ ignore = [
     "E501",     # line length handled by formatter
     "PLR0913",  # too many args — common in service signatures
     "PLR2004",  # magic value comparisons
+    # --- Baseline for adopting ruff on a mature codebase (2026-06). Real
+    # correctness issues (pyflakes F*, etc.) are fixed; the rules below are
+    # idiomatic-for-this-project or subjective-complexity and are suppressed
+    # project-wide so `ruff check` is enforceable in CI. Ratchet down later. ---
+    "B008",     # `Depends()` in arg defaults is the idiomatic FastAPI pattern
+    "TID252",   # relative imports are intentional within the course sub-packages
+    "PLW0603",  # `global` for module-level singletons/caches is intentional
+    "PLW0602",  # ditto (global declared, mutated in place)
+    "PLR0911",  # too many return statements (legacy parsers/dispatchers)
+    "PLR0912",  # too many branches (legacy parsers/dispatchers)
+    "PLR0915",  # too many statements (legacy worker loops)
+    "PLR1714",  # merge repeated `==` into `in` — subjective
+    "B904",     # raise ... from — legacy except sites; revisit incrementally
+    "B007",     # unused loop control variable
+    "B023",     # loop-var closures — used synchronously within the same iteration
+    "SIM105",   # contextlib.suppress over try/except/pass — subjective
+    "SIM103",   # return condition directly — subjective
+    "SIM108",   # ternary over if/else — subjective
+    "SIM117",   # single combined `with` — subjective
+    "SIM223",   # short-circuit on falsy — subjective
+    "SIM401",   # dict.get over if/else — subjective
+    "RET503",   # implicit return None — subjective
+    "RET504",   # unnecessary assignment before return — subjective
+    "UP038",    # isinstance(x, (A, B)) -> A | B (keep tuple form for clarity)
+    "E402",     # module import not at top — intentional late imports (circular-dep)
 ]
 
 [tool.ruff.lint.per-file-ignores]

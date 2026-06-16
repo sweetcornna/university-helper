@@ -1,17 +1,19 @@
-from psycopg2 import sql
-import psycopg2
-import re
-import os
-import time
-import json
-import hmac
-import hashlib
-import base64
-import logging
 import asyncio
-from app.core.security import hash_password, verify_password, create_access_token
-from app.db.session import get_db_session
+import base64
+import hashlib
+import hmac
+import json
+import logging
+import os
+import re
+import time
+
+import psycopg2
+from psycopg2 import sql
+
 from app.config import settings
+from app.core.security import create_access_token, hash_password, verify_password
+from app.db.session import get_db_session
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +65,14 @@ class AuthService:
 
     def _validate_password_strength(self, password: str) -> None:
         if len(password.encode("utf-8")) > self._MAX_PASSWORD_BYTES:
-            raise ValueError(
-                f"Password must not exceed {self._MAX_PASSWORD_BYTES} bytes"
-            )
+            raise ValueError(f"Password must not exceed {self._MAX_PASSWORD_BYTES} bytes")
         if len(password) < 8:
             raise ValueError("Password must be at least 8 characters")
-        if not re.search(r'[A-Z]', password):
+        if not re.search(r"[A-Z]", password):
             raise ValueError("Password must contain uppercase letter")
-        if not re.search(r'[a-z]', password):
+        if not re.search(r"[a-z]", password):
             raise ValueError("Password must contain lowercase letter")
-        if not re.search(r'\d', password):
+        if not re.search(r"\d", password):
             raise ValueError("Password must contain digit")
 
     @staticmethod
@@ -99,30 +99,22 @@ class AuthService:
                 database=settings.MAIN_DB_NAME,
                 user=settings.MAIN_DB_USER,
                 password=settings.MAIN_DB_PASSWORD,
-                port=settings.MAIN_DB_PORT
+                port=settings.MAIN_DB_PORT,
             )
             ddl_conn.autocommit = True
             with ddl_conn.cursor() as ddl_cur:
                 try:
                     ddl_cur.execute(
-                        sql.SQL("CREATE DATABASE {} TEMPLATE tenant_template").format(
-                            sql.Identifier(tenant_db_name)
-                        )
+                        sql.SQL("CREATE DATABASE {} TEMPLATE tenant_template").format(sql.Identifier(tenant_db_name))
                     )
                 except psycopg2.errors.DuplicateDatabase:
                     logger.warning(
                         "Tenant database %s already existed (orphan); dropping and recreating",
                         tenant_db_name,
                     )
+                    ddl_cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(tenant_db_name)))
                     ddl_cur.execute(
-                        sql.SQL("DROP DATABASE IF EXISTS {}").format(
-                            sql.Identifier(tenant_db_name)
-                        )
-                    )
-                    ddl_cur.execute(
-                        sql.SQL("CREATE DATABASE {} TEMPLATE tenant_template").format(
-                            sql.Identifier(tenant_db_name)
-                        )
+                        sql.SQL("CREATE DATABASE {} TEMPLATE tenant_template").format(sql.Identifier(tenant_db_name))
                     )
             logger.info("Tenant database %s created successfully", tenant_db_name)
         finally:
@@ -140,30 +132,22 @@ class AuthService:
                 database=settings.MAIN_DB_NAME,
                 user=settings.MAIN_DB_USER,
                 password=settings.MAIN_DB_PASSWORD,
-                port=settings.MAIN_DB_PORT
+                port=settings.MAIN_DB_PORT,
             )
             ddl_conn.autocommit = True
             with ddl_conn.cursor() as ddl_cur:
-                ddl_cur.execute(
-                    sql.SQL("DROP DATABASE IF EXISTS {}").format(
-                        sql.Identifier(tenant_db_name)
-                    )
-                )
+                ddl_cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(tenant_db_name)))
             logger.info("Dropped tenant database %s on rollback", tenant_db_name)
         except Exception:
-            logger.exception(
-                "Failed to drop tenant database %s during rollback", tenant_db_name
-            )
+            logger.exception("Failed to drop tenant database %s during rollback", tenant_db_name)
         finally:
             if ddl_conn:
                 ddl_conn.close()
 
     # Must align with _validate_tenant_db_name in app/db/session.py
-    _USERNAME_RE = re.compile(r'^[a-z0-9]+$')
+    _USERNAME_RE = re.compile(r"^[a-z0-9]+$")
 
-    def _insert_user_row(
-        self, username: str, email: str, password_hash: str, tenant_db_name: str
-    ) -> int:
+    def _insert_user_row(self, username: str, email: str, password_hash: str, tenant_db_name: str) -> int:
         """Synchronous DB block — must be called from a worker thread.
 
         We trust the UNIQUE constraints on (email, username, tenant_db_name)
@@ -194,14 +178,10 @@ class AuthService:
             with get_db_session() as conn, conn.cursor() as cur:
                 cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
         except Exception:
-            logger.exception(
-                "Failed to roll back user row id=%s after tenant DB failure", user_id
-            )
+            logger.exception("Failed to roll back user row id=%s after tenant DB failure", user_id)
 
     def _build_auth_response(self, user_id: int, tenant_db_name: str) -> dict:
-        access_token = create_access_token(
-            {"user_id": user_id, "tenant_db_name": tenant_db_name}
-        )
+        access_token = create_access_token({"user_id": user_id, "tenant_db_name": tenant_db_name})
         result = {
             "access_token": access_token,
             "token_type": "bearer",
@@ -221,9 +201,7 @@ class AuthService:
         password_hash = await asyncio.to_thread(hash_password, password)
         tenant_db_name = f"tenant_{username}"
 
-        user_id = await asyncio.to_thread(
-            self._insert_user_row, username, email, password_hash, tenant_db_name
-        )
+        user_id = await asyncio.to_thread(self._insert_user_row, username, email, password_hash, tenant_db_name)
 
         # Create tenant database; roll back user row (and drop any partially
         # created tenant DB) on failure so neither step leaves an orphan.
@@ -232,7 +210,8 @@ class AuthService:
         except Exception:
             logger.exception(
                 "Tenant DB creation failed for %s; rolling back user row id=%s",
-                tenant_db_name, user_id,
+                tenant_db_name,
+                user_id,
             )
             await asyncio.to_thread(self._rollback_user_row, user_id)
             await asyncio.to_thread(self._drop_tenant_database, tenant_db_name)

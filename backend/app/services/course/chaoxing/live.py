@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 import json
 import time
 
-from api.logger import logger
-
 from api.base import SessionManager
 from api.config import GlobalConst as gc
+from api.logger import logger
 
 
 class Live:
@@ -15,9 +13,7 @@ class Live:
         self.course_id = course_id  # 课程ID
         self.name = self.attachment.get("property", {}).get("title", "未知直播")  # 直播名称
         self.headers = gc.HEADERS.copy()
-        self.headers.update({
-            "Referer": "https://mooc1.chaoxing.com/ananas/modules/live/index.html?v=2022-1214-1139"
-        })
+        self.headers.update({"Referer": "https://mooc1.chaoxing.com/ananas/modules/live/index.html?v=2022-1214-1139"})
 
     def do_finish(self):
         """提交直播观看时长（核心方法）"""
@@ -25,14 +21,14 @@ class Live:
         stream_name = self.attachment.get("property", {}).get("streamName")
         vdoid = self.attachment.get("property", {}).get("vdoid")
         user_id = self.defaults.get("userid")
-        
+
         if not all([stream_name, vdoid, user_id]):
             logger.error("缺少直播必要参数，无法提交时长")
             return False
-        
+
         # 构造时长记录请求URL（超星直播时长记录接口）
         url = f"https://zhibo.chaoxing.com/saveTimePc?streamName={stream_name}&vdoid={vdoid}&userId={user_id}&isStart=0&t={int(time.time()*1000)}&courseId={self.course_id}"
-        
+
         # 发送请求记录时长
         session = SessionManager.get_session()
         try:
@@ -44,23 +40,23 @@ class Live:
             logger.error(f"提交直播时长失败: {str(e)}")
             return False
 
-    def get_status(self) -> dict|None:
+    def get_status(self) -> dict | None:
         """获取直播状态（总时长等信息）"""
         live_id = self.attachment.get("property", {}).get("liveId")
         user_id = self.defaults.get("userid")
         clazz_id = self.defaults.get("clazzId")
         knowledge_id = self.defaults.get("knowledgeid")
-        
+
         if not all([live_id, user_id, clazz_id, knowledge_id]):
             logger.error("缺少直播状态查询必要参数")
             return None
-        
+
         # 构造直播状态请求URL
         # jobid 存储在解码后任务的顶层（decode._process_live_task），
         # property 字典里并没有 _jobid 这个键，旧代码因此始终发送空 jobid。
         job_id = self.attachment.get("jobid", "") or self.attachment.get("property", {}).get("jobid", "")
         status_url = f"https://mooc1.chaoxing.com/ananas/live/liveinfo?liveid={live_id}&userid={user_id}&clazzid={clazz_id}&knowledgeid={knowledge_id}&courseid={self.course_id}&jobid={job_id}&ut=s"
-        
+
         # 发送请求并解析状态（包含总时长）
         session = SessionManager.get_session()
         try:

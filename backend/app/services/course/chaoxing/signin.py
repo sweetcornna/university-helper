@@ -6,8 +6,8 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 from uuid import uuid4
 
@@ -40,8 +40,7 @@ LOGIN_URL = "https://passport2.chaoxing.com/fanyalogin"
 COURSE_LIST_URL = "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/courselistdata"
 INTERACTION_URL = "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/interaction"
 COURSE_LIST_REFERER = (
-    "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/interaction"
-    "?moocDomain=https://mooc1-1.chaoxing.com/mooc-ans"
+    "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/interaction" "?moocDomain=https://mooc1-1.chaoxing.com/mooc-ans"
 )
 ACTIVE_LIST_URL = "https://mobilelearn.chaoxing.com/v2/apis/active/student/activelist"
 PPT_ACTIVE_INFO_URL = "https://mobilelearn.chaoxing.com/v2/apis/active/getPPTActiveInfo"
@@ -74,7 +73,7 @@ _FALLBACK_HIDDEN_INPUT_AFTER = 1400
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _extract_enc(qr_code: str) -> str:
@@ -92,7 +91,7 @@ def _extract_enc(qr_code: str) -> str:
     return raw[start:] if end == -1 else raw[start:end]
 
 
-def _parse_course_filter(course_filter: str) -> tuple[Optional[str], Optional[str]]:
+def _parse_course_filter(course_filter: str) -> tuple[str | None, str | None]:
     if not course_filter:
         return None, None
     raw = str(course_filter or "").strip()
@@ -107,14 +106,14 @@ def _parse_course_filter(course_filter: str) -> tuple[Optional[str], Optional[st
     return values[0], None
 
 
-def _as_filter_set(values: Optional[Any]) -> set[str]:
+def _as_filter_set(values: Any | None) -> set[str]:
     if values is None:
         return set()
     source = values if isinstance(values, list) else [values]
     return {str(item or "").strip() for item in source if str(item or "").strip()}
 
 
-def _course_selector(course: Dict[str, Any]) -> str:
+def _course_selector(course: dict[str, Any]) -> str:
     course_id = str(course.get("courseId") or course.get("rawCourseId") or "").strip()
     class_id = str(course.get("classId") or course.get("clazzId") or "").strip()
     cpi = str(course.get("cpi") or "").strip()
@@ -123,7 +122,7 @@ def _course_selector(course: Dict[str, Any]) -> str:
     return course_id or class_id
 
 
-def _remote_request_url(base_url: str, params: Dict[str, Any]) -> str:
+def _remote_request_url(base_url: str, params: dict[str, Any]) -> str:
     clean_params = {key: value for key, value in params.items() if value not in (None, "")}
     query = urlencode(clean_params)
     return f"{base_url}?{query}" if query else base_url
@@ -135,7 +134,7 @@ def build_remote_sign_endpoints(
     active_id: str = "",
     uid: str = "",
     fid: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     course_id = str(course_id or "").strip()
     class_id = str(class_id or "").strip()
     active_id = str(active_id or "").strip()
@@ -170,7 +169,7 @@ def build_remote_sign_endpoints(
         "fid": fid,
     }
 
-    def endpoint(name: str, base_url: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def endpoint(name: str, base_url: str, params: dict[str, Any]) -> dict[str, Any]:
         return {
             "name": name,
             "method": "GET",
@@ -219,11 +218,7 @@ class ChaoxingSigninClient:
 
     @property
     def uid(self) -> str:
-        return (
-            self.session.cookies.get("_uid")
-            or self.session.cookies.get("UID")
-            or ""
-        )
+        return self.session.cookies.get("_uid") or self.session.cookies.get("UID") or ""
 
     @property
     def fid(self) -> str:
@@ -232,7 +227,7 @@ class ChaoxingSigninClient:
     def _encrypt_des(self, raw_text: str) -> str:
         if DES is None:
             return raw_text
-        key = "u2oh6Vu^HWe40fj".encode("utf-8")[:8]
+        key = b"u2oh6Vu^HWe40fj"[:8]
         cipher = DES.new(key, DES.MODE_ECB)
         encrypted = cipher.encrypt(pad(raw_text.encode("utf-8"), DES.block_size))
         return binascii.hexlify(encrypted).decode("utf-8")
@@ -240,19 +235,19 @@ class ChaoxingSigninClient:
     def _encrypt_aes(self, raw_text: str) -> str:
         if AES is None:
             return raw_text
-        key = "u2oh6Vu^HWe4_AES".encode("utf-8")
+        key = b"u2oh6Vu^HWe4_AES"
         cipher = AES.new(key, AES.MODE_CBC, iv=key)
         encrypted = cipher.encrypt(pad(raw_text.encode("utf-8"), AES.block_size))
         return base64.b64encode(encrypted).decode("utf-8")
 
     @staticmethod
-    def _safe_json(resp: requests.Response) -> Dict[str, Any]:
+    def _safe_json(resp: requests.Response) -> dict[str, Any]:
         try:
             return resp.json()
         except Exception:
             return {}
 
-    def login(self, username: str, password: str) -> Dict[str, Any]:
+    def login(self, username: str, password: str) -> dict[str, Any]:
         self.username = username
 
         login_attempts = [
@@ -304,12 +299,7 @@ class ChaoxingSigninClient:
                     },
                 }
 
-            last_message = (
-                data.get("msg2")
-                or data.get("msg")
-                or data.get("message")
-                or last_message
-            )
+            last_message = data.get("msg2") or data.get("msg") or data.get("message") or last_message
 
         return {"status": False, "message": last_message}
 
@@ -326,19 +316,19 @@ class ChaoxingSigninClient:
         idx = resp.text.find(marker)
         if idx == -1:
             return ""
-        snippet = resp.text[idx: idx + 180]
+        snippet = resp.text[idx : idx + 180]
         name_match = re.search(r">([^<]+)</", snippet)
         if not name_match:
             return ""
         return html.unescape(name_match.group(1).strip())
 
-    def get_courses(self) -> List[Dict[str, Any]]:
+    def get_courses(self) -> list[dict[str, Any]]:
         course_folders = [0]
         course_folders.extend(self._parse_course_folders())
 
         seen_folders: set[str] = set()
         seen_courses: set[tuple[str, str]] = set()
-        merged_courses: List[Dict[str, Any]] = []
+        merged_courses: list[dict[str, Any]] = []
 
         for folder_id in course_folders:
             folder_key = str(folder_id)
@@ -372,7 +362,7 @@ class ChaoxingSigninClient:
 
         return merged_courses
 
-    def _parse_course_folders(self) -> List[str]:
+    def _parse_course_folders(self) -> list[str]:
         try:
             resp = self.session.get(INTERACTION_URL, timeout=12)
         except requests.RequestException:
@@ -380,7 +370,7 @@ class ChaoxingSigninClient:
 
         content = resp.text or ""
         seen: set[str] = set()
-        folders: List[str] = []
+        folders: list[str] = []
         for pattern in (
             r'fileid=["\'](\d+)["\']',
             r'data-fileid=["\'](\d+)["\']',
@@ -393,9 +383,9 @@ class ChaoxingSigninClient:
                     folders.append(folder_id)
         return folders
 
-    def _parse_courses(self, content: str) -> List[Dict[str, Any]]:
+    def _parse_courses(self, content: str) -> list[dict[str, Any]]:
         course_index: dict[tuple[str, str], int] = {}
-        courses: List[Dict[str, Any]] = []
+        courses: list[dict[str, Any]] = []
 
         def _normalize_name(raw_name: str, course_id: str) -> str:
             value = html.unescape((raw_name or "").strip())
@@ -451,11 +441,7 @@ class ChaoxingSigninClient:
 
             cpi_match = re.search(r"(?:[?&]cpi=|\"cpi\"\s*:\s*\"?)(\d+)", snippet)
             cpi = preferred_cpi or (cpi_match.group(1) if cpi_match else "")
-            name = (
-                _normalize_name(preferred_name, course_id)
-                if preferred_name
-                else _extract_name(snippet, course_id)
-            )
+            name = _normalize_name(preferred_name, course_id) if preferred_name else _extract_name(snippet, course_id)
 
             course_key = f"{course_id}_{class_id}_{cpi}" if cpi else f"{course_id}_{class_id}"
             courses.append(
@@ -488,7 +474,9 @@ class ChaoxingSigninClient:
                     course_id, class_id = id_match.group(1), id_match.group(2)
 
                 course_input = card.select_one("input.courseId, input[class*='courseId'], input[name*='courseId']")
-                class_input = card.select_one("input.clazzId, input.classId, input[class*='clazzId'], input[class*='classId'], input[name*='clazzId'], input[name*='classId']")
+                class_input = card.select_one(
+                    "input.clazzId, input.classId, input[class*='clazzId'], input[class*='classId'], input[name*='clazzId'], input[name*='classId']"
+                )
                 if not course_id and course_input:
                     course_id = str(course_input.get("value") or "").strip()
                 if not class_id and class_input:
@@ -536,14 +524,20 @@ class ChaoxingSigninClient:
                             continue
                         if isinstance(payload, dict):
                             course_id = course_id or str(payload.get("courseId") or payload.get("courseid") or "")
-                            class_id = class_id or str(payload.get("classId") or payload.get("clazzId") or payload.get("clazzid") or "")
+                            class_id = class_id or str(
+                                payload.get("classId") or payload.get("clazzId") or payload.get("clazzid") or ""
+                            )
                             cpi = cpi or str(payload.get("cpi") or "")
-                            name = name or str(payload.get("courseName") or payload.get("name") or payload.get("title") or "")
+                            name = name or str(
+                                payload.get("courseName") or payload.get("name") or payload.get("title") or ""
+                            )
                             break
 
                 if course_id and class_id:
                     cursor = content.find(f"{course_id}_{class_id}")
-                    append_course(course_id, class_id, cursor if cursor >= 0 else 0, preferred_name=name, preferred_cpi=cpi)
+                    append_course(
+                        course_id, class_id, cursor if cursor >= 0 else 0, preferred_name=name, preferred_cpi=cpi
+                    )
 
         # Primary parser
         for match in re.finditer(r"course_(\d+)_(\d+)", content):
@@ -622,19 +616,19 @@ class ChaoxingSigninClient:
 
     def get_active_tasks(
         self,
-        course_filters: Optional[List[str]] = None,
-        class_filters: Optional[List[str]] = None,
-        active_id: Optional[Any] = None,
+        course_filters: list[str] | None = None,
+        class_filters: list[str] | None = None,
+        active_id: Any | None = None,
         expected_type: str = "all",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         courses = self.get_courses()
-        filter_pairs: set[tuple[str, Optional[str]]] = set()
+        filter_pairs: set[tuple[str, str | None]] = set()
         for item in course_filters or []:
             filter_pairs.add(_parse_course_filter(item))
         class_filter_set = _as_filter_set(class_filters)
         active_filter_set = _as_filter_set(active_id)
 
-        tasks: List[Dict[str, Any]] = []
+        tasks: list[dict[str, Any]] = []
         now_ms = int(time.time() * 1000)
         attempted = 0
         failed = 0
@@ -653,9 +647,7 @@ class ChaoxingSigninClient:
             except requests.RequestException as exc:
                 # One bad course must not abort the batch — skip it and keep going.
                 failed += 1
-                logger.warning(
-                    "activelist failed for course=%s class=%s: %s", course_id, class_id, exc
-                )
+                logger.warning("activelist failed for course=%s class=%s: %s", course_id, class_id, exc)
                 continue
             for activity in payload:
                 # Chaoxing routinely sends keys present-but-null; `int(None)` would
@@ -687,13 +679,12 @@ class ChaoxingSigninClient:
         # treat as a successful no-op. (Codex P2)
         if attempted and failed == attempted and not tasks:
             raise requests.RequestException(
-                f"All {attempted} activity-list request(s) failed; "
-                "cannot determine active sign-in tasks"
+                f"All {attempted} activity-list request(s) failed; " "cannot determine active sign-in tasks"
             )
         return tasks
 
-    def get_class_subjects(self) -> List[Dict[str, Any]]:
-        subjects: List[Dict[str, Any]] = []
+    def get_class_subjects(self) -> list[dict[str, Any]]:
+        subjects: list[dict[str, Any]] = []
         for course in self.get_courses():
             course_id = str(course.get("courseId") or "").strip()
             class_id = str(course.get("classId") or course.get("clazzId") or "").strip()
@@ -720,16 +711,16 @@ class ChaoxingSigninClient:
     def get_class_activities(
         self,
         class_id: str,
-        course_id: Optional[str] = None,
+        course_id: str | None = None,
         include_details: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         normalized_class_id = str(class_id or "").strip()
         normalized_course_id = str(course_id or "").strip()
         normalized_raw_course_id = _parse_course_filter(normalized_course_id)[0] if normalized_course_id else ""
         if not normalized_class_id:
             return []
 
-        activities: List[Dict[str, Any]] = []
+        activities: list[dict[str, Any]] = []
         for course in self.get_courses():
             current_course_id = str(course.get("courseId") or "").strip()
             current_class_id = str(course.get("classId") or course.get("clazzId") or "").strip()
@@ -742,7 +733,9 @@ class ChaoxingSigninClient:
             except requests.RequestException as exc:
                 logger.warning(
                     "activelist failed for course=%s class=%s: %s",
-                    current_course_id, current_class_id, exc,
+                    current_course_id,
+                    current_class_id,
+                    exc,
                 )
                 continue
             for activity in course_activity_list:
@@ -756,7 +749,7 @@ class ChaoxingSigninClient:
                 activities.append(item)
         return activities
 
-    def _get_course_activity_list(self, course_id: str, class_id: str) -> List[Dict[str, Any]]:
+    def _get_course_activity_list(self, course_id: str, class_id: str) -> list[dict[str, Any]]:
         # Raises requests.RequestException on ANY fetch failure — network error,
         # non-2xx HTTP (e.g. 502), OR a non-JSON body (e.g. an auth-redirect login
         # page served as 200 HTML) — so callers can tell a transient/upstream
@@ -778,9 +771,7 @@ class ChaoxingSigninClient:
             data = resp.json()
         except ValueError as exc:
             # Not JSON → an error/redirect page, NOT an empty activeList.
-            raise requests.RequestException(
-                "activelist returned a non-JSON response"
-            ) from exc
+            raise requests.RequestException("activelist returned a non-JSON response") from exc
         # `data.get("data", {})` does NOT guard an explicit ``"data": null`` (common
         # when a per-course session/cookie is invalid) — `None.get(...)` would raise
         # AttributeError and crash discovery; use `or {}`.
@@ -789,9 +780,9 @@ class ChaoxingSigninClient:
 
     def _resolve_sign_type(
         self,
-        activity: Dict[str, Any],
+        activity: dict[str, Any],
         active_id: str,
-        info: Optional[Dict[str, Any]] = None,
+        info: dict[str, Any] | None = None,
     ) -> str:
         # `or 0` (not the 2-arg .get default) so a present-but-null field — which
         # Chaoxing sends routinely — does not raise TypeError on int(None).
@@ -815,20 +806,16 @@ class ChaoxingSigninClient:
 
     def _activity_to_task(
         self,
-        course: Dict[str, Any],
-        activity: Dict[str, Any],
-        sign_type: Optional[str] = None,
-        detail: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        course: dict[str, Any],
+        activity: dict[str, Any],
+        sign_type: str | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         course_id = str(course.get("courseId") or "").strip()
         class_id = str(course.get("classId") or course.get("clazzId") or "").strip()
         active_id = str(activity.get("id") or activity.get("activeId") or "").strip()
         deadline = activity.get("endTime") or activity.get("startTime")
-        deadline_iso = (
-            datetime.fromtimestamp(int(deadline) / 1000, tz=timezone.utc).isoformat()
-            if deadline
-            else None
-        )
+        deadline_iso = datetime.fromtimestamp(int(deadline) / 1000, tz=UTC).isoformat() if deadline else None
         status_code = int(activity.get("status", 0) or 0)
         course_name = str(course.get("courseName") or course.get("name") or course_id).strip()
         task = {
@@ -864,7 +851,7 @@ class ChaoxingSigninClient:
             task["detail"] = detail
         return task
 
-    def get_ppt_active_info(self, active_id: str) -> Dict[str, Any]:
+    def get_ppt_active_info(self, active_id: str) -> dict[str, Any]:
         try:
             resp = self.session.get(
                 PPT_ACTIVE_INFO_URL,
@@ -876,7 +863,7 @@ class ChaoxingSigninClient:
         data = self._safe_json(resp)
         return data.get("data") or {}
 
-    def _pre_sign(self, task: Dict[str, Any]) -> None:
+    def _pre_sign(self, task: dict[str, Any]) -> None:
         params = {
             "courseId": task["rawCourseId"],
             "classId": task["classId"],
@@ -893,10 +880,10 @@ class ChaoxingSigninClient:
 
     def sign_task(
         self,
-        task: Dict[str, Any],
+        task: dict[str, Any],
         preferred_type: str = "all",
-        options: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         options = options or {}
         sign_type = task["type"] if preferred_type == "all" else preferred_type
         self._pre_sign(task)
@@ -932,7 +919,7 @@ class ChaoxingSigninClient:
             return default
 
     @staticmethod
-    def _extract_sign_code(options: Dict[str, Any]) -> str:
+    def _extract_sign_code(options: dict[str, Any]) -> str:
         for key in ("sign_code", "signCode", "gesture", "gesture_code", "code", "passcode"):
             value = options.get(key)
             if value is not None and str(value).strip():
@@ -940,10 +927,10 @@ class ChaoxingSigninClient:
         return ""
 
     @staticmethod
-    def _as_dict(value: Any) -> Dict[str, Any]:
+    def _as_dict(value: Any) -> dict[str, Any]:
         return value if isinstance(value, dict) else {}
 
-    def _extract_location_options(self, options: Dict[str, Any]) -> tuple[str, float, float]:
+    def _extract_location_options(self, options: dict[str, Any]) -> tuple[str, float, float]:
         location = self._as_dict(options.get("location"))
 
         lat_value = options.get("latitude")
@@ -958,19 +945,14 @@ class ChaoxingSigninClient:
         if lon_value is None:
             lon_value = location.get("lng")
 
-        address = str(
-            options.get("address")
-            or location.get("address")
-            or location.get("name")
-            or ""
-        )
+        address = str(options.get("address") or location.get("address") or location.get("name") or "")
         latitude = self._parse_float(lat_value, -1.0)
         longitude = self._parse_float(lon_value, -1.0)
         return address, latitude, longitude
 
     def _extract_qrcode_options(
         self,
-        options: Dict[str, Any],
+        options: dict[str, Any],
     ) -> tuple[str, str, float, float, str, float]:
         qrcode = self._as_dict(options.get("qrcode"))
         location = self._as_dict(options.get("location"))
@@ -1005,12 +987,7 @@ class ChaoxingSigninClient:
         if lon_value is None:
             lon_value = location.get("lng")
 
-        address = str(
-            options.get("address")
-            or qrcode.get("address")
-            or location.get("address")
-            or ""
-        )
+        address = str(options.get("address") or qrcode.get("address") or location.get("address") or "")
         altitude_value = options.get("altitude")
         if altitude_value is None:
             altitude_value = qrcode.get("altitude")
@@ -1022,7 +999,7 @@ class ChaoxingSigninClient:
         altitude = self._parse_float(altitude_value, 100.0)
         return str(qr_code), enc, latitude, longitude, address, altitude
 
-    def _sign_general(self, task: Dict[str, Any], extra_params: Optional[Dict[str, Any]] = None) -> str:
+    def _sign_general(self, task: dict[str, Any], extra_params: dict[str, Any] | None = None) -> str:
         params = {
             "activeId": task["activeId"],
             "uid": self.uid,
@@ -1038,7 +1015,7 @@ class ChaoxingSigninClient:
         resp = self.session.get(PPT_SIGN_URL, params=params, timeout=12)
         return (resp.text or "").strip()
 
-    def _sign_location(self, task: Dict[str, Any], options: Dict[str, Any]) -> str:
+    def _sign_location(self, task: dict[str, Any], options: dict[str, Any]) -> str:
         address, latitude, longitude = self._extract_location_options(options)
         params = {
             "activeId": task["activeId"],
@@ -1055,7 +1032,7 @@ class ChaoxingSigninClient:
         resp = self.session.get(PPT_SIGN_URL, params=params, timeout=12)
         return (resp.text or "").strip()
 
-    def _sign_qrcode(self, task: Dict[str, Any], options: Dict[str, Any]) -> str:
+    def _sign_qrcode(self, task: dict[str, Any], options: dict[str, Any]) -> str:
         _, enc, lat, lon, address, altitude = self._extract_qrcode_options(options)
         if not enc:
             return "fail-need-qrcode"
@@ -1086,23 +1063,20 @@ class ChaoxingSigninClient:
         resp = self.session.get(PPT_SIGN_URL, params=params, timeout=12)
         return (resp.text or "").strip()
 
-    def _sign_gesture(self, task: Dict[str, Any], options: Dict[str, Any]) -> str:
+    def _sign_gesture(self, task: dict[str, Any], options: dict[str, Any]) -> str:
         sign_code = self._extract_sign_code(options)
         if not sign_code:
             return "fail-need-gesture"
         return self._sign_general(task, {"signCode": sign_code})
 
-    def _sign_code(self, task: Dict[str, Any], options: Dict[str, Any]) -> str:
+    def _sign_code(self, task: dict[str, Any], options: dict[str, Any]) -> str:
         sign_code = self._extract_sign_code(options)
         if not sign_code:
             return "fail-need-code"
         return self._sign_general(task, {"signCode": sign_code})
 
-    def _sign_photo(self, task: Dict[str, Any], options: Dict[str, Any]) -> str:
-        object_id = (
-            options.get("object_id")
-            or options.get("objectId")
-        )
+    def _sign_photo(self, task: dict[str, Any], options: dict[str, Any]) -> str:
+        object_id = options.get("object_id") or options.get("objectId")
         if not object_id:
             photo_data = str(options.get("photo_base64") or options.get("photo") or "")
             if not photo_data:
@@ -1151,7 +1125,11 @@ class ChaoxingSigninClient:
         token_data = self._safe_json(token_resp)
         token = token_data.get("_token") or token_data.get("token")
         if not token:
-            logger.warning("photo upload: no token in response (status=%s body_len=%d)", token_resp.status_code, len(token_resp.text or ""))
+            logger.warning(
+                "photo upload: no token in response (status=%s body_len=%d)",
+                token_resp.status_code,
+                len(token_resp.text or ""),
+            )
             return ""
 
         logger.info("photo upload: got pan token, uploading image")
@@ -1180,7 +1158,11 @@ class ChaoxingSigninClient:
         if object_id:
             logger.info("photo upload: success, objectId=%s", object_id)
         else:
-            logger.warning("photo upload: failed to extract objectId (status=%s body_len=%d)", upload_resp.status_code, len(upload_resp.text or ""))
+            logger.warning(
+                "photo upload: failed to extract objectId (status=%s body_len=%d)",
+                upload_resp.status_code,
+                len(upload_resp.text or ""),
+            )
         return object_id
 
     def _extract_object_id(self, value: Any) -> str:
@@ -1205,15 +1187,15 @@ class ChaoxingSigninClient:
 class ChaoxingSigninManager:
     def __init__(self):
         self._lock = threading.Lock()
-        self._clients: Dict[str, ChaoxingSigninClient] = {}
-        self._history: Dict[str, List[Dict[str, Any]]] = {}
-        self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._clients: dict[str, ChaoxingSigninClient] = {}
+        self._history: dict[str, list[dict[str, Any]]] = {}
+        self._tasks: dict[str, dict[str, Any]] = {}
         self._loaded_task_users: set[str] = set()
         self._loaded_history_users: set[str] = set()
         self._restore_tasks_from_store()
         self._restore_history_from_store()
 
-    def login(self, user_id: str, username: str, password: str) -> Dict[str, Any]:
+    def login(self, user_id: str, username: str, password: str) -> dict[str, Any]:
         client = ChaoxingSigninClient()
         result = client.login(username=username, password=password)
         if result.get("status"):
@@ -1221,20 +1203,20 @@ class ChaoxingSigninManager:
                 self._clients[user_id] = client
         return result
 
-    def _get_client(self, user_id: str) -> Optional[ChaoxingSigninClient]:
+    def _get_client(self, user_id: str) -> ChaoxingSigninClient | None:
         with self._lock:
             return self._clients.get(user_id)
 
-    def get_client(self, user_id: str) -> Optional[ChaoxingSigninClient]:
+    def get_client(self, user_id: str) -> ChaoxingSigninClient | None:
         return self._get_client(user_id)
 
-    def get_courses(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_courses(self, user_id: str) -> list[dict[str, Any]]:
         client = self._get_client(user_id)
         if not client:
             return []
         return client.get_courses()
 
-    def get_classes(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_classes(self, user_id: str) -> list[dict[str, Any]]:
         client = self._get_client(user_id)
         if not client:
             return []
@@ -1244,9 +1226,9 @@ class ChaoxingSigninManager:
         self,
         user_id: str,
         class_id: str,
-        course_id: Optional[str] = None,
+        course_id: str | None = None,
         include_details: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         client = self._get_client(user_id)
         if not client:
             return []
@@ -1259,10 +1241,10 @@ class ChaoxingSigninManager:
     def get_remote_endpoints(
         self,
         user_id: str,
-        course_id: Optional[str] = None,
-        class_id: Optional[str] = None,
-        active_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        course_id: str | None = None,
+        class_id: str | None = None,
+        active_id: str | None = None,
+    ) -> dict[str, Any]:
         client = self._get_client(user_id)
         raw_course_id = _parse_course_filter(str(course_id or ""))[0] if course_id else ""
         raw_class_id = str(class_id or "").strip()
@@ -1277,9 +1259,9 @@ class ChaoxingSigninManager:
             fid=client.fid if client else "",
         )
 
-    def get_active_tasks(self, user_id: str, sign_type: str = "all") -> List[Dict[str, Any]]:
+    def get_active_tasks(self, user_id: str, sign_type: str = "all") -> list[dict[str, Any]]:
         client = self._get_client(user_id)
-        live_tasks: List[Dict[str, Any]] = []
+        live_tasks: list[dict[str, Any]] = []
         if client:
             try:
                 live_tasks = client.get_active_tasks(expected_type=sign_type)
@@ -1291,12 +1273,10 @@ class ChaoxingSigninManager:
             return [self._decorate_live_task(task) for task in live_tasks]
         return self._build_background_task_feed(user_id)
 
-    def _build_background_task_feed(self, user_id: str) -> List[Dict[str, Any]]:
+    def _build_background_task_feed(self, user_id: str) -> list[dict[str, Any]]:
         tasks = self.list_tasks(user_id)
         running_tasks = [
-            task
-            for task in tasks
-            if str(task.get("status") or "").lower() in BACKGROUND_TASK_ACTIVE_STATUSES
+            task for task in tasks if str(task.get("status") or "").lower() in BACKGROUND_TASK_ACTIVE_STATUSES
         ]
         selected_tasks = running_tasks or tasks[:TASK_FEED_FALLBACK_LIMIT]
         if selected_tasks:
@@ -1306,7 +1286,7 @@ class ChaoxingSigninManager:
         return [self._history_to_task_feed_item(record) for record in history_records]
 
     @staticmethod
-    def _decorate_live_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    def _decorate_live_task(task: dict[str, Any]) -> dict[str, Any]:
         item = dict(task or {})
         item.setdefault("source", "live")
         item["actionable"] = True
@@ -1315,7 +1295,7 @@ class ChaoxingSigninManager:
         return item
 
     @staticmethod
-    def _to_task_feed_item(task: Dict[str, Any]) -> Dict[str, Any]:
+    def _to_task_feed_item(task: dict[str, Any]) -> dict[str, Any]:
         task_id = str(task.get("task_id") or task.get("taskId") or task.get("id") or "").strip()
         progress = task.get("progress") if isinstance(task.get("progress"), dict) else {}
         course_name = (
@@ -1352,7 +1332,7 @@ class ChaoxingSigninManager:
         }
 
     @staticmethod
-    def _history_to_task_feed_item(record: Dict[str, Any]) -> Dict[str, Any]:
+    def _history_to_task_feed_item(record: dict[str, Any]) -> dict[str, Any]:
         record_type = str(record.get("type") or "history").strip().lower() or "history"
         return {
             "taskId": str(record.get("taskId") or ""),
@@ -1372,13 +1352,13 @@ class ChaoxingSigninManager:
             "source": "history",
         }
 
-    def get_history(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_history(self, user_id: str) -> list[dict[str, Any]]:
         self._ensure_history_loaded_for_user(user_id)
         with self._lock:
             records = list(self._history.get(str(user_id or ""), []))
         return sorted(records, key=lambda item: item.get("timestamp", ""), reverse=True)
 
-    def _append_history(self, user_id: str, record: Dict[str, Any]) -> None:
+    def _append_history(self, user_id: str, record: dict[str, Any]) -> None:
         history_record = dict(record or {})
         with self._lock:
             items = self._history.setdefault(user_id, [])
@@ -1393,9 +1373,9 @@ class ChaoxingSigninManager:
         username: str,
         password: str,
         sign_type: str = "all",
-        course_id: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        course_id: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         login_result = self.login(user_id, username, password)
         if not login_result.get("status"):
             return login_result
@@ -1437,10 +1417,10 @@ class ChaoxingSigninManager:
         password: str,
         class_id: str,
         sign_type: str = "all",
-        active_id: Optional[Any] = None,
-        course_id: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        active_id: Any | None = None,
+        course_id: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         normalized_class_id = str(class_id or "").strip()
         if not normalized_class_id:
             return {"status": False, "message": "class_id is required", "data": []}
@@ -1487,7 +1467,7 @@ class ChaoxingSigninManager:
         result["data"]["task"] = target
         return result
 
-    def start_task(self, user_id: str, payload: Dict[str, Any]) -> str:
+    def start_task(self, user_id: str, payload: dict[str, Any]) -> str:
         task_id = uuid4().hex
         now = _utc_now_iso()
         task_state = {
@@ -1518,7 +1498,7 @@ class ChaoxingSigninManager:
         ).start()
         return task_id
 
-    def start_class_task(self, user_id: str, payload: Dict[str, Any]) -> str:
+    def start_class_task(self, user_id: str, payload: dict[str, Any]) -> str:
         class_payload = dict(payload or {})
         class_payload["subject_type"] = "class"
         class_id = str(class_payload.get("class_id") or "").strip()
@@ -1527,14 +1507,12 @@ class ChaoxingSigninManager:
         return self.start_task(user_id, class_payload)
 
     def _append_task_log(self, task_id: str, message: str, level: str = "info") -> None:
-        snapshot: Optional[Dict[str, Any]] = None
+        snapshot: dict[str, Any] | None = None
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
                 return
-            task["logs"].append(
-                {"timestamp": _utc_now_iso(), "message": message, "level": level}
-            )
+            task["logs"].append({"timestamp": _utc_now_iso(), "message": message, "level": level})
             if len(task["logs"]) > 500:
                 del task["logs"][:-500]
             task["updated_at"] = _utc_now_iso()
@@ -1543,7 +1521,7 @@ class ChaoxingSigninManager:
             self._persist_task_state(snapshot)
 
     def _update_task(self, task_id: str, **changes: Any) -> None:
-        snapshot: Optional[Dict[str, Any]] = None
+        snapshot: dict[str, Any] | None = None
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -1554,7 +1532,7 @@ class ChaoxingSigninManager:
         if snapshot:
             self._persist_task_state(snapshot)
 
-    def _run_task_worker(self, task_id: str, user_id: str, payload: Dict[str, Any]) -> None:
+    def _run_task_worker(self, task_id: str, user_id: str, payload: dict[str, Any]) -> None:
         username = str(payload.get("username") or "")
         password = str(payload.get("password") or "")
         sign_type = str(payload.get("sign_type") or "all")
@@ -1641,7 +1619,9 @@ class ChaoxingSigninManager:
         for index, task in enumerate(tasks, start=1):
             current_course_name = str(task.get("courseName") or "").strip()
             current_class_name = str(task.get("className") or "").strip()
-            current_subject_name = current_class_name if subject_type == "class" and current_class_name else current_course_name
+            current_subject_name = (
+                current_class_name if subject_type == "class" and current_class_name else current_course_name
+            )
             current_task_type = str(task.get("type") or sign_type or "background").strip() or "background"
             self._append_task_log(task_id, f"Signing {current_subject_name} ({current_task_type})")
             result = client.sign_task(task, preferred_type=sign_type, options=options)
@@ -1689,7 +1669,7 @@ class ChaoxingSigninManager:
         final_message = "Task completed" if failed == 0 else "Task completed with failures"
         self._update_task(task_id, status=final_status, message=final_message)
 
-    def _run_task_worker_guarded(self, task_id: str, user_id: str, payload: Dict[str, Any]) -> None:
+    def _run_task_worker_guarded(self, task_id: str, user_id: str, payload: dict[str, Any]) -> None:
         try:
             self._run_task_worker(task_id, user_id, payload)
         except Exception as exc:  # pragma: no cover - defensive safety net
@@ -1698,7 +1678,7 @@ class ChaoxingSigninManager:
             self._update_task(task_id, status="error", message=message)
             self._append_task_log(task_id, message, "error")
 
-    def get_task(self, user_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+    def get_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
         normalized_user_id = str(user_id or "").strip()
         normalized_task_id = str(task_id or "").strip()
         with self._lock:
@@ -1713,19 +1693,17 @@ class ChaoxingSigninManager:
                 return None
             return {k: v for k, v in task.items() if not k.startswith("_")}
 
-    def list_tasks(self, user_id: str) -> List[Dict[str, Any]]:
+    def list_tasks(self, user_id: str) -> list[dict[str, Any]]:
         self._ensure_tasks_loaded_for_user(user_id)
         with self._lock:
-            tasks: List[Dict[str, Any]] = []
+            tasks: list[dict[str, Any]] = []
             for task in self._tasks.values():
                 if task.get("user_id") != user_id:
                     continue
                 public_task = self._task_public_payload(task)
                 public_task.pop("user_id", None)
                 started_at = (
-                    public_task.get("started_at")
-                    or public_task.get("start_time")
-                    or public_task.get("created_at")
+                    public_task.get("started_at") or public_task.get("start_time") or public_task.get("created_at")
                 )
                 if started_at:
                     public_task["started_at"] = started_at
@@ -1734,18 +1712,11 @@ class ChaoxingSigninManager:
                 tasks.append(public_task)
         return sorted(
             tasks,
-            key=lambda item: str(
-                item.get("updated_at")
-                or item.get("start_time")
-                or item.get("started_at")
-                or ""
-            ),
+            key=lambda item: str(item.get("updated_at") or item.get("start_time") or item.get("started_at") or ""),
             reverse=True,
         )
 
-    def get_task_logs(
-        self, user_id: str, task_id: str, cursor: Optional[int] = None
-    ) -> Optional[Dict[str, Any]]:
+    def get_task_logs(self, user_id: str, task_id: str, cursor: int | None = None) -> dict[str, Any] | None:
         """Return logs from ``cursor`` (default 0) WITHOUT mutating server state.
 
         Stateless, per-request slicing — mirrors learning_manager.get_task_logs.
@@ -1757,11 +1728,10 @@ class ChaoxingSigninManager:
         normalized_user_id = str(user_id or "").strip()
         normalized_task_id = str(task_id or "").strip()
 
-        def _slice(task: Dict[str, Any]) -> Dict[str, Any]:
+        def _slice(task: dict[str, Any]) -> dict[str, Any]:
             all_logs = task.get("logs", [])
             start = int(cursor) if cursor is not None else 0
-            if start < 0:
-                start = 0
+            start = max(start, 0)
             return {"logs": list(all_logs[start:]), "cursor": len(all_logs)}
 
         with self._lock:
@@ -1777,14 +1747,14 @@ class ChaoxingSigninManager:
             return _slice(task)
 
     @staticmethod
-    def _task_public_payload(task: Dict[str, Any]) -> Dict[str, Any]:
+    def _task_public_payload(task: dict[str, Any]) -> dict[str, Any]:
         return {k: v for k, v in task.items() if not str(k).startswith("_")}
 
     @staticmethod
-    def _default_progress() -> Dict[str, Any]:
+    def _default_progress() -> dict[str, Any]:
         return {"total": 0, "completed": 0, "failed": 0, "current": 0}
 
-    def _persist_task_state(self, task_state_public: Dict[str, Any]) -> None:
+    def _persist_task_state(self, task_state_public: dict[str, Any]) -> None:
         try:
             task_store.upsert_task(SIGNIN_TASK_KIND, task_state_public)
         except Exception as exc:  # pragma: no cover - defensive fallback
@@ -1811,7 +1781,9 @@ class ChaoxingSigninManager:
                 user_id=normalized_user_id,
             )
         except Exception as exc:  # pragma: no cover - defensive fallback
-            logger.warning("load signin task failed: user=%s task=%s err=%s", normalized_user_id, normalized_task_id, exc)
+            logger.warning(
+                "load signin task failed: user=%s task=%s err=%s", normalized_user_id, normalized_task_id, exc
+            )
             stored_task = None
         if stored_task:
             self._merge_task_from_store(stored_task)
@@ -1845,7 +1817,7 @@ class ChaoxingSigninManager:
                 return
         self._load_history_from_store_for_user(normalized_user_id)
 
-    def _persist_history_record(self, user_id: str, record: Dict[str, Any]) -> None:
+    def _persist_history_record(self, user_id: str, record: dict[str, Any]) -> None:
         payload = dict(record or {})
         payload.setdefault("timestamp", _utc_now_iso())
         try:
@@ -1892,7 +1864,7 @@ class ChaoxingSigninManager:
                 if len(items) > 500:
                     del items[:-500]
 
-    def _merge_task_from_store(self, item: Dict[str, Any], now: Optional[str] = None) -> bool:
+    def _merge_task_from_store(self, item: dict[str, Any], now: str | None = None) -> bool:
         task_id = str(item.get("task_id") or "").strip()
         user_id = str(item.get("user_id") or "").strip()
         if not task_id or not user_id:
@@ -1903,7 +1875,7 @@ class ChaoxingSigninManager:
                 return False
 
         current_time = now or _utc_now_iso()
-        task: Dict[str, Any] = dict(item)
+        task: dict[str, Any] = dict(item)
         progress = self._default_progress()
         raw_progress = task.get("progress")
         if isinstance(raw_progress, dict):
@@ -1955,7 +1927,7 @@ class ChaoxingSigninManager:
             logger.warning("load signin history failed: user=%s err=%s", normalized_user_id, exc)
             records = []
 
-        cleaned: List[Dict[str, Any]] = []
+        cleaned: list[dict[str, Any]] = []
         for record in records:
             item = dict(record)
             item.pop("user_id", None)

@@ -1,8 +1,8 @@
 import json
 import logging
 import threading
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from psycopg2.extras import Json
 
@@ -26,7 +26,7 @@ _SENSITIVE_FIELDS: tuple[str, ...] = (
 _SENSITIVE_CONTAINERS: tuple[str, ...] = ("credentials",)
 
 
-def _encrypt_sensitive(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _encrypt_sensitive(payload: dict[str, Any]) -> dict[str, Any]:
     """Encrypt top-level + ``payload.credentials.*`` sensitive keys.
 
     Fail-closed: if encryption raises, the offending field is DROPPED rather
@@ -48,9 +48,7 @@ def _encrypt_sensitive(payload: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 encrypted[container] = encrypt_dict_fields(nested, _SENSITIVE_FIELDS)
             except Exception:
-                logger.exception(
-                    "task_store: encrypt nested container=%s failed", container
-                )
+                logger.exception("task_store: encrypt nested container=%s failed", container)
                 cleaned = dict(nested)
                 for field in _SENSITIVE_FIELDS:
                     cleaned.pop(field, None)
@@ -58,7 +56,7 @@ def _encrypt_sensitive(payload: Dict[str, Any]) -> Dict[str, Any]:
     return encrypted
 
 
-def _decrypt_sensitive(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _decrypt_sensitive(payload: dict[str, Any]) -> dict[str, Any]:
     """Decrypt top-level + ``payload.credentials.*`` sensitive keys.
 
     Legacy (non-``fernet:``-prefixed) values pass through unchanged.
@@ -77,9 +75,7 @@ def _decrypt_sensitive(payload: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 decrypted[container] = decrypt_dict_fields(nested, _SENSITIVE_FIELDS)
             except Exception:
-                logger.exception(
-                    "task_store: decrypt nested container=%s failed", container
-                )
+                logger.exception("task_store: decrypt nested container=%s failed", container)
     return decrypted
 
 
@@ -144,7 +140,7 @@ class TaskStore:
             except Exception:
                 logger.exception("task_store ensure_tables failed")
 
-    def upsert_task(self, task_kind: str, task_state_public: Dict[str, Any]) -> None:
+    def upsert_task(self, task_kind: str, task_state_public: dict[str, Any]) -> None:
         if not task_kind or not isinstance(task_state_public, dict):
             return
         task_id = str(task_state_public.get("task_id") or "").strip()
@@ -154,14 +150,8 @@ class TaskStore:
 
         status = str(task_state_public.get("status") or "pending")
         message = str(task_state_public.get("message") or "")
-        started_at = self._parse_datetime(
-            task_state_public.get("started_at") or task_state_public.get("created_at")
-        )
-        updated_at = (
-            self._parse_datetime(task_state_public.get("updated_at"))
-            or started_at
-            or datetime.now(timezone.utc)
-        )
+        started_at = self._parse_datetime(task_state_public.get("started_at") or task_state_public.get("created_at"))
+        updated_at = self._parse_datetime(task_state_public.get("updated_at")) or started_at or datetime.now(UTC)
         payload = self._normalize_json(task_state_public)
         payload = _encrypt_sensitive(payload)
 
@@ -206,8 +196,8 @@ class TaskStore:
         self,
         task_kind: str,
         task_id: str,
-        user_id: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        user_id: str | None = None,
+    ) -> dict[str, Any] | None:
         if not task_kind or not task_id:
             return None
 
@@ -273,9 +263,9 @@ class TaskStore:
     def list_tasks(
         self,
         task_kind: str,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if not task_kind:
             return []
 
@@ -316,7 +306,7 @@ class TaskStore:
             )
             return []
 
-        result: List[Dict[str, Any]] = []
+        result: list[dict[str, Any]] = []
         for row in rows:
             payload = row.get("payload")
             item = dict(payload) if isinstance(payload, dict) else {}
@@ -344,7 +334,7 @@ class TaskStore:
         self,
         history_kind: str,
         user_id: str,
-        record: Dict[str, Any],
+        record: dict[str, Any],
         max_records: int = 500,
     ) -> None:
         if not history_kind or not user_id or not isinstance(record, dict):
@@ -354,7 +344,7 @@ class TaskStore:
         event_time = (
             self._parse_datetime(payload.get("timestamp"))
             or self._parse_datetime(payload.get("updated_at"))
-            or datetime.now(timezone.utc)
+            or datetime.now(UTC)
         )
         if not payload.get("timestamp"):
             payload["timestamp"] = self._datetime_to_iso(event_time)
@@ -411,9 +401,9 @@ class TaskStore:
     def list_history(
         self,
         history_kind: str,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 500,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if not history_kind:
             return []
 
@@ -454,7 +444,7 @@ class TaskStore:
             )
             return []
 
-        history: List[Dict[str, Any]] = []
+        history: list[dict[str, Any]] = []
         for row in rows:
             payload = row.get("payload")
             item = dict(payload) if isinstance(payload, dict) else {}
@@ -467,7 +457,7 @@ class TaskStore:
         return history
 
     @staticmethod
-    def _normalize_json(value: Any) -> Dict[str, Any]:
+    def _normalize_json(value: Any) -> dict[str, Any]:
         if isinstance(value, dict):
             raw = value
         else:
@@ -478,10 +468,10 @@ class TaskStore:
             return {}
 
     @staticmethod
-    def _parse_datetime(value: Any) -> Optional[datetime]:
+    def _parse_datetime(value: Any) -> datetime | None:
         if isinstance(value, datetime):
             if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
+                return value.replace(tzinfo=UTC)
             return value
         if isinstance(value, str):
             text = value.strip()
@@ -492,7 +482,7 @@ class TaskStore:
             except ValueError:
                 return None
             if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=timezone.utc)
+                return parsed.replace(tzinfo=UTC)
             return parsed
         return None
 
@@ -501,7 +491,7 @@ class TaskStore:
         parsed = TaskStore._parse_datetime(value)
         if parsed is None:
             return ""
-        return parsed.astimezone(timezone.utc).isoformat()
+        return parsed.astimezone(UTC).isoformat()
 
 
 task_store = TaskStore()
