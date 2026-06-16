@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-06-16
+
+### Fixed
+- **Service worker frozen on stale bundle (made the v1.2.0 auth-loop fix unshippable).** The nginx `location ~* \.(js|…)$` rule applied `Cache-Control: public, max-age=31536000, immutable` to the PWA control files (`sw.js`, `registerSW.js`), which have stable names. An immutable-for-a-year service worker is never re-fetched by browsers or the CDN, so clients stayed pinned to the old precached app bundle and never received the Zhihuishu auth-loop fix. Added exact-match `no-cache` locations for `/sw.js`, `/registerSW.js`, `/site.webmanifest` (content-hashed `/assets/*` stay immutable). NOTE: existing clients also need a one-time Cloudflare cache purge of `/sw.js` to pick up the new SW.
+
 ## [1.2.0] - 2026-06-16
 
 ### Added
