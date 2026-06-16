@@ -15,6 +15,12 @@
   <img alt="fastapi" src="https://img.shields.io/badge/fastapi-0.115-009688?logo=fastapi&logoColor=white&style=flat-square" />
 </p>
 
+<p align="center">
+  <img src="docs/university-helper-promo.gif" alt="University Helper — 60-second product film: while you sleep, it signs in, watches lectures and answers quizzes on Chaoxing and Zhihuishu, finishing by dawn" width="640" />
+  <br />
+  <sub><b>“You sleep, it studies.”</b> — 60-second product film, rendered frame-by-frame with Remotion</sub>
+</p>
+
 University Helper is a full-stack campus helper built on FastAPI + React. The
 repository name is `university-helper`; parts of the source tree still use the
 historical internal name `easy_learning` (container names, env-var prefixes)

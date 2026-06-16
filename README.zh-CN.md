@@ -2,6 +2,12 @@
 
 # University Helper
 
+<p align="center">
+  <img src="docs/university-helper-promo.gif" alt="University Helper 产品宣传片：你睡觉时，它在超星学习通 / 智慧树替你签到、刷课、答题，天亮前全部完成" width="640" />
+  <br />
+  <sub><b>「你睡觉，它上课」</b> — 60 秒产品宣传片，使用 Remotion 逐帧渲染</sub>
+</p>
+
 University Helper 是一个基于 FastAPI 和 React 的全栈校园辅助项目。仓库名使用 `university-helper`，但部分源码目录仍保留历史内部名称 `easy_learning`。
 
 当前代码库包含：
