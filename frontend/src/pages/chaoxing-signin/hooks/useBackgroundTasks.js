@@ -7,6 +7,10 @@ import {
 
 export default function useBackgroundTasks(requestChaoxingApi) {
   const pollRef = useRef(null)
+  // Client-tracked log cursor: the server now slices statelessly from this
+  // offset, so reopening a task / overlapping polls no longer race on a shared
+  // server cursor and drop logs. Reset to 0 whenever a task is (re)opened.
+  const logCursorRef = useRef(0)
 
   const [taskId, setTaskId] = useState('')
   const [taskStatus, setTaskStatus] = useState(null)
@@ -27,7 +31,7 @@ export default function useBackgroundTasks(requestChaoxingApi) {
     try {
       const [statusResp, logsResp] = await Promise.all([
         requestChaoxingApi(`/task/${currentTaskId}`),
-        requestChaoxingApi(`/logs/${currentTaskId}`)
+        requestChaoxingApi(`/logs/${currentTaskId}?cursor=${logCursorRef.current}`)
       ])
 
       const statusData = statusResp?.data || {}
@@ -42,6 +46,10 @@ export default function useBackgroundTasks(requestChaoxingApi) {
       }
       if (Array.isArray(logsResp?.data) && logsResp.data.length > 0) {
         setLogs((prev) => [...prev, ...logsResp.data].slice(-200))
+      }
+      // Advance to the server-reported cursor so the next poll only fetches new lines.
+      if (typeof logsResp?.cursor === 'number') {
+        logCursorRef.current = logsResp.cursor
       }
 
       if (statusData.status === 'completed' || statusData.status === 'error') {
@@ -62,6 +70,7 @@ export default function useBackgroundTasks(requestChaoxingApi) {
     setTaskId(normalizedTaskId)
     setTaskStatus(null)
     setLogs([])
+    logCursorRef.current = 0
     await refreshTaskStatus(normalizedTaskId, callbacks)
     return true
   }, [refreshTaskStatus])

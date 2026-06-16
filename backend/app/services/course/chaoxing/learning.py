@@ -512,7 +512,17 @@ def process_chapter(chaoxing: Chaoxing, course:dict[str, Any], point:dict[str, A
                 logger.debug(f"调用 chapter_start_callback 时出错: {e}")
     if point["has_finished"]:
         logger.info(f'章节：{point["title"]} 已完成所有任务点')
-        # 已经在超星端标记为完成的章节，这里直接视为成功，但不再重复回调
+        # 该章节在超星端已标记完成：必须计入"已完成章节"统计。learning_manager
+        # 把所有章节(含已完成)都加进 total_chapters，而 completed_chapters 只在
+        # chapter_done_callback 里累加；若此处直接 return 而不回调，预先完成的章节
+        # 只进 total 不进 completed，进度条永远到不了 100%。(F-progress)
+        if config is not None:
+            done_cb = config.get("chapter_done_callback")
+            if callable(done_cb):
+                try:
+                    done_cb(course, point)
+                except Exception as e:
+                    logger.debug(f"调用 chapter_done_callback 时出错: {e}")
         return ChapterResult.SUCCESS
     
     # 随机等待，避免请求过快

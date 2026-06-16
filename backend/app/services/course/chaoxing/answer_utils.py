@@ -1,7 +1,21 @@
+import os
 import re
 
-from .decode import _ocr_image_to_text, ENABLE_LOCAL_OCR
+from .decode import _ocr_image_to_text, ENABLE_LOCAL_OCR, is_vision_ocr_enabled
 from loguru import logger
+
+
+def _has_any_ocr_backend() -> bool:
+    """True if ANY OCR backend is usable (local Paddle, external vision, or HTTP).
+
+    Mirrors decode._ocr_image_to_text's `has_any_ocr` gate so question-title OCR
+    is applied whenever it can succeed — not only when LOCAL OCR is on.
+    """
+    return bool(
+        ENABLE_LOCAL_OCR
+        or is_vision_ocr_enabled()
+        or os.environ.get("CHAOXING_OCR_ENDPOINT", "").strip()
+    )
 
 
 def _strip_json_block(md_str: str) -> str:
@@ -53,7 +67,7 @@ def _apply_ocr_to_title_if_needed(q_info: dict) -> None:
     仅处理作业题目的标题字符串，不影响其他阅读类内容；
     当 OCR 不可用或识别失败时，不修改原始标题。
     """
-    if not ENABLE_LOCAL_OCR:
+    if not _has_any_ocr_backend():
         return
 
     title = q_info.get("title")

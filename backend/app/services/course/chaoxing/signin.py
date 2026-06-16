@@ -647,7 +647,9 @@ class ChaoxingSigninClient:
 
             payload = self._get_course_activity_list(course_id, class_id)
             for activity in payload:
-                if int(activity.get("status", 0)) != 1:
+                # Chaoxing routinely sends keys present-but-null; `int(None)` would
+                # raise TypeError and abort the whole batch, so coerce with `or 0`.
+                if int(activity.get("status") or 0) != 1:
                     continue
                 activity_id = str(activity.get("id") or "")
                 if not activity_id:
@@ -728,18 +730,31 @@ class ChaoxingSigninClient:
         return activities
 
     def _get_course_activity_list(self, course_id: str, class_id: str) -> List[Dict[str, Any]]:
-        resp = self.session.get(
-            ACTIVE_LIST_URL,
-            params={
-                "fid": 0,
-                "courseId": course_id,
-                "classId": class_id,
-                "_": int(time.time() * 1000),
-            },
-            timeout=12,
-        )
+        # A network failure here must NOT abort discovery for the OTHER courses:
+        # return [] so the per-course loop skips this one (matches the guarded
+        # pattern used by every other network call in this client).
+        try:
+            resp = self.session.get(
+                ACTIVE_LIST_URL,
+                params={
+                    "fid": 0,
+                    "courseId": course_id,
+                    "classId": class_id,
+                    "_": int(time.time() * 1000),
+                },
+                timeout=12,
+            )
+        except requests.RequestException as exc:
+            logger.warning(
+                "activelist request failed for course=%s class=%s: %s",
+                course_id, class_id, exc,
+            )
+            return []
         data = self._safe_json(resp)
-        active_list = data.get("data", {}).get("activeList", [])
+        # `data.get("data", {})` does NOT guard an explicit ``"data": null`` (common
+        # when a per-course session/cookie is invalid) — `None.get(...)` would raise
+        # AttributeError and crash discovery; use `or {}`.
+        active_list = (data.get("data") or {}).get("activeList", [])
         return active_list if isinstance(active_list, list) else []
 
     def _resolve_sign_type(
@@ -748,7 +763,9 @@ class ChaoxingSigninClient:
         active_id: str,
         info: Optional[Dict[str, Any]] = None,
     ) -> str:
-        other_id = int(activity.get("otherId", 0))
+        # `or 0` (not the 2-arg .get default) so a present-but-null field — which
+        # Chaoxing sends routinely — does not raise TypeError on int(None).
+        other_id = int(activity.get("otherId") or 0)
         if other_id == 3:
             return "gesture"
         if other_id == 5:
@@ -758,10 +775,10 @@ class ChaoxingSigninClient:
         if other_id == 2:
             return "qrcode"
         if other_id == 0:
-            if int(activity.get("ifphoto", 0)) == 1:
+            if int(activity.get("ifphoto") or 0) == 1:
                 return "photo"
             info = info if info is not None else self.get_ppt_active_info(active_id)
-            if int(info.get("ifphoto", 0)) == 1:
+            if int((info or {}).get("ifphoto") or 0) == 1:
                 return "photo"
             return "normal"
         return "normal"
@@ -799,7 +816,7 @@ class ChaoxingSigninClient:
             "className": str(course.get("className") or course.get("clazzName") or course_name).strip(),
             "name": activity.get("nameOne") or activity.get("name") or "",
             "type": sign_type or self._resolve_sign_type(activity, active_id, detail),
-            "otherId": int(activity.get("otherId", 0)),
+            "otherId": int(activity.get("otherId") or 0),
             "status": "active" if status_code == 1 else "ended" if status_code in (2, 3) else "unknown",
             "statusCode": status_code,
             "deadline": deadline_iso,
@@ -1668,26 +1685,38 @@ class ChaoxingSigninManager:
             reverse=True,
         )
 
-    def get_task_logs(self, user_id: str, task_id: str) -> Optional[List[Dict[str, Any]]]:
+    def get_task_logs(
+        self, user_id: str, task_id: str, cursor: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Return logs from ``cursor`` (default 0) WITHOUT mutating server state.
+
+        Stateless, per-request slicing — mirrors learning_manager.get_task_logs.
+        The old version advanced a single shared server-side cursor on every read,
+        so reopening a task or two overlapping polls (3s poll vs manual refresh)
+        raced on it and showed blank/partial logs. The client now tracks its own
+        cursor and passes it back.
+        """
         normalized_user_id = str(user_id or "").strip()
         normalized_task_id = str(task_id or "").strip()
+
+        def _slice(task: Dict[str, Any]) -> Dict[str, Any]:
+            all_logs = task.get("logs", [])
+            start = int(cursor) if cursor is not None else 0
+            if start < 0:
+                start = 0
+            return {"logs": list(all_logs[start:]), "cursor": len(all_logs)}
+
         with self._lock:
             task = self._tasks.get(normalized_task_id)
             if task and task.get("user_id") == normalized_user_id:
-                start = int(task.get("_log_cursor", 0))
-                logs = list(task.get("logs", [])[start:])
-                task["_log_cursor"] = len(task.get("logs", []))
-                return logs
+                return _slice(task)
 
         self._load_task_from_store(normalized_user_id, normalized_task_id)
         with self._lock:
             task = self._tasks.get(normalized_task_id)
             if not task or task.get("user_id") != normalized_user_id:
                 return None
-            start = int(task.get("_log_cursor", 0))
-            logs = list(task.get("logs", [])[start:])
-            task["_log_cursor"] = len(task.get("logs", []))
-            return logs
+            return _slice(task)
 
     @staticmethod
     def _task_public_payload(task: Dict[str, Any]) -> Dict[str, Any]:
