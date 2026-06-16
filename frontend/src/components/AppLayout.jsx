@@ -56,6 +56,7 @@ export default function AppLayout() {
             <button
               type="button"
               onClick={handleLogout}
+              aria-label="退出登录"
               className="inline-flex min-h-[40px] items-center gap-1.5 rounded-full border border-border/60 bg-surface/60 px-3.5 py-1.5 text-sm text-text/70 transition-colors hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <LogOut className="h-4 w-4" aria-hidden="true" />
