@@ -10,7 +10,7 @@ export const DONE_STATUSES = new Set(['completed', 'failed', 'error', 'cancelled
 export const RESTORE_STATUSES = new Set(['running', 'pending', 'paused'])
 
 
-export const CARD = 'rounded-2xl border border-white/20 bg-white/80 p-6 shadow-lg backdrop-blur-lg'
+export const CARD = 'rounded-2xl border border-border/20 bg-surface/80 p-6 shadow-lg backdrop-blur-lg'
 
 
 export const toNum = (value, fallback = 0) => {

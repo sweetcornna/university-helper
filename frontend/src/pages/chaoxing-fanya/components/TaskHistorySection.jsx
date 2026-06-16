@@ -11,10 +11,10 @@ export default function TaskHistorySection({ taskHistory, taskId, selectTaskFrom
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
 
 
-        <h2 className="text-xl font-semibold text-slate-900">最近任务 / 历史任务</h2>
+        <h2 className="text-xl font-semibold text-text">最近任务 / 历史任务</h2>
 
 
-        <p className="text-xs text-slate-500">点击任意任务可恢复详情和日志</p>
+        <p className="text-xs text-text-muted">点击任意任务可恢复详情和日志</p>
 
 
       </div>
@@ -23,7 +23,7 @@ export default function TaskHistorySection({ taskHistory, taskId, selectTaskFrom
       {taskHistory.length === 0 ? (
 
 
-        <p className="text-sm text-slate-400">暂无历史任务</p>
+        <p className="text-sm text-text-muted">暂无历史任务</p>
 
 
       ) : (
@@ -65,10 +65,10 @@ export default function TaskHistorySection({ taskHistory, taskId, selectTaskFrom
                   selected
 
 
-                    ? 'border-sky-400 bg-sky-50'
+                    ? 'border-primary bg-primary/10'
 
 
-                    : 'border-slate-200 bg-white hover:border-sky-200 hover:bg-slate-50'
+                    : 'border-border bg-surface hover:border-primary/40 hover:bg-surface-hover'
 
 
                 }`}
@@ -77,10 +77,10 @@ export default function TaskHistorySection({ taskHistory, taskId, selectTaskFrom
               >
 
 
-                <p className="font-mono text-sm text-slate-900">{task.task_id}</p>
+                <p className="font-mono text-sm text-text">{task.task_id}</p>
 
 
-                <div className="mt-1 flex flex-wrap gap-x-4 text-xs text-slate-600">
+                <div className="mt-1 flex flex-wrap gap-x-4 text-xs text-text/70">
 
 
                   <span>状态：{task.status || 'unknown'}</span>

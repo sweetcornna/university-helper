@@ -26,7 +26,7 @@ export default class ErrorBoundary extends Component {
       <div role="alert" className="min-h-screen flex items-center justify-center p-6 bg-background">
         <div className="max-w-md w-full text-center space-y-4">
           <h1 className="text-2xl font-bold text-text">页面出现了一点意外</h1>
-          <p className="text-sm text-slate-500 break-words">
+          <p className="text-sm text-text-muted break-words">
             {error?.message || '未知错误'}
           </p>
           <div className="flex gap-3 justify-center pt-2">
@@ -40,7 +40,7 @@ export default class ErrorBoundary extends Component {
             <button
               type="button"
               onClick={() => window.location.assign('/login')}
-              className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
+              className="px-4 py-2 rounded-lg border border-border hover:bg-surface-hover"
             >
               回到登录
             </button>

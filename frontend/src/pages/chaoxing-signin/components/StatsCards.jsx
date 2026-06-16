@@ -7,7 +7,7 @@ export default function StatsCards({ todayStats }) {
     <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
       <div className={GLASS_CARD_CLASS}>
         <div className="flex items-center gap-3">
-          <CheckCircle2 className="h-8 w-8 text-green-600" />
+          <CheckCircle2 className="h-8 w-8 text-success" />
           <div>
             <p className="text-sm text-text/70">今日成功</p>
             <p className="text-2xl font-bold text-text">{todayStats.success}</p>
@@ -16,7 +16,7 @@ export default function StatsCards({ todayStats }) {
       </div>
       <div className={GLASS_CARD_CLASS}>
         <div className="flex items-center gap-3">
-          <AlertCircle className="h-8 w-8 text-red-600" />
+          <AlertCircle className="h-8 w-8 text-danger" />
           <div>
             <p className="text-sm text-text/70">今日失败</p>
             <p className="text-2xl font-bold text-text">{todayStats.failed}</p>

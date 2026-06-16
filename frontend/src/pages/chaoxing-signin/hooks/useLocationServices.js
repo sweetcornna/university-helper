@@ -37,6 +37,35 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
     }))
   }, [setForm])
 
+  // Browser geolocation returns WGS-84, which applyResolvedLocation converts to
+  // BD-09 for us — so this is the lowest-friction way to fill in coordinates.
+  const useCurrentLocation = useCallback(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGeocodeStatus('error')
+      setGeocodeMessage('当前环境不支持定位，请改用地图选点或地址解析。')
+      return
+    }
+    setGeocodeStatus('info')
+    setGeocodeMessage('正在获取当前位置…')
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        applyResolvedLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        })
+        setGeocodeStatus('success')
+        setGeocodeMessage('已使用当前位置填入坐标。')
+      },
+      (error) => {
+        setGeocodeStatus('error')
+        setGeocodeMessage(
+          error?.code === 1 ? '定位权限被拒绝，请在浏览器允许定位后重试。' : '获取当前位置失败，请稍后重试。'
+        )
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    )
+  }, [applyResolvedLocation])
+
   const resolveLocationCoordinates = useCallback(async () => {
     const liveAddressInput = document.getElementById('cx-address')
     const liveAddress =
@@ -145,6 +174,7 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
     isMapPickerOpen,
     setIsMapPickerOpen,
     applyResolvedLocation,
+    useCurrentLocation,
     resolveLocationCoordinates,
     searchLocationCandidates,
     choosePlaceSearchResult,

@@ -21,6 +21,15 @@
     --color-text-muted: 100 116 139;     /* #64748B */
     --color-border: 226 232 240;         /* #E2E8F0 */
     --color-border-subtle: 241 245 249;  /* #F1F5F9 */
+
+    /* Status colours — semantic so success/danger/warning stay consistent
+       across the app and remap cleanly in dark mode. */
+    --color-success: 22 163 74;          /* #16A34A */
+    --color-success-surface: 240 253 244;/* #F0FDF4 */
+    --color-danger: 220 38 38;           /* #DC2626 */
+    --color-danger-surface: 254 242 242; /* #FEF2F2 */
+    --color-warning: 217 119 6;          /* #D97706 */
+    --color-warning-surface: 255 251 235;/* #FFFBEB */
   }
 
   .dark {
@@ -34,6 +43,14 @@
     --color-text-muted: 148 163 184;     /* #94A3B8 */
     --color-border: 51 65 85;
     --color-border-subtle: 30 41 59;
+
+    /* Brighter status hues + low-alpha surfaces that read on the dark bg. */
+    --color-success: 74 222 128;         /* #4ADE80 */
+    --color-success-surface: 22 101 52;  /* #166534 */
+    --color-danger: 248 113 113;         /* #F87171 */
+    --color-danger-surface: 127 29 29;   /* #7F1D1D */
+    --color-warning: 251 191 36;         /* #FBBF24 */
+    --color-warning-surface: 120 53 15;  /* #78350F */
   }
 
   /*
@@ -65,8 +82,8 @@
   .clay-button {
     @apply rounded-xl px-6 py-3 font-medium cursor-pointer
            transition-all duration-200
-           hover:scale-105
-           disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100
+           hover:-translate-y-0.5 hover:shadow-md
+           disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
   }
 

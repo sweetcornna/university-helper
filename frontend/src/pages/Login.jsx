@@ -59,7 +59,7 @@ export default function Login() {
             required
           />
           {error && (
-            <p role="alert" className="text-red-600 text-sm">
+            <p role="alert" className="text-danger text-sm">
               {error}
             </p>
           )}

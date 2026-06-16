@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isAuthenticated, removeToken } from '../../../utils/auth'
 import { api } from '../../../utils/api'
+import { readLastUsername, saveLastUsername } from '../../../utils/chaoxingCreds'
 import { TOKEN_ERROR } from '../utils'
 
 
@@ -11,7 +12,8 @@ export default function useAuthentication({ stopPolling }) {
   const navigate = useNavigate()
 
 
-  const [username, setUsername] = useState('')
+  // Recall the account shared with the signin page so it isn't retyped here.
+  const [username, setUsername] = useState(readLastUsername)
 
 
   const [password, setPassword] = useState('')
@@ -27,6 +29,12 @@ export default function useAuthentication({ stopPolling }) {
 
 
   const [notice, setNotice] = useState('')
+
+
+  // Persist the account so the signin page recalls it too.
+  useEffect(() => {
+    saveLastUsername(username)
+  }, [username])
 
 
   useEffect(() => {

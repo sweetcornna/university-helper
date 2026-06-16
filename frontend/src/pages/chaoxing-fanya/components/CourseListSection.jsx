@@ -30,7 +30,7 @@ export default function CourseListSection({
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
 
 
-        <h2 className="text-xl font-semibold text-slate-900">课程列表</h2>
+        <h2 className="text-xl font-semibold text-text">课程列表</h2>
 
 
         <div className="flex gap-2">
@@ -42,7 +42,7 @@ export default function CourseListSection({
             type="button"
 
 
-            className="min-h-[44px] cursor-pointer rounded-lg border border-slate-200 px-3 text-sm"
+            className="min-h-[44px] cursor-pointer rounded-lg border border-border px-3 text-sm"
 
 
             onClick={() => setSelectedCourses(allSelected ? [] : courseIds)}
@@ -63,7 +63,7 @@ export default function CourseListSection({
             type="button"
 
 
-            className="min-h-[44px] cursor-pointer rounded-lg border border-slate-200 px-3 text-sm"
+            className="min-h-[44px] cursor-pointer rounded-lg border border-border px-3 text-sm"
 
 
             onClick={() => {
@@ -105,7 +105,7 @@ export default function CourseListSection({
           return (
 
 
-            <div key={courseId || Math.random()} className="rounded-xl border border-white/30 bg-white/60 p-3">
+            <div key={courseId || Math.random()} className="rounded-xl border border-border/30 bg-surface/60 p-3">
 
 
               <div className="flex items-center gap-3">
@@ -144,10 +144,10 @@ export default function CourseListSection({
                 <div className="flex-1">
 
 
-                  <p className="font-semibold text-slate-900">{getCourseName(course)}</p>
+                  <p className="font-semibold text-text">{getCourseName(course)}</p>
 
 
-                  <p className="text-xs text-slate-500">{courseId || '--'}</p>
+                  <p className="text-xs text-text-muted">{courseId || '--'}</p>
 
 
                 </div>
@@ -159,7 +159,7 @@ export default function CourseListSection({
                   type="button"
 
 
-                  className="min-h-[44px] min-w-[44px] cursor-pointer rounded-lg border border-slate-200 px-2 text-sm"
+                  className="min-h-[44px] min-w-[44px] cursor-pointer rounded-lg border border-border px-2 text-sm"
 
 
                   onClick={() => {
@@ -186,13 +186,13 @@ export default function CourseListSection({
               {isExpanded && (
 
 
-                <div className="mt-2 space-y-1 text-sm text-slate-600">
+                <div className="mt-2 space-y-1 text-sm text-text/70">
 
 
                   {(chapters[courseId] || []).map((chapter) => (
 
 
-                    <div key={`${courseId}-${chapter.id || chapter.name}`} className="rounded-lg bg-white px-3 py-2">
+                    <div key={`${courseId}-${chapter.id || chapter.name}`} className="rounded-lg bg-surface px-3 py-2">
 
 
                       {chapter.title || chapter.name}
@@ -207,7 +207,7 @@ export default function CourseListSection({
                   {(chapters[courseId] || []).length === 0 && (
 
 
-                    <div className="text-xs text-slate-500">暂无章节数据</div>
+                    <div className="text-xs text-text-muted">暂无章节数据</div>
 
 
                   )}

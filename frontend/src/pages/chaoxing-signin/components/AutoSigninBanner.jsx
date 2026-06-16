@@ -54,7 +54,7 @@ export default function AutoSigninBanner({
           <Button
             type="button"
             variant="secondary"
-            className="min-h-[44px] cursor-pointer transition-all duration-200 hover:scale-105 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="min-h-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
             onClick={onRefresh}
             disabled={refreshing}
           >
@@ -109,7 +109,7 @@ export default function AutoSigninBanner({
               className={`mt-3 rounded-lg border px-3 py-2 text-sm ${
                 hasMissing
                   ? 'border-amber-300/60 bg-amber-50/80 text-amber-700'
-                  : 'border-emerald-300/60 bg-emerald-50/80 text-emerald-700'
+                  : 'border-success/60 bg-success-surface/80 text-success'
               }`}
             >
               {hasMissing ? (
@@ -130,14 +130,14 @@ export default function AutoSigninBanner({
           <Button
             type="button"
             variant="secondary"
-            className="min-h-[44px] cursor-pointer transition-all duration-200 hover:scale-105 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="min-h-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
             onClick={() => onApplyTask?.(task)}
           >
             应用到表单
           </Button>
           <Button
             type="button"
-            className="min-h-[44px] cursor-pointer transition-all duration-200 hover:scale-105 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
+            className="min-h-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
             onClick={() => onApplyAndSubmit?.(task)}
             disabled={submitting || hasMissing}
             title={hasMissing ? `请先填写：${formatMissingFieldLabels(missingFields)}` : undefined}
@@ -147,7 +147,7 @@ export default function AutoSigninBanner({
           <Button
             type="button"
             variant="secondary"
-            className="min-h-[44px] cursor-pointer transition-all duration-200 hover:scale-105 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="min-h-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
             onClick={onRefresh}
             disabled={refreshing}
           >

@@ -25,7 +25,7 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
         <Button
           type="button"
           variant="secondary"
-          className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 hover:scale-105"
+          className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
           onClick={fetchSigninTasks}
         >
           <RefreshCw className="h-4 w-4" />
@@ -106,7 +106,7 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
                 <Button
                   type="button"
                   disabled={isBackgroundTask && !backgroundTaskId}
-                  className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 hover:scale-105"
+                  className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
                   onClick={(event) => {
                     event.stopPropagation()
                     if (isBackgroundTask) {
