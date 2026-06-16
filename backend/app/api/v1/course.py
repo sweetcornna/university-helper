@@ -60,6 +60,10 @@ class ZhihuishuQRStatusResponse(BaseModel):
     session_id: str
     status: str
     message: str
+    # Carry the (possibly refreshed) QR image so the client can re-render it when
+    # the original expires — qr_login regenerates the QR on expiry, but without
+    # this field the poller never sees the new code. (F-qr-refresh)
+    qr_code: Optional[str] = None
 
 
 class ZhihuishuPasswordLoginRequest(BaseModel):
@@ -477,6 +481,7 @@ async def get_zhihuishu_login_status(
             session_id=session_id,
             status=state.get("status", "pending"),
             message=state.get("message", "Waiting for scan"),
+            qr_code=state.get("qr_code"),
         )
 
 
