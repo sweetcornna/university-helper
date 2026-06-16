@@ -78,6 +78,33 @@ const pickErrorMessage = (payload, status) => {
   )
 }
 
+// Only the APP's own auth layer (dependencies.py / tenant_isolation middleware)
+// emits these 401 details, and they're the sole genuine "your app session
+// expired" signals. A hard 401 carrying anything else is a THIRD-PARTY platform
+// asking for ITS OWN login (e.g. "Zhihuishu not logged in", "Please login to
+// Chaoxing first", "Login failed") or a business error — those must surface to
+// the page, NOT wipe the app token. Previously every 401 was treated as app
+// expiry, so opening the Zhihuishu page (whose bootstrap fetches
+// /course/zhihuishu/config → 401 "Zhihuishu not logged in" until the user logs
+// into Zhihuishu) bounced the user to /login in an endless loop.
+const APP_JWT_401_PATTERN =
+  /(invalid token|invalid authentication credentials|missing bearer token|missing token|invalid authorization header|invalid token payload|token has expired|token validation failed|not authenticated)/i
+
+const messageOf = (payload) =>
+  payload?.message ||
+  formatDetail(payload?.detail) ||
+  payload?.error ||
+  payload?.msg ||
+  payload?.data?.message ||
+  ''
+
+// True only for the app's own session expiry: a hard 401 with an app-auth-layer
+// message, or a "soft" HTTP-200 token-error body (the Chaoxing raw-fetch path).
+const isAppSessionExpiry = (status, payload) => {
+  if (status === 401) return APP_JWT_401_PATTERN.test(String(messageOf(payload)))
+  return isSoftAuthFailure(payload)
+}
+
 const handleUnauthorized = () => {
   removeToken()
   if (typeof window !== 'undefined') {
@@ -127,7 +154,7 @@ export const api = async (endpoint, options = {}) => {
     // A "soft" auth failure (HTTP 200 + { status: false, message: 'token ...' })
     // is handled identically (F62): clear the stale token and dispatch the
     // expiry event so the shell redirects to /login.
-    if ((response.status === 401 || isSoftAuthFailure(payload)) && token) {
+    if (isAppSessionExpiry(response.status, payload) && token) {
       handleUnauthorized()
       throw new ApiError(
         pickErrorMessage(payload, response.status) || '登录状态已失效，请重新登录。',

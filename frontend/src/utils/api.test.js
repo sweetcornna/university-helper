@@ -72,4 +72,38 @@ describe('api() auth handling', () => {
     expect(expiredEvents).toBe(1)
     expect(getToken()).toBeNull()
   })
+
+  // Regression: a THIRD-PARTY platform 401 ("not logged into Zhihuishu/Chaoxing")
+  // must NOT be treated as app-session expiry. It previously wiped the app token
+  // and looped the user to /login the moment they opened the Zhihuishu page,
+  // whose bootstrap fetches /course/zhihuishu/config (401 until Zhihuishu login).
+  test('does NOT log out on a Zhihuishu "not logged in" 401', async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve(jsonResponse(401, { detail: 'Zhihuishu not logged in' }))
+    )
+
+    await expect(api('/course/zhihuishu/config')).rejects.toBeInstanceOf(ApiError)
+    expect(expiredEvents).toBe(0)
+    expect(getToken()).toBe('valid.jwt.token')
+  })
+
+  test('does NOT log out on a Chaoxing "please login first" 401', async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve(jsonResponse(401, { detail: 'Please login to Chaoxing first' }))
+    )
+
+    await expect(api('/course/chaoxing/courses')).rejects.toBeInstanceOf(ApiError)
+    expect(expiredEvents).toBe(0)
+    expect(getToken()).toBe('valid.jwt.token')
+  })
+
+  test('does NOT log out on a generic third-party "Login failed" 401', async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve(jsonResponse(401, { detail: 'Login failed' }))
+    )
+
+    await expect(api('/course/zhihuishu/password-login')).rejects.toBeInstanceOf(ApiError)
+    expect(expiredEvents).toBe(0)
+    expect(getToken()).toBe('valid.jwt.token')
+  })
 })
