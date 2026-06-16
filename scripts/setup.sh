@@ -2,10 +2,14 @@
 # Local bootstrap for university-helper. Idempotent.
 set -euo pipefail
 
+# Release this one-click installer targets. Bump alongside backend/app/main.py
+# and frontend/package.json when cutting a new version.
+APP_VERSION="1.1.0"
+
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
-echo "=== university-helper · local setup ==="
+echo "=== university-helper · local setup (v${APP_VERSION}) ==="
 
 command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "docker compose v2 is required"; exit 1; }

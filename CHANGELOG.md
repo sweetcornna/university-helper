@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-16
+
 ### Fixed (round 4 — functional audit, validated against real 学习通/知到 accounts)
 - **Zhihuishu course/video listing was fully broken** — Zhihuishu's `AppInterfaceSignInterceptor` now rejects unsigned requests (`code:400 "aes加密参数异常"`), so `get_course_list`/`get_video_list` returned empty. Requests are now AES-signed via the new `crypto.encrypt_secret_str()` (`secretStr` param + `HOME_KEY`) and read the response under `result` (the server moved it from `rt`). Verified live (request accepted, code 200). *(studyservice/video-list key still needs a real enrolled course to confirm.)*
 - **CORS middleware order** — `CORSMiddleware` is now outermost so `tenant_isolation`'s 401 carries `Access-Control-Allow-Origin`; the SPA's session-expiry redirect fires instead of the app appearing to hang. (Supersedes the round-3 "metrics first-registered" note, which had the nesting backwards; metrics now sits outside tenant_isolation so it still counts those 401s.)
