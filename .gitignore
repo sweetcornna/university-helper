@@ -75,3 +75,4 @@ backend/cache.json
 # Claude Code worktree metadata (per-machine, not project source)
 .claude/
 
+frontend/coverage/
