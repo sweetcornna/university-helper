@@ -89,10 +89,21 @@ def _build_allowed_hosts(origins: list[str]) -> list[str]:
 
 
 # NOTE on middleware ordering:
-# FastAPI runs `@app.middleware("http")` and `add_middleware` in REVERSE
-# registration order — the LAST registered is the OUTERMOST. Register
-# request_metrics_middleware FIRST so it wraps everything else and sees
-# 401s emitted by tenant_isolation/CORS.
+# Starlette runs middleware in REVERSE registration order — the LAST registered
+# is the OUTERMOST. We need, from outer to inner:
+#     CORS -> TrustedHost -> security_headers -> https_redirect -> metrics -> tenant_isolation -> route
+# so that (a) CORS is outermost and wraps EVERY response — including the bare 401
+# that tenant_isolation short-circuits on a missing/expired token — giving it the
+# Access-Control-Allow-Origin header so the browser can READ the 401 and the SPA's
+# 401 handler fires (otherwise session-expiry looks like a hung app); and (b)
+# request_metrics sits OUTSIDE tenant_isolation so it still counts those 401s.
+# Therefore tenant_isolation is registered FIRST (innermost) and CORS LAST.
+
+# Innermost middleware: registered first so its short-circuit responses still
+# travel back out through request_metrics (counted) and CORS (CORS headers added).
+app.middleware("http")(tenant_isolation_middleware)
+
+
 @app.middleware("http")
 async def request_metrics_middleware(request: Request, call_next):
     response = await call_next(request)
@@ -148,9 +159,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
-# Tenant isolation middleware
-app.middleware("http")(tenant_isolation_middleware)
+# (tenant_isolation_middleware is registered ABOVE as the innermost middleware so
+# its short-circuit 401 still passes back out through CORS — see the ordering note.)
 
 
 # Global exception handlers
