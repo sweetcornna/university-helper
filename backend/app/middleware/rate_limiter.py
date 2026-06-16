@@ -1,4 +1,5 @@
 import logging
+import threading
 from ipaddress import ip_address
 
 from fastapi import Request, HTTPException, status
@@ -19,6 +20,11 @@ class RateLimiter:
         self.window = window
         self._cache: Dict[str, Tuple[int, datetime]] = defaultdict(lambda: (0, datetime.now()))
         self._request_count: int = 0
+        # check_rate_limit is now invoked via asyncio.to_thread (off the event
+        # loop), so concurrent threads can touch _cache / _request_count at once.
+        # Guard every mutation of that shared state to avoid lost counts and
+        # "dict changed size during iteration" in the cleanup sweep.
+        self._lock = threading.Lock()
 
     def _is_trusted_proxy(self, host: str) -> bool:
         candidate = str(host or "").strip()
@@ -56,10 +62,11 @@ class RateLimiter:
 
     def _maybe_cleanup(self) -> None:
         """Periodically clean up expired and excess entries."""
-        self._request_count += 1
-        if self._request_count % self.CLEANUP_INTERVAL == 0:
-            self._cleanup_expired()
-            self._evict_oldest()
+        with self._lock:
+            self._request_count += 1
+            if self._request_count % self.CLEANUP_INTERVAL == 0:
+                self._cleanup_expired()
+                self._evict_oldest()
 
     def _get_forwarded_client_id(self, request: Request) -> Optional[str]:
         # X-Forwarded-For is only consulted when the direct peer is a known
@@ -155,17 +162,18 @@ class RateLimiter:
 
     def _check_in_memory(self, client_id: str, now: datetime) -> bool:
         """In-memory fallback. Returns True if allowed, False if blocked."""
-        count, start_time = self._cache[client_id]
+        with self._lock:
+            count, start_time = self._cache[client_id]
 
-        if now - start_time > timedelta(seconds=self.window):
-            self._cache[client_id] = (1, now)
+            if now - start_time > timedelta(seconds=self.window):
+                self._cache[client_id] = (1, now)
+                return True
+
+            if count >= self.requests:
+                return False
+
+            self._cache[client_id] = (count + 1, start_time)
             return True
-
-        if count >= self.requests:
-            return False
-
-        self._cache[client_id] = (count + 1, start_time)
-        return True
 
     def check_rate_limit(self, request: Request) -> None:
         self._maybe_cleanup()

@@ -39,21 +39,22 @@ class ZhihuishuLearning:
             raise Exception(f"Failed to get course list: {e}")
 
     def get_video_list(self, course_id: str) -> List[Dict]:
-        """获取课程视频列表
+        """获取课程视频列表（studyservice-api）
 
-        同 get_course_list：studyservice-api 走同一套 AppInterfaceSign 拦截器，故同样
-        需要 ``secretStr`` 签名（把请求参数加密放进 secretStr）。响应同样优先读 ``result``，
-        回退 ``rt``。注意：此端点的密钥未能在本次离线验证（账号当前无共享课），沿用
-        HOME_KEY；如线上仍报 "aes解密异常"，需用真实选课账号抓包确认该服务的密钥。
+        响应优先读 ``result``，回退 ``rt``（与共享课接口一致的兼容处理）。
+
+        关于签名：只有 onlineservice 的 queryShareCourseInfo 被实证要求 AES `secretStr`
+        签名（HOME_KEY，已验证）。studyservice 这个接口的签名方案未能离线验证（当前账号
+        无共享课可测），故此处不臆造一套很可能错误的签名（HOME_KEY 肯定是错的——它是
+        onlineservice 的密钥）。维持原始明文请求；若线上用真实选课账号发现此接口同样被
+        AppInterfaceSign 拦截（报 "aes加密参数异常/aes解密异常"），正确做法是用
+        studyservice 的视频密钥 ``VIDEO_KEY``（即 self.cipher / saveDatabaseIntervalTime
+        所用密钥）按相同 envelope 签名，而非 HOME_KEY。
         """
         url = "https://studyservice-api.zhihuishu.com/gateway/t/v1/learning/queryStudyInfo"
         try:
-            resp = self.session.post(
-                url,
-                data={"secretStr": encrypt_secret_str({"recruitAndCourseId": course_id}, key=HOME_KEY)},
-                proxies=self.proxies,
-                timeout=10,
-            )
+            resp = self.session.post(url, json={"recruitAndCourseId": course_id},
+                                     proxies=self.proxies, timeout=10)
             data = resp.json()
             result = data.get("result") or data.get("rt") or {}
             return result.get("videoChapterDtos") or []
@@ -96,13 +97,14 @@ class ZhihuishuLearning:
             raise Exception(f"video {video_id} has no usable duration ({duration!r})")
 
         # 倍速：以前 watch_video 完全忽略 speed，N 小时课就实打实跑 N 小时。这里把
-        # speed 钳制到 [1,2]，缩短真实 sleep（studyTime 仍按 5 秒步进上报），既加速又
-        # 保持可信的上报节奏以规避风控。(F-speed)
+        # speed 钳制到 [0.5, 2]，缩短/拉长真实 sleep（studyTime 仍按 5 秒步进上报），
+        # 既支持加速也支持页面提供的 0.5x 慢速，同时保持可信的上报节奏以规避风控。
+        # 下界取 0.5 而非 1.0，否则会把用户选的 0.5x 慢速强行抬回正常速。(F-speed)
         try:
             eff_speed = float(speed)
         except (TypeError, ValueError):
             eff_speed = 1.0
-        eff_speed = min(max(eff_speed, 1.0), 2.0)
+        eff_speed = min(max(eff_speed, 0.5), 2.0)
         interval = 5
         sleep_seconds = interval / eff_speed
 

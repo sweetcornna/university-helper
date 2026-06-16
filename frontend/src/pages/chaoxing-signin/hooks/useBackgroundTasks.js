@@ -11,6 +11,11 @@ export default function useBackgroundTasks(requestChaoxingApi) {
   // offset, so reopening a task / overlapping polls no longer race on a shared
   // server cursor and drop logs. Reset to 0 whenever a task is (re)opened.
   const logCursorRef = useRef(0)
+  // Serialize log polls: if two refreshTaskStatus calls overlap (slow open poll
+  // racing the interval poll, or a manual refresh), both would read the same
+  // logCursorRef before either advances it and append the same slice twice.
+  // Skip a refresh while one is already in flight.
+  const inFlightRef = useRef(false)
 
   const [taskId, setTaskId] = useState('')
   const [taskStatus, setTaskStatus] = useState(null)
@@ -26,6 +31,8 @@ export default function useBackgroundTasks(requestChaoxingApi) {
 
   const refreshTaskStatus = useCallback(async (currentTaskId, { setResultType, setResultMessage, setBackgroundTaskHistory } = {}) => {
     if (!currentTaskId) return
+    if (inFlightRef.current) return
+    inFlightRef.current = true
     setStatusLoading(true)
 
     try {
@@ -60,6 +67,7 @@ export default function useBackgroundTasks(requestChaoxingApi) {
       if (setResultMessage) setResultMessage(err.message || '查询任务状态失败。')
       stopPolling()
     } finally {
+      inFlightRef.current = false
       setStatusLoading(false)
     }
   }, [requestChaoxingApi, stopPolling])

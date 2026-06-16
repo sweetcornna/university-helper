@@ -636,6 +636,8 @@ class ChaoxingSigninClient:
 
         tasks: List[Dict[str, Any]] = []
         now_ms = int(time.time() * 1000)
+        attempted = 0
+        failed = 0
 
         for course in courses:
             course_id = str(course.get("courseId", ""))
@@ -645,7 +647,16 @@ class ChaoxingSigninClient:
             if class_filter_set and class_id not in class_filter_set:
                 continue
 
-            payload = self._get_course_activity_list(course_id, class_id)
+            attempted += 1
+            try:
+                payload = self._get_course_activity_list(course_id, class_id)
+            except requests.RequestException as exc:
+                # One bad course must not abort the batch — skip it and keep going.
+                failed += 1
+                logger.warning(
+                    "activelist failed for course=%s class=%s: %s", course_id, class_id, exc
+                )
+                continue
             for activity in payload:
                 # Chaoxing routinely sends keys present-but-null; `int(None)` would
                 # raise TypeError and abort the whole batch, so coerce with `or 0`.
@@ -671,6 +682,14 @@ class ChaoxingSigninClient:
 
                 tasks.append(self._activity_to_task(course, activity, sign_type=sign_type))
 
+        # If EVERY course we tried failed to fetch, surface the upstream failure
+        # instead of an empty (== "no active sign-in") result that a caller would
+        # treat as a successful no-op. (Codex P2)
+        if attempted and failed == attempted and not tasks:
+            raise requests.RequestException(
+                f"All {attempted} activity-list request(s) failed; "
+                "cannot determine active sign-in tasks"
+            )
         return tasks
 
     def get_class_subjects(self) -> List[Dict[str, Any]]:
@@ -718,7 +737,15 @@ class ChaoxingSigninClient:
                 continue
             if normalized_raw_course_id and current_course_id != normalized_raw_course_id:
                 continue
-            for activity in self._get_course_activity_list(current_course_id, current_class_id):
+            try:
+                course_activity_list = self._get_course_activity_list(current_course_id, current_class_id)
+            except requests.RequestException as exc:
+                logger.warning(
+                    "activelist failed for course=%s class=%s: %s",
+                    current_course_id, current_class_id, exc,
+                )
+                continue
+            for activity in course_activity_list:
                 detail = {}
                 active_id = str(activity.get("id") or "").strip()
                 if include_details and active_id:
@@ -730,26 +757,21 @@ class ChaoxingSigninClient:
         return activities
 
     def _get_course_activity_list(self, course_id: str, class_id: str) -> List[Dict[str, Any]]:
-        # A network failure here must NOT abort discovery for the OTHER courses:
-        # return [] so the per-course loop skips this one (matches the guarded
-        # pattern used by every other network call in this client).
-        try:
-            resp = self.session.get(
-                ACTIVE_LIST_URL,
-                params={
-                    "fid": 0,
-                    "courseId": course_id,
-                    "classId": class_id,
-                    "_": int(time.time() * 1000),
-                },
-                timeout=12,
-            )
-        except requests.RequestException as exc:
-            logger.warning(
-                "activelist request failed for course=%s class=%s: %s",
-                course_id, class_id, exc,
-            )
-            return []
+        # Raises requests.RequestException on network failure so callers can tell a
+        # transient fetch error apart from a genuinely empty activeList — returning
+        # [] for both would let a Chaoxing timeout look like a successful "no active
+        # sign-in" no-op. Callers guard PER COURSE so one bad course still does not
+        # abort the whole batch.
+        resp = self.session.get(
+            ACTIVE_LIST_URL,
+            params={
+                "fid": 0,
+                "courseId": course_id,
+                "classId": class_id,
+                "_": int(time.time() * 1000),
+            },
+            timeout=12,
+        )
         data = self._safe_json(resp)
         # `data.get("data", {})` does NOT guard an explicit ``"data": null`` (common
         # when a per-course session/cookie is invalid) — `None.get(...)` would raise
@@ -1249,7 +1271,14 @@ class ChaoxingSigninManager:
 
     def get_active_tasks(self, user_id: str, sign_type: str = "all") -> List[Dict[str, Any]]:
         client = self._get_client(user_id)
-        live_tasks = client.get_active_tasks(expected_type=sign_type) if client else []
+        live_tasks: List[Dict[str, Any]] = []
+        if client:
+            try:
+                live_tasks = client.get_active_tasks(expected_type=sign_type)
+            except requests.RequestException as exc:
+                # Dashboard feed: a transient upstream failure should fall back to
+                # the persisted background-task feed rather than 500 the poll.
+                logger.warning("live active-task discovery failed: %s", exc)
         if live_tasks:
             return [self._decorate_live_task(task) for task in live_tasks]
         return self._build_background_task_feed(user_id)
@@ -1368,7 +1397,14 @@ class ChaoxingSigninManager:
             return {"status": False, "message": "Login state unavailable"}
 
         filters = [course_id] if course_id else None
-        tasks = client.get_active_tasks(course_filters=filters, expected_type=sign_type)
+        try:
+            tasks = client.get_active_tasks(course_filters=filters, expected_type=sign_type)
+        except requests.RequestException as exc:
+            return {
+                "status": False,
+                "message": f"Failed to query active sign-in tasks: {exc}",
+                "data": [],
+            }
         if not tasks:
             return {"status": False, "message": "No active sign-in task found", "data": []}
 
@@ -1410,12 +1446,19 @@ class ChaoxingSigninManager:
             return {"status": False, "message": "Login state unavailable"}
 
         course_filters = [course_id] if course_id else None
-        tasks = client.get_active_tasks(
-            course_filters=course_filters,
-            class_filters=[normalized_class_id],
-            active_id=active_id,
-            expected_type=sign_type,
-        )
+        try:
+            tasks = client.get_active_tasks(
+                course_filters=course_filters,
+                class_filters=[normalized_class_id],
+                active_id=active_id,
+                expected_type=sign_type,
+            )
+        except requests.RequestException as exc:
+            return {
+                "status": False,
+                "message": f"Failed to query active sign-in tasks: {exc}",
+                "data": [],
+            }
         if not tasks:
             return {"status": False, "message": "No active class sign-in task found", "data": []}
 
@@ -1544,12 +1587,19 @@ class ChaoxingSigninManager:
             return
 
         self._append_task_log(task_id, "Login successful")
-        tasks = client.get_active_tasks(
-            course_filters=course_list,
-            class_filters=class_list if subject_type == "class" else None,
-            active_id=active_id,
-            expected_type=sign_type,
-        )
+        try:
+            tasks = client.get_active_tasks(
+                course_filters=course_list,
+                class_filters=class_list if subject_type == "class" else None,
+                active_id=active_id,
+                expected_type=sign_type,
+            )
+        except requests.RequestException as exc:
+            # Upstream fetch failed for every course — surface as an error so the
+            # task is retried/visible, not silently reported as a completed no-op.
+            self._update_task(task_id, status="error", message=f"Failed to query active sign-in tasks: {exc}")
+            self._append_task_log(task_id, f"Failed to query active sign-in tasks: {exc}", "error")
+            return
         if not tasks:
             self._update_task(task_id, status="completed", message="No active sign-in task")
             self._append_task_log(task_id, "No active sign-in task found")
