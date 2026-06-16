@@ -757,11 +757,12 @@ class ChaoxingSigninClient:
         return activities
 
     def _get_course_activity_list(self, course_id: str, class_id: str) -> List[Dict[str, Any]]:
-        # Raises requests.RequestException on network failure so callers can tell a
-        # transient fetch error apart from a genuinely empty activeList — returning
-        # [] for both would let a Chaoxing timeout look like a successful "no active
-        # sign-in" no-op. Callers guard PER COURSE so one bad course still does not
-        # abort the whole batch.
+        # Raises requests.RequestException on ANY fetch failure — network error,
+        # non-2xx HTTP (e.g. 502), OR a non-JSON body (e.g. an auth-redirect login
+        # page served as 200 HTML) — so callers can tell a transient/upstream
+        # failure apart from a genuinely empty activeList. Returning [] for all of
+        # them would let a failure look like a successful "no active sign-in" no-op.
+        # Callers guard PER COURSE so one bad course still does not abort the batch.
         resp = self.session.get(
             ACTIVE_LIST_URL,
             params={
@@ -772,7 +773,14 @@ class ChaoxingSigninClient:
             },
             timeout=12,
         )
-        data = self._safe_json(resp)
+        resp.raise_for_status()  # requests.HTTPError (a RequestException) on 4xx/5xx
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            # Not JSON → an error/redirect page, NOT an empty activeList.
+            raise requests.RequestException(
+                "activelist returned a non-JSON response"
+            ) from exc
         # `data.get("data", {})` does NOT guard an explicit ``"data": null`` (common
         # when a per-course session/cookie is invalid) — `None.get(...)` would raise
         # AttributeError and crash discovery; use `or {}`.

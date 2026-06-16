@@ -11,11 +11,15 @@ export default function useBackgroundTasks(requestChaoxingApi) {
   // offset, so reopening a task / overlapping polls no longer race on a shared
   // server cursor and drop logs. Reset to 0 whenever a task is (re)opened.
   const logCursorRef = useRef(0)
-  // Serialize log polls: if two refreshTaskStatus calls overlap (slow open poll
-  // racing the interval poll, or a manual refresh), both would read the same
-  // logCursorRef before either advances it and append the same slice twice.
-  // Skip a refresh while one is already in flight.
-  const inFlightRef = useRef(false)
+  // Task-scoped in-flight guard: holds the task id whose poll is currently in
+  // flight (or ''). It skips a *second poll of the SAME task* (so two overlapping
+  // refreshes don't read one cursor and double-append), while still allowing a
+  // newly-opened task to poll. Paired with openTaskRef below, which drops stale
+  // responses so an in-flight poll for task A can't write A's status/logs/cursor
+  // into a freshly-opened task B's view.
+  const inFlightRef = useRef('')
+  // The currently-open task id; responses for any other id are discarded.
+  const openTaskRef = useRef('')
 
   const [taskId, setTaskId] = useState('')
   const [taskStatus, setTaskStatus] = useState(null)
@@ -31,8 +35,10 @@ export default function useBackgroundTasks(requestChaoxingApi) {
 
   const refreshTaskStatus = useCallback(async (currentTaskId, { setResultType, setResultMessage, setBackgroundTaskHistory } = {}) => {
     if (!currentTaskId) return
-    if (inFlightRef.current) return
-    inFlightRef.current = true
+    // Skip only a concurrent poll of the SAME task (prevents one-cursor double
+    // append); a different (newly-opened) task is allowed to proceed.
+    if (inFlightRef.current === currentTaskId) return
+    inFlightRef.current = currentTaskId
     setStatusLoading(true)
 
     try {
@@ -40,6 +46,10 @@ export default function useBackgroundTasks(requestChaoxingApi) {
         requestChaoxingApi(`/task/${currentTaskId}`),
         requestChaoxingApi(`/logs/${currentTaskId}?cursor=${logCursorRef.current}`)
       ])
+
+      // The open task changed while this request was in flight — discard the
+      // stale result so it can't overwrite the new task's view or cursor.
+      if (openTaskRef.current !== currentTaskId) return
 
       const statusData = statusResp?.data || {}
       setTaskStatus(statusData)
@@ -67,7 +77,8 @@ export default function useBackgroundTasks(requestChaoxingApi) {
       if (setResultMessage) setResultMessage(err.message || '查询任务状态失败。')
       stopPolling()
     } finally {
-      inFlightRef.current = false
+      // Only clear if still ours — a newer task's poll may have taken the slot.
+      if (inFlightRef.current === currentTaskId) inFlightRef.current = ''
       setStatusLoading(false)
     }
   }, [requestChaoxingApi, stopPolling])
@@ -75,6 +86,9 @@ export default function useBackgroundTasks(requestChaoxingApi) {
   const openBackgroundTask = useCallback(async (nextTaskId, callbacks) => {
     const normalizedTaskId = String(nextTaskId || '').trim()
     if (!normalizedTaskId) return false
+    // Mark B as the open task BEFORE refreshing so any in-flight poll for the
+    // previous task is treated as stale and its response is dropped.
+    openTaskRef.current = normalizedTaskId
     setTaskId(normalizedTaskId)
     setTaskStatus(null)
     setLogs([])
@@ -82,6 +96,12 @@ export default function useBackgroundTasks(requestChaoxingApi) {
     await refreshTaskStatus(normalizedTaskId, callbacks)
     return true
   }, [refreshTaskStatus])
+
+  // Keep openTaskRef in sync for interval-driven polls (openBackgroundTask sets
+  // it eagerly; this covers taskId changes from any other path).
+  useEffect(() => {
+    openTaskRef.current = taskId
+  }, [taskId])
 
   // Poll effect: when taskId changes, start/stop 3s polling
   useEffect(() => {
