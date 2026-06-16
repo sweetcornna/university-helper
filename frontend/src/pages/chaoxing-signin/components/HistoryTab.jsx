@@ -12,7 +12,7 @@ export default function HistoryTab({ signinHistory, fetchSigninHistory }) {
         <Button
           type="button"
           variant="secondary"
-          className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 hover:scale-105"
+          className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
           onClick={fetchSigninHistory}
         >
           <RefreshCw className="h-4 w-4" />
@@ -31,9 +31,9 @@ export default function HistoryTab({ signinHistory, fetchSigninHistory }) {
                 <div className="flex items-start gap-3 flex-1">
                   <div className="mt-1">
                     {record.status === 'success' ? (
-                      <CheckCircle2 className="h-5 w-5 text-green-600" />
+                      <CheckCircle2 className="h-5 w-5 text-success" />
                     ) : (
-                      <AlertCircle className="h-5 w-5 text-red-600" />
+                      <AlertCircle className="h-5 w-5 text-danger" />
                     )}
                   </div>
                   <div className="flex-1">

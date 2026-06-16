@@ -38,7 +38,7 @@ export default function ConfigTab({
               }`}
             >
               <span
-                className={`inline-block h-8 w-8 transform rounded-full bg-white transition-transform duration-200 ${
+                className={`inline-block h-8 w-8 transform rounded-full bg-surface transition-transform duration-200 ${
                   autoSignin ? 'translate-x-10' : 'translate-x-1'
                 }`}
               />
@@ -55,7 +55,7 @@ export default function ConfigTab({
               max={String(MAX_CHECK_INTERVAL_MINUTES)}
               value={checkInterval}
               onChange={(e) => setCheckInterval(clampCheckInterval(e.target.value))}
-              className="w-full min-h-[44px] rounded-xl border border-white/30 bg-white/60 px-4 py-2 text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="w-full min-h-[44px] rounded-xl border border-border/30 bg-surface/60 px-4 py-2 text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
 
@@ -66,7 +66,7 @@ export default function ConfigTab({
             <select
               value={autoSignFilter}
               onChange={(e) => setAutoSignFilter(e.target.value)}
-              className="w-full min-h-[44px] rounded-xl border border-white/30 bg-white/60 px-4 py-2 text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer"
+              className="w-full min-h-[44px] rounded-xl border border-border/30 bg-surface/60 px-4 py-2 text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer"
             >
               <option value="all">全部类型</option>
               <option value="normal">普通签到</option>

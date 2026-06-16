@@ -42,7 +42,7 @@ export default function TaskControlSection({
           disabled={loading || isRunning}
 
 
-          className="min-h-[44px] cursor-pointer rounded-xl bg-sky-600 px-6 py-3 text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+          className="min-h-[44px] cursor-pointer rounded-xl bg-primary px-6 py-3 text-white disabled:cursor-not-allowed disabled:bg-text-muted"
 
 
         >
@@ -72,7 +72,7 @@ export default function TaskControlSection({
           disabled={statusText !== 'running'}
 
 
-          className="min-h-[44px] cursor-pointer rounded-xl border border-amber-300 px-4 py-2 disabled:cursor-not-allowed disabled:border-slate-200"
+          className="min-h-[44px] cursor-pointer rounded-xl border border-amber-300 px-4 py-2 disabled:cursor-not-allowed disabled:border-border"
 
 
         >
@@ -102,7 +102,7 @@ export default function TaskControlSection({
           disabled={statusText !== 'paused'}
 
 
-          className="min-h-[44px] cursor-pointer rounded-xl border border-emerald-300 px-4 py-2 disabled:cursor-not-allowed disabled:border-slate-200"
+          className="min-h-[44px] cursor-pointer rounded-xl border border-success px-4 py-2 disabled:cursor-not-allowed disabled:border-border"
 
 
         >
@@ -121,18 +121,16 @@ export default function TaskControlSection({
 
 
           onClick={() => {
-
-
-            void controlTask('stop')
-
-
+            if (window.confirm('确定要停止当前刷课任务吗？')) {
+              void controlTask('stop')
+            }
           }}
 
 
           disabled={!taskId || statusText === 'cancelling' || DONE_STATUSES.has(statusText)}
 
 
-          className="min-h-[44px] cursor-pointer rounded-xl border border-red-300 px-4 py-2 disabled:cursor-not-allowed disabled:border-slate-200"
+          className="min-h-[44px] cursor-pointer rounded-xl border border-danger/30 px-4 py-2 disabled:cursor-not-allowed disabled:border-border"
 
 
         >
@@ -150,10 +148,10 @@ export default function TaskControlSection({
       <div className="grid gap-3 text-sm md:grid-cols-4">
 
 
-        <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="rounded-xl border border-border bg-surface p-3">
 
 
-          <p className="text-slate-500">任务状态</p>
+          <p className="text-text-muted">任务状态</p>
 
 
           <p className="font-semibold">{taskStatus?.status || 'idle'}</p>
@@ -162,10 +160,10 @@ export default function TaskControlSection({
         </div>
 
 
-        <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="rounded-xl border border-border bg-surface p-3">
 
 
-          <p className="text-slate-500">当前任务</p>
+          <p className="text-text-muted">当前任务</p>
 
 
           <p className="font-semibold">{taskStatus?.current_task || '--'}</p>
@@ -174,10 +172,10 @@ export default function TaskControlSection({
         </div>
 
 
-        <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="rounded-xl border border-border bg-surface p-3">
 
 
-          <p className="text-slate-500">课程进度</p>
+          <p className="text-text-muted">课程进度</p>
 
 
           <p className="font-semibold">
@@ -192,10 +190,10 @@ export default function TaskControlSection({
         </div>
 
 
-        <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="rounded-xl border border-border bg-surface p-3">
 
 
-          <p className="text-slate-500">章节进度</p>
+          <p className="text-text-muted">章节进度</p>
 
 
           <p className="font-semibold">
@@ -214,24 +212,24 @@ export default function TaskControlSection({
 
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-sm text-slate-500">当前课程</p>
-          <p className="mt-1 font-semibold text-slate-900">{currentCourseName || '--'}</p>
-          <p className="mt-3 text-sm text-slate-500">当前视频</p>
-          <p className="mt-1 font-semibold text-slate-900">{videoProgress?.name || '--'}</p>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-sky-500 transition-all duration-200" style={{ width: `${videoPercent}%` }} />
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <p className="text-sm text-text-muted">当前课程</p>
+          <p className="mt-1 font-semibold text-text">{currentCourseName || '--'}</p>
+          <p className="mt-3 text-sm text-text-muted">当前视频</p>
+          <p className="mt-1 font-semibold text-text">{videoProgress?.name || '--'}</p>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-hover">
+            <div className="h-full rounded-full bg-primary transition-all duration-200" style={{ width: `${videoPercent}%` }} />
           </div>
-          <p className="mt-2 text-xs text-slate-600">播放进度：{videoCurrent.toFixed(1)} / {videoDuration.toFixed(1)} 秒（{Math.round(videoPercent)}%）</p>
+          <p className="mt-2 text-xs text-text/70">播放进度：{videoCurrent.toFixed(1)} / {videoDuration.toFixed(1)} 秒（{Math.round(videoPercent)}%）</p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-sm text-slate-500">任务推进</p>
-          <p className="mt-1 text-sm text-slate-700">课程：{toNum(progress.completed)}/{toNum(progress.total)}（{Math.round(coursePercent)}%）</p>
-          <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-emerald-500 transition-all duration-200" style={{ width: `${coursePercent}%` }} />
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <p className="text-sm text-text-muted">任务推进</p>
+          <p className="mt-1 text-sm text-text/80">课程：{toNum(progress.completed)}/{toNum(progress.total)}（{Math.round(coursePercent)}%）</p>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-hover">
+            <div className="h-full rounded-full bg-success transition-all duration-200" style={{ width: `${coursePercent}%` }} />
           </div>
-          <p className="mt-3 text-sm text-slate-700">章节：{toNum(progress.completed_chapters)}/{toNum(progress.total_chapters)}（{Math.round(chapterPercent)}%）</p>
-          <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+          <p className="mt-3 text-sm text-text/80">章节：{toNum(progress.completed_chapters)}/{toNum(progress.total_chapters)}（{Math.round(chapterPercent)}%）</p>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-hover">
             <div className="h-full rounded-full bg-violet-500 transition-all duration-200" style={{ width: `${chapterPercent}%` }} />
           </div>
         </div>

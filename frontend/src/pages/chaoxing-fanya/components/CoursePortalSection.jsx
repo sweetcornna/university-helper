@@ -139,14 +139,14 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
     <section className={CARD}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-slate-900">学习通课程接口</h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <h2 className="text-xl font-semibold text-text">学习通课程接口</h2>
+          <p className="mt-1 text-xs text-text-muted">
             数据由后端携带你的学习通登录态请求，浏览器不直接访问学习通，避免 CORS 与跨站登录态限制
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select
-            className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
+            className="min-h-[44px] rounded-lg border border-border bg-surface px-3 text-sm text-text/80"
             value={activeCourseId}
             onChange={(event) => setActiveCourseId(event.target.value)}
           >
@@ -158,7 +158,7 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
           </select>
           <button
             type="button"
-            className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-lg border border-slate-200 px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-lg border border-border px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
             onClick={() => {
               void loadTab(activeCourseId, activeTab)
             }}
@@ -180,7 +180,7 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
               type="button"
               className={[
                 'inline-flex min-h-[44px] min-w-[72px] shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-sm transition-colors',
-                selected ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-slate-200 bg-white text-slate-600'
+                selected ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border bg-surface text-text/70'
               ].join(' ')}
               onClick={() => setActiveTab(tab.key)}
               title={tab.label}
@@ -192,15 +192,15 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
         })}
       </div>
 
-      <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+      <div className="mt-4 rounded-xl border border-border bg-surface p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <p className="font-semibold text-slate-900">
+          <p className="font-semibold text-text">
             {tabLabel(activeTab)}
-            {!loading && result ? <span className="ml-2 text-xs font-normal text-slate-500">{items.length} 条</span> : null}
+            {!loading && result ? <span className="ml-2 text-xs font-normal text-text-muted">{items.length} 条</span> : null}
           </p>
           {result?.remoteUrl && (
             <a
-              className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-slate-200 px-3 text-xs text-slate-700"
+              className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-border px-3 text-xs text-text/80"
               href={result.remoteUrl}
               target="_blank"
               rel="noreferrer"
@@ -212,7 +212,7 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
         </div>
 
         {loading ? (
-          <div className="flex min-h-[120px] items-center justify-center text-sm text-slate-500">
+          <div className="flex min-h-[120px] items-center justify-center text-sm text-text-muted">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             加载中
           </div>
@@ -225,9 +225,9 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
             {items.map((item, index) => (
               <li key={item?.id ?? index} className="flex items-start justify-between gap-3 py-2.5">
                 <div className="min-w-0">
-                  <p className="truncate text-sm text-slate-800">{itemTitle(item)}</p>
+                  <p className="truncate text-sm text-text">{itemTitle(item)}</p>
                   {item?.text && item.text !== itemTitle(item) && (
-                    <p className="mt-0.5 truncate text-xs text-slate-400">{item.text}</p>
+                    <p className="mt-0.5 truncate text-xs text-text-muted">{item.text}</p>
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -235,7 +235,7 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
                     <span
                       className={[
                         'rounded px-1.5 py-0.5 text-[11px]',
-                        item.status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'
+                        item.status === 'active' ? 'bg-success-surface text-success' : 'bg-surface-hover text-text-muted'
                       ].join(' ')}
                     >
                       {STATUS_LABELS[item.status]}
@@ -243,7 +243,7 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
                   )}
                   {safeHref(item?.url) && (
                     <a
-                      className="inline-flex items-center gap-1 text-xs text-sky-600"
+                      className="inline-flex items-center gap-1 text-xs text-primary"
                       href={safeHref(item.url)}
                       target="_blank"
                       rel="noreferrer"
@@ -257,7 +257,7 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
             ))}
           </ul>
         ) : (
-          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">
+          <div className="rounded-lg border border-border-subtle bg-surface-hover px-3 py-8 text-center text-sm text-text-muted">
             {result?.message || '该标签暂无内容。'}
           </div>
         )}

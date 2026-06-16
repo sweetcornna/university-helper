@@ -1,8 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  AlertCircle,
-  CheckCircle2,
   Clock,
   List,
   Loader2,
@@ -12,7 +10,7 @@ import {
   RefreshCcw,
   X
 } from 'lucide-react'
-import { Input } from '../components'
+import { Input, useToast } from '../components'
 import { api } from '../utils/api'
 import { removeToken } from '../utils/auth'
 import { applyCourseProgressToTaskRecords } from '../utils/zhihuishuTasks'
@@ -26,13 +24,13 @@ const ACTIVE_TASK_ID_STORAGE_KEY = 'zhihuishu_active_task_id_v1'
 const ZHIHUISHU_API_BASE = '/course/zhihuishu'
 
 const GLASS_CARD_CLASS =
-  'rounded-2xl border border-white/20 bg-white/80 p-6 shadow-lg backdrop-blur-lg transition-all duration-200'
+  'rounded-2xl border border-border/20 bg-surface/80 p-6 shadow-lg backdrop-blur-lg transition-all duration-200'
 const PANEL_CLASS =
-  'rounded-xl border border-white/30 bg-white/60 p-4 backdrop-blur-sm transition-all duration-200'
+  'rounded-xl border border-border/30 bg-surface/60 p-4 backdrop-blur-sm transition-all duration-200'
 const TAB_BUTTON_CLASS =
   'min-h-[44px] min-w-[44px] rounded-xl px-4 py-2 font-medium cursor-pointer transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary/30'
 const FIELD_CLASS =
-  'w-full min-h-[44px] rounded-xl border border-white/30 bg-white/70 px-4 py-2 text-text transition-all duration-200 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20'
+  'w-full min-h-[44px] rounded-xl border border-border/30 bg-surface/70 px-4 py-2 text-text transition-all duration-200 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20'
 const ACTION_BUTTON_CLASS =
   'min-h-[44px] min-w-[44px] rounded-xl px-4 py-2 font-medium text-white cursor-pointer transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60'
 
@@ -95,20 +93,6 @@ const toIso = (value) => {
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return ''
   return parsed.toISOString()
-}
-
-const parseTaskIdsInput = (value) => {
-  if (!value) return []
-  const seen = new Set()
-  return value
-    .split(/[\s,，;；]+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .filter((item) => {
-      if (seen.has(item)) return false
-      seen.add(item)
-      return true
-    })
 }
 
 const normalizeCourseGroups = (payload) => {
@@ -237,9 +221,10 @@ export default function Zhihuishu() {
   const progressPollRef = useRef(null)
   const activeTaskStorageReadyRef = useRef(false)
 
+  const toast = useToast()
+
   const [booting, setBooting] = useState(true)
   const [activeTab, setActiveTab] = useState('login')
-  const [notice, setNotice] = useState({ type: 'info', message: '' })
 
   const [loginMethod, setLoginMethod] = useState('qr')
   const [zhihuishuLoggedIn, setZhihuishuLoggedIn] = useState(false)
@@ -273,7 +258,6 @@ export default function Zhihuishu() {
   const [taskItemActionLoading, setTaskItemActionLoading] = useState('')
   const [taskRecords, setTaskRecords] = useState([])
   const [activeTaskId, setActiveTaskId] = useState('')
-  const [taskIdsInput, setTaskIdsInput] = useState('')
   const [settingsSaving, setSettingsSaving] = useState(false)
 
   const [settings, setSettings] = useState({
@@ -282,10 +266,13 @@ export default function Zhihuishu() {
     progressPollSeconds: DEFAULT_PROGRESS_POLL_SECONDS
   })
 
-  const setNoticeMessage = useCallback((type, message) => {
-    if (!message) return
-    setNotice({ type, message })
-  }, [])
+  const setNoticeMessage = useCallback(
+    (type, message) => {
+      if (!message) return
+      toast.notify(type, message)
+    },
+    [toast]
+  )
 
   const stopQrPolling = useCallback(() => {
     if (qrPollRef.current) {
@@ -608,6 +595,26 @@ export default function Zhihuishu() {
       const normalized = normalizeTaskRecord(detail, previous)
       if (!normalized) return null
 
+      // Announce terminal transitions even during silent polling — otherwise a
+      // task that finishes or fails in the background gives the user no signal.
+      // Require a real prior record (previous.taskId) so restoring an already-
+      // finished task on page load doesn't fire a stale "completed" toast.
+      const TERMINAL = ['completed', 'failed', 'cancelled', 'error']
+      if (
+        previous.taskId &&
+        TERMINAL.includes(normalized.status) &&
+        !TERMINAL.includes(previous.status)
+      ) {
+        const courseLabel = normalized.courseName || '智慧树任务'
+        if (normalized.status === 'completed') {
+          setNoticeMessage('success', `「${courseLabel}」学习完成。`)
+        } else if (normalized.status === 'cancelled') {
+          setNoticeMessage('info', `「${courseLabel}」任务已取消。`)
+        } else {
+          setNoticeMessage('error', `「${courseLabel}」任务${normalized.status === 'failed' ? '失败' : '异常'}：${normalized.message || '请查看任务详情。'}`)
+        }
+      }
+
       const fallbackCourse = courses.find((course) => parseCourseId(course?.courseId || course?.id) === normalized.courseId)
       if (!normalized.courseName && fallbackCourse) {
         normalized.courseName = fallbackCourse.courseName || fallbackCourse.name || fallbackCourse.title || normalized.courseId
@@ -689,24 +696,12 @@ export default function Zhihuishu() {
   }, [activeTaskId, courses, mergeTaskRecords, requestZhihuishuApi, setNoticeMessage])
 
   const refreshTaskList = useCallback(async () => {
-    const ids = parseTaskIdsInput(taskIdsInput)
-    if (ids.length > 0) {
-      const details = await Promise.all(ids.map((taskId) => fetchTaskDetail(taskId, true)))
-      const successCount = details.filter(Boolean).length
-      if (successCount === 0) {
-        setNoticeMessage('info', '未获取到匹配的任务详情。')
-        return
-      }
-      setNoticeMessage('success', `已刷新 ${successCount} 个任务详情。`)
-      return
-    }
-
     const loadedTasks = await fetchTaskList({ silent: true })
     if (loadedTasks.length === 0 && selectedCourseId) {
       await loadCourseProgress(selectedCourseId, true)
     }
     setNoticeMessage('success', '任务状态已刷新。')
-  }, [fetchTaskDetail, fetchTaskList, loadCourseProgress, selectedCourseId, setNoticeMessage, taskIdsInput])
+  }, [fetchTaskList, loadCourseProgress, selectedCourseId, setNoticeMessage])
 
   const startCourseTask = useCallback(async (taskType = 'course') => {
     if (!selectedCourseId || startLoadingType) {
@@ -833,6 +828,7 @@ export default function Zhihuishu() {
 
   const cancelTask = async () => {
     if (taskActionLoading) return
+    if (!window.confirm('确定要取消当前所有进行中的任务吗？此操作不可撤销。')) return
     setTaskActionLoading('cancel')
 
     try {
@@ -1000,7 +996,6 @@ export default function Zhihuishu() {
     setProgress(null)
     setTaskRecords([])
     setActiveTaskId('')
-    setTaskIdsInput('')
 
     setNoticeMessage('info', '已清理智慧树会话状态。')
   }, [setNoticeMessage, stopProgressPolling, stopQrPolling])
@@ -1016,6 +1011,7 @@ export default function Zhihuishu() {
   }, [requestZhihuishuApi, resetZhihuishuSession, setNoticeMessage])
 
   const logoutSystem = useCallback(async () => {
+    if (!window.confirm('确定要退出登录吗？将清除登录状态并返回登录页。')) return
     try {
       await requestZhihuishuApi('/logout', { method: 'POST' })
     } catch (_) {
@@ -1183,33 +1179,22 @@ export default function Zhihuishu() {
 
   if (booting) {
     return (
-      <div className="min-h-screen overflow-x-hidden bg-background p-4">
-        <div className={`mx-auto max-w-3xl ${GLASS_CARD_CLASS}`}>
-          <div className="flex items-center gap-3 text-text">
-            <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            <p>正在检查登录状态...</p>
-          </div>
+      <div className={GLASS_CARD_CLASS}>
+        <div className="flex items-center gap-3 text-text">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          <p>正在检查登录状态...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-background p-4 md:p-6">
-      <main className="mx-auto max-w-6xl space-y-6">
+    <div className="overflow-x-hidden">
+      <main className="space-y-6">
         <section className={GLASS_CARD_CLASS}>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-text">智慧树学习助手</h1>
-              <p className="text-sm text-text/70">登录、选课、任务控制、设置与状态管理一体化。</p>
-            </div>
-            <button
-              type="button"
-              className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`}
-              onClick={() => navigate('/dashboard')}
-            >
-              返回控制台
-            </button>
+          <div>
+            <h1 className="text-2xl font-bold text-text">智慧树学习助手</h1>
+            <p className="text-sm text-text/70">登录、选课、任务控制、设置与状态管理一体化。</p>
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-5">
@@ -1217,7 +1202,7 @@ export default function Zhihuishu() {
               <button
                 key={tab}
                 type="button"
-                className={`${TAB_BUTTON_CLASS} ${activeTab === tab ? 'bg-primary text-white' : 'bg-white/70 text-text hover:bg-white'}`}
+                className={`${TAB_BUTTON_CLASS} ${activeTab === tab ? 'bg-primary text-white' : 'bg-surface/70 text-text hover:bg-surface'}`}
                 onClick={() => setActiveTab(tab)}
               >
                 {tab === 'login' ? '登录' : tab === 'courses' ? '课程' : tab === 'tasks' ? '任务' : tab === 'settings' ? '设置' : '状态/退出'}
@@ -1226,69 +1211,78 @@ export default function Zhihuishu() {
           </div>
         </section>
 
-        {notice.message && (
-          <section
-            className={`rounded-xl border p-3 text-sm transition-all duration-200 ${
-              notice.type === 'success'
-                ? 'border-green-500/30 bg-green-50 text-green-700'
-                : notice.type === 'error'
-                  ? 'border-red-500/30 bg-red-50 text-red-700'
-                  : 'border-primary/20 bg-white/75 text-text'
-            }`}
-            role="status"
-            aria-live="polite"
-          >
-            <p className="flex items-center gap-2">
-              {notice.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : notice.type === 'error' ? <AlertCircle className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
-              {notice.message}
-            </p>
-          </section>
-        )}
-
         {activeTab === 'login' && (
-          <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-text">二维码登录</h2>
+          <section className="mx-auto max-w-xl space-y-4">
+            {/* Login-method switcher — only the chosen method's form shows, so
+                the two forms no longer compete on screen. */}
+            <div
+              role="radiogroup"
+              aria-label="登录方式"
+              className="inline-flex rounded-full border border-border/60 bg-surface/70 p-0.5"
+            >
+              {[
+                { value: 'qr', label: '二维码登录' },
+                { value: 'password', label: '账号密码登录' },
+              ].map((opt) => (
                 <button
+                  key={opt.value}
                   type="button"
-                  className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`}
-                  onClick={() => {
-                    setLoginMethod('qr')
-                    void startQrLogin()
-                  }}
-                  disabled={qrLoading}
+                  role="radio"
+                  aria-checked={loginMethod === opt.value}
+                  onClick={() => setLoginMethod(opt.value)}
+                  className={`min-h-[40px] rounded-full px-4 text-sm font-medium transition-colors ${
+                    loginMethod === opt.value
+                      ? 'bg-primary text-white'
+                      : 'text-text/70 hover:bg-surface-hover'
+                  }`}
                 >
-                  <span className="inline-flex items-center gap-2">
-                    <RefreshCcw className="h-4 w-4" />
-                    {qrLoading ? '生成中...' : '生成二维码'}
-                  </span>
+                  {opt.label}
                 </button>
-              </div>
-
-              <p className="text-sm text-text/70">{qrMessage || '请生成二维码并使用智慧树 App 扫码。'}</p>
-              <div className="flex justify-center">
-                {qrLoading && !qrCode && <div className="flex h-56 w-56 items-center justify-center rounded-2xl border border-white/30 bg-white/70"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}
-                {!qrLoading && qrCode && <img src={`data:image/png;base64,${qrCode}`} alt="智慧树二维码" className="h-56 w-56 rounded-2xl border border-white/30 bg-white object-contain shadow-sm" />}
-              </div>
-              <div className="rounded-xl border border-white/30 bg-white/70 p-3 text-sm text-text">
-                <p className="flex items-center gap-2"><QrCode className="h-4 w-4 text-primary" />状态：{qrStatusText}</p>
-                {qrError && <p className="mt-2 text-red-600">{qrError}</p>}
-              </div>
+              ))}
             </div>
 
-            <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-              <h2 className="text-lg font-bold text-text">账号密码登录</h2>
-              <form className="space-y-4" onSubmit={submitPasswordLogin}>
-                <Input id="zhs-username" label="账号" type="text" value={passwordForm.username} onChange={(event) => { setLoginMethod('password'); setPasswordForm((prev) => ({ ...prev, username: event.target.value })) }} required />
-                <Input id="zhs-password" label="密码" type="password" value={passwordForm.password} onChange={(event) => { setLoginMethod('password'); setPasswordForm((prev) => ({ ...prev, password: event.target.value })) }} required />
-                <button type="submit" className={`${ACTION_BUTTON_CLASS} w-full bg-primary hover:bg-primary/90`} disabled={passwordLoading}>{passwordLoading ? '登录中...' : '密码登录'}</button>
-              </form>
+            {loginMethod === 'qr' ? (
+              <div className={`${GLASS_CARD_CLASS} space-y-4`}>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-bold text-text">二维码登录</h2>
+                  <button
+                    type="button"
+                    className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`}
+                    onClick={() => {
+                      void startQrLogin()
+                    }}
+                    disabled={qrLoading}
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <RefreshCcw className="h-4 w-4" />
+                      {qrLoading ? '生成中...' : '生成二维码'}
+                    </span>
+                  </button>
+                </div>
 
-              <div className={PANEL_CLASS}>
-                <p className="text-sm text-text/80">当前登录方式：{loginMethod === 'qr' ? '二维码' : '账号密码'}</p>
-                <p className="mt-2 text-sm text-text/80">智慧树状态：{zhihuishuLoggedIn ? '已登录' : '未登录'}</p>
+                <p className="text-sm text-text/70">{qrMessage || '请生成二维码并使用智慧树 App 扫码。'}</p>
+                <div className="flex justify-center">
+                  {qrLoading && !qrCode && <div className="flex h-56 w-56 items-center justify-center rounded-2xl border border-border/30 bg-surface/70"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}
+                  {!qrLoading && qrCode && <img src={`data:image/png;base64,${qrCode}`} alt="智慧树二维码" className="h-56 w-56 rounded-2xl border border-border/30 bg-surface object-contain shadow-sm" />}
+                </div>
+                <div className="rounded-xl border border-border/30 bg-surface/70 p-3 text-sm text-text">
+                  <p className="flex items-center gap-2"><QrCode className="h-4 w-4 text-primary" />状态：{qrStatusText}</p>
+                  {qrError && <p className="mt-2 text-danger">{qrError}</p>}
+                </div>
               </div>
+            ) : (
+              <div className={`${GLASS_CARD_CLASS} space-y-4`}>
+                <h2 className="text-lg font-bold text-text">账号密码登录</h2>
+                <form className="space-y-4" onSubmit={submitPasswordLogin}>
+                  <Input id="zhs-username" label="账号" type="text" autoComplete="username" value={passwordForm.username} onChange={(event) => setPasswordForm((prev) => ({ ...prev, username: event.target.value }))} required />
+                  <Input id="zhs-password" label="密码" type="password" autoComplete="current-password" value={passwordForm.password} onChange={(event) => setPasswordForm((prev) => ({ ...prev, password: event.target.value }))} required />
+                  <button type="submit" className={`${ACTION_BUTTON_CLASS} w-full bg-primary hover:bg-primary/90`} disabled={passwordLoading}>{passwordLoading ? '登录中...' : '密码登录'}</button>
+                </form>
+              </div>
+            )}
+
+            <div className={PANEL_CLASS}>
+              <p className="text-sm text-text/80">智慧树状态：{zhihuishuLoggedIn ? '已登录' : '未登录'}</p>
             </div>
           </section>
         )}
@@ -1347,10 +1341,10 @@ export default function Zhihuishu() {
                     type="button"
                     role="switch"
                     aria-checked={settings.autoAnswer}
-                    className={`relative min-h-[44px] min-w-[44px] w-16 rounded-full px-1 transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 ${settings.autoAnswer ? 'bg-primary' : 'bg-slate-300'}`}
+                    className={`relative min-h-[44px] min-w-[44px] w-16 rounded-full px-1 transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 ${settings.autoAnswer ? 'bg-primary' : 'bg-border'}`}
                     onClick={() => setSettings((prev) => ({ ...prev, autoAnswer: !prev.autoAnswer }))}
                   >
-                    <span className={`inline-block h-8 w-8 rounded-full bg-white transition-transform duration-200 ${settings.autoAnswer ? 'translate-x-7' : 'translate-x-0'}`} />
+                    <span className={`inline-block h-8 w-8 rounded-full bg-surface transition-transform duration-200 ${settings.autoAnswer ? 'translate-x-7' : 'translate-x-0'}`} />
                   </button>
                 </div>
               </div>
@@ -1437,7 +1431,14 @@ export default function Zhihuishu() {
                     <p className="mt-1 text-sm text-text/80">消息：{progress?.message || '暂无'}</p>
                     <p className="mt-1 text-sm text-text/80">当前视频：{selectedCourseProgress.currentVideo || '暂无'}</p>
                     <p className="mt-1 text-sm text-text/80">实时进度：{selectedCourseProgress.completed}/{selectedCourseProgress.total}（{Math.round(selectedCourseProgress.percentage)}%）</p>
-                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200/80">
+                    <div
+                      className="mt-3 h-2 overflow-hidden rounded-full bg-surface-hover/80"
+                      role="progressbar"
+                      aria-valuenow={Math.round(selectedCourseProgress.percentage)}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-label="课程学习进度"
+                    >
                       <div className="h-full rounded-full bg-cta transition-all duration-200" style={{ width: `${selectedCourseProgress.percentage}%` }} />
                     </div>
                     <p className="mt-2 text-xs text-text/60">失败：{selectedCourseProgress.failed}{selectedCourseProgress.estimatedTime ? ` · 预计剩余：${selectedCourseProgress.estimatedTime}` : ""}</p>
@@ -1450,7 +1451,7 @@ export default function Zhihuishu() {
                     ) : (
                       <ul className="mt-2 max-h-40 space-y-2 overflow-y-auto pr-1 text-sm text-text/80">
                         {courseStructure.map((section, index) => (
-                          <li key={`${section.id || index}`} className="rounded-lg border border-white/30 bg-white/70 px-3 py-2">
+                          <li key={`${section.id || index}`} className="rounded-lg border border-border/30 bg-surface/70 px-3 py-2">
                             <p className="font-medium text-text">{section.title || `结构 ${index + 1}`}</p>
                             <p className="text-xs text-text/70">视频数：{Array.isArray(section.videos) ? section.videos.length : 0}</p>
                           </li>
@@ -1469,7 +1470,7 @@ export default function Zhihuishu() {
                           const title = video.name || video.title || video.videoName || `视频 ${index + 1}`
                           const status = video.status || 'unknown'
                           return (
-                            <li key={`${title}-${index}`} className="rounded-lg border border-white/30 bg-white/70 px-3 py-2">
+                            <li key={`${title}-${index}`} className="rounded-lg border border-border/30 bg-surface/70 px-3 py-2">
                               <p className="font-medium text-text">{title}</p>
                               <p className="text-xs text-text/70">状态：{status}</p>
                               {video.sectionTitle && <p className="text-xs text-text/70">章节：{video.sectionTitle}</p>}
@@ -1494,21 +1495,8 @@ export default function Zhihuishu() {
                   <button type="button" className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`} onClick={refreshTaskList} disabled={progressLoading}><span className="inline-flex items-center gap-2"><RefreshCcw className="h-4 w-4" />刷新列表</span></button>
                   <button type="button" className={`${ACTION_BUTTON_CLASS} bg-primary/90 hover:bg-primary`} onClick={pauseTask} disabled={taskActionLoading !== ''}><span className="inline-flex items-center gap-2"><Pause className="h-4 w-4" />{taskActionLoading === 'pause' ? '暂停中...' : '暂停'}</span></button>
                   <button type="button" className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`} onClick={resumeTask} disabled={taskActionLoading !== ''}><span className="inline-flex items-center gap-2"><Play className="h-4 w-4" />{taskActionLoading === 'resume' ? '恢复中...' : '恢复'}</span></button>
-                  <button type="button" className={`${ACTION_BUTTON_CLASS} bg-red-500 hover:bg-red-600`} onClick={cancelTask} disabled={taskActionLoading !== ''}><span className="inline-flex items-center gap-2"><X className="h-4 w-4" />{taskActionLoading === 'cancel' ? '取消中...' : '取消'}</span></button>
+                  <button type="button" className={`${ACTION_BUTTON_CLASS} bg-danger hover:bg-danger/90`} onClick={cancelTask} disabled={taskActionLoading !== ''}><span className="inline-flex items-center gap-2"><X className="h-4 w-4" />{taskActionLoading === 'cancel' ? '取消中...' : '取消'}</span></button>
                 </div>
-              </div>
-
-              <div className="mt-4">
-                <label htmlFor="zhs-task-ids" className="mb-2 block text-sm font-medium text-text">
-                  按任务 ID 刷新（可选，支持逗号/空格分隔）
-                </label>
-                <input
-                  id="zhs-task-ids"
-                  className={FIELD_CLASS}
-                  value={taskIdsInput}
-                  onChange={(event) => setTaskIdsInput(event.target.value)}
-                  placeholder="例如：task_a, task_b"
-                />
               </div>
             </div>
 
@@ -1549,7 +1537,7 @@ export default function Zhihuishu() {
                         </button>
                         <button
                           type="button"
-                          className={`${ACTION_BUTTON_CLASS} bg-red-500 hover:bg-red-600`}
+                          className={`${ACTION_BUTTON_CLASS} bg-danger hover:bg-danger/90`}
                           onClick={() => {
                             void cancelTaskById(task.taskId)
                           }}
@@ -1586,7 +1574,7 @@ export default function Zhihuishu() {
               </div>
             </div>
 
-            <div className="mt-4 flex items-center justify-between rounded-xl border border-white/30 bg-white/70 px-4 py-3">
+            <div className="mt-4 flex items-center justify-between rounded-xl border border-border/30 bg-surface/70 px-4 py-3">
               <div>
                 <p className="font-medium text-text">默认自动答题</p>
                 <p className="mt-1 text-sm text-text/70">启动课程时默认启用自动答题。</p>
@@ -1595,10 +1583,10 @@ export default function Zhihuishu() {
                 type="button"
                 role="switch"
                 aria-checked={settings.autoAnswer}
-                className={`relative min-h-[44px] min-w-[44px] w-16 rounded-full px-1 transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 ${settings.autoAnswer ? 'bg-primary' : 'bg-slate-300'}`}
+                className={`relative min-h-[44px] min-w-[44px] w-16 rounded-full px-1 transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 ${settings.autoAnswer ? 'bg-primary' : 'bg-border'}`}
                 onClick={() => setSettings((prev) => ({ ...prev, autoAnswer: !prev.autoAnswer }))}
               >
-                <span className={`inline-block h-8 w-8 rounded-full bg-white transition-transform duration-200 ${settings.autoAnswer ? 'translate-x-7' : 'translate-x-0'}`} />
+                <span className={`inline-block h-8 w-8 rounded-full bg-surface transition-transform duration-200 ${settings.autoAnswer ? 'translate-x-7' : 'translate-x-0'}`} />
               </button>
             </div>
 
@@ -1659,7 +1647,14 @@ export default function Zhihuishu() {
                 <p className="mt-1 text-sm text-text/80">活跃课程：{activeTaskSummary.courseName || '暂无'}</p>
                 <p className="mt-1 text-sm text-text/80">当前视频：{activeTaskSummary.currentVideo || '暂无'}</p>
                 <p className="mt-1 text-sm text-text/80">实时进度：{activeTaskSummary.completed}/{activeTaskSummary.total}（{Math.round(activeTaskSummary.percentage)}%）</p>
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200/80">
+                <div
+                  className="mt-3 h-2 overflow-hidden rounded-full bg-surface-hover/80"
+                  role="progressbar"
+                  aria-valuenow={Math.round(activeTaskSummary.percentage)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="最近任务进度"
+                >
                   <div className="h-full rounded-full bg-primary transition-all duration-200" style={{ width: `${activeTaskSummary.percentage}%` }} />
                 </div>
                 <p className="mt-2 text-xs text-text/60">失败：{activeTaskSummary.failed}{activeTaskSummary.estimatedTime ? ` · 预计剩余：${activeTaskSummary.estimatedTime}` : ""}</p>
@@ -1670,8 +1665,8 @@ export default function Zhihuishu() {
               <h2 className="text-lg font-bold text-text">退出与清理</h2>
               <button type="button" className={`${ACTION_BUTTON_CLASS} w-full bg-primary/90 hover:bg-primary`} onClick={logoutZhihuishu}>退出智慧树会话（后端）</button>
               <button type="button" className={`${ACTION_BUTTON_CLASS} w-full bg-secondary/90 hover:bg-secondary`} onClick={resetZhihuishuSession}>清理智慧树会话状态</button>
-              <button type="button" className={`${ACTION_BUTTON_CLASS} w-full bg-red-500 hover:bg-red-600`} onClick={() => { void logoutSystem() }}>系统退出登录</button>
-              <div className="rounded-xl border border-white/30 bg-white/70 p-4 text-sm text-text/70">
+              <button type="button" className={`${ACTION_BUTTON_CLASS} w-full bg-danger hover:bg-danger/90`} onClick={() => { void logoutSystem() }}>系统退出登录</button>
+              <div className="rounded-xl border border-border/30 bg-surface/70 p-4 text-sm text-text/70">
                 <p>说明：</p>
                 <p className="mt-2">1. 清理会话仅重置当前页面状态，不会删除已保存设置。</p>
                 <p className="mt-1">2. 退出智慧树会调用 `/course/zhihuishu/logout` 并取消相关任务。</p>

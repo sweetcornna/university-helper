@@ -221,7 +221,7 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="relative flex h-[85vh] w-[90vw] max-w-4xl flex-col overflow-hidden rounded-2xl border border-white/20 bg-white/95 shadow-2xl backdrop-blur-lg">
+      <div className="relative flex h-[85vh] w-[90vw] max-w-4xl flex-col overflow-hidden rounded-2xl border border-border/20 bg-surface/95 shadow-2xl backdrop-blur-lg">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
           <div className="flex items-center gap-2">
@@ -250,7 +250,7 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={handleSearchKeyDown}
                   placeholder="搜索地点名称..."
-                  className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-surface px-3 py-2 text-sm outline-none transition-colors focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                 />
                 <button
                   type="button"

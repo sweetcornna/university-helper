@@ -19,7 +19,11 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
   // Inputs arrive as WGS-84 (from the Photon-backed API and the OSM map picker).
   // Chaoxing expects Baidu BD-09 coordinates, so convert once at this boundary.
   const applyResolvedLocation = useCallback((location) => {
-    latestAddressRef.current = location.address || latestAddressRef.current
+    // Honour an explicitly-provided address even when it's empty — geolocation
+    // passes address:'' to clear a previously-typed place so stale coordinates
+    // and a mismatched address can't be submitted together.
+    const hasAddress = location.address !== undefined
+    if (hasAddress) latestAddressRef.current = location.address
     const wgsLat = Number(location.latitude)
     const wgsLng = Number(location.longitude)
     let latOut = location.latitude
@@ -31,11 +35,43 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
     }
     setForm((prev) => ({
       ...prev,
-      address: location.address || prev.address,
+      address: hasAddress ? location.address : prev.address,
       latitude: latOut,
       longitude: lngOut,
     }))
   }, [setForm])
+
+  // Browser geolocation returns WGS-84, which applyResolvedLocation converts to
+  // BD-09 for us — so this is the lowest-friction way to fill in coordinates.
+  const useCurrentLocation = useCallback(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGeocodeStatus('error')
+      setGeocodeMessage('当前环境不支持定位，请改用地图选点或地址解析。')
+      return
+    }
+    setGeocodeStatus('info')
+    setGeocodeMessage('正在获取当前位置…')
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        // Clear any previously-typed address so it can't be paired with the
+        // new GPS coordinates (location signin only needs lat/lng).
+        applyResolvedLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          address: '',
+        })
+        setGeocodeStatus('success')
+        setGeocodeMessage('已使用当前位置填入坐标。')
+      },
+      (error) => {
+        setGeocodeStatus('error')
+        setGeocodeMessage(
+          error?.code === 1 ? '定位权限被拒绝，请在浏览器允许定位后重试。' : '获取当前位置失败，请稍后重试。'
+        )
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    )
+  }, [applyResolvedLocation])
 
   const resolveLocationCoordinates = useCallback(async () => {
     const liveAddressInput = document.getElementById('cx-address')
@@ -145,6 +181,7 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
     isMapPickerOpen,
     setIsMapPickerOpen,
     applyResolvedLocation,
+    useCurrentLocation,
     resolveLocationCoordinates,
     searchLocationCandidates,
     choosePlaceSearchResult,

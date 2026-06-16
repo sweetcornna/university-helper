@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { useToast } from '../components'
 
 import { CARD, getCourseId, mergeTaskHistory } from './chaoxing-fanya/utils'
 
@@ -38,10 +39,30 @@ export default function ChaoxingFanya() {
   }, [])
 
 
+  const toast = useToast()
+
   const taskConfig = useTaskConfig()
 
 
   const auth = useAuthentication({ stopPolling })
+
+  // Surface auth errors / notices through the shared toast and immediately
+  // clear the source so the same message can be re-announced if it recurs.
+  const { error: authError, notice: authNotice, setError: authSetError, setNotice: authSetNotice } =
+    auth
+  useEffect(() => {
+    if (authError) {
+      toast.error(authError)
+      authSetError('')
+    }
+  }, [authError, authSetError, toast])
+
+  useEffect(() => {
+    if (authNotice) {
+      toast.success(authNotice)
+      authSetNotice('')
+    }
+  }, [authNotice, authSetNotice, toast])
 
 
   const taskExec = useTaskExecution({
@@ -177,16 +198,12 @@ export default function ChaoxingFanya() {
 
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] p-6">
-      <div className="mx-auto max-w-6xl space-y-6">
+    <div>
+      <div className="space-y-6">
         <section className={CARD}>
-          <h1 className="text-3xl font-bold text-slate-900">超星学习通自动刷课</h1>
-          <p className="mt-2 text-sm text-slate-600">支持离开页面后恢复任务状态、日志与历史任务查看。</p>
+          <h1 className="text-3xl font-bold text-text">超星学习通自动刷课</h1>
+          <p className="mt-2 text-sm text-text/70">支持离开页面后恢复任务状态、日志与历史任务查看。</p>
         </section>
-
-
-        {auth.error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{auth.error}</div>}
-        {auth.notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{auth.notice}</div>}
 
 
         {auth.courses.length === 0 ? (

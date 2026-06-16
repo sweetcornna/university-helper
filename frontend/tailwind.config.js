@@ -16,6 +16,12 @@ export default {
         'text-muted': 'rgb(var(--color-text-muted) / <alpha-value>)',
         border: 'rgb(var(--color-border) / <alpha-value>)',
         'border-subtle': 'rgb(var(--color-border-subtle) / <alpha-value>)',
+        success: 'rgb(var(--color-success) / <alpha-value>)',
+        'success-surface': 'rgb(var(--color-success-surface) / <alpha-value>)',
+        danger: 'rgb(var(--color-danger) / <alpha-value>)',
+        'danger-surface': 'rgb(var(--color-danger-surface) / <alpha-value>)',
+        warning: 'rgb(var(--color-warning) / <alpha-value>)',
+        'warning-surface': 'rgb(var(--color-warning-surface) / <alpha-value>)',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
