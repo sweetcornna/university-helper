@@ -10,7 +10,7 @@ import {
   RefreshCcw,
   X
 } from 'lucide-react'
-import { Input, useToast } from '../components'
+import { Input, Toggle, useToast } from '../components'
 import { api } from '../utils/api'
 import { removeToken } from '../utils/auth'
 import { applyCourseProgressToTaskRecords } from '../utils/zhihuishuTasks'
@@ -1337,15 +1337,11 @@ export default function Zhihuishu() {
 
                 <div>
                   <label className="mb-2 block text-sm font-medium text-text">自动答题</label>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={settings.autoAnswer}
-                    className={`relative min-h-[44px] min-w-[44px] w-16 rounded-full px-1 transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 ${settings.autoAnswer ? 'bg-primary' : 'bg-border'}`}
-                    onClick={() => setSettings((prev) => ({ ...prev, autoAnswer: !prev.autoAnswer }))}
-                  >
-                    <span className={`inline-block h-8 w-8 rounded-full bg-surface transition-transform duration-200 ${settings.autoAnswer ? 'translate-x-7' : 'translate-x-0'}`} />
-                  </button>
+                  <Toggle
+                    label="自动答题"
+                    checked={settings.autoAnswer}
+                    onChange={(next) => setSettings((prev) => ({ ...prev, autoAnswer: next }))}
+                  />
                 </div>
               </div>
 
@@ -1579,15 +1575,11 @@ export default function Zhihuishu() {
                 <p className="font-medium text-text">默认自动答题</p>
                 <p className="mt-1 text-sm text-text/70">启动课程时默认启用自动答题。</p>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings.autoAnswer}
-                className={`relative min-h-[44px] min-w-[44px] w-16 rounded-full px-1 transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 ${settings.autoAnswer ? 'bg-primary' : 'bg-border'}`}
-                onClick={() => setSettings((prev) => ({ ...prev, autoAnswer: !prev.autoAnswer }))}
-              >
-                <span className={`inline-block h-8 w-8 rounded-full bg-surface transition-transform duration-200 ${settings.autoAnswer ? 'translate-x-7' : 'translate-x-0'}`} />
-              </button>
+              <Toggle
+                label="默认自动答题"
+                checked={settings.autoAnswer}
+                onChange={(next) => setSettings((prev) => ({ ...prev, autoAnswer: next }))}
+              />
             </div>
 
             <div className="mt-4">

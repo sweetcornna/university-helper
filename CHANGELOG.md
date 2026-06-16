@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-16
+
+### Added
+- **Frontend UX/design overhaul (5 phases)** addressing a 131-finding audit (`docs/frontend-ux-audit.md`):
+  - Unified `ToastProvider`/`useToast` notification system replacing three ad-hoc per-page mechanisms; results are now visible across tabs and announced to screen readers.
+  - Wired-up **dark mode** (`ThemeProvider` + `ThemeToggle`, follows system); added `success`/`danger`/`warning` semantic tokens; migrated ~100 hardcoded colours to design tokens.
+  - New shared components: `Select`, `MultiSelect` (touch-friendly, replaces native `<select multiple>`), `Toggle`, `StatusBadge`, `EmptyState`, `AppLayout`.
+  - Shared app shell with brand, service switcher, theme toggle and logout-with-confirmation; nested routes + auth-based root routing.
+  - Dashboard redesigned from rotating orbital bubbles to a static, accessible card grid.
+  - Sign-in form decluttering (sign-type disclosure), "use current location" geolocation, cross-page Chaoxing account recall, humanized Zhihuishu config, login-method switcher.
+- 60-second product-film promo GIF in the README (EN + zh-CN).
+- Automated deploy: pushing to `main` builds and publishes the frontend to production via GitHub Actions.
+
+### Fixed
+- **Auth re-login loop on the Zhihuishu page** — a third-party platform 401 ("Zhihuishu not logged in" / "Please login to Chaoxing first") was misread as app-session expiry, wiping the token and bouncing the user to `/login` in a loop. `api()` now treats only the app auth layer's own 401 messages as session expiry.
+- Toggle switch knob offset/overflow (now a centered, correctly-sized `Toggle` component).
+- Repaired corrupted `ChaoxingSignin.jsx` formatting; aligned the register page with login; numerous a11y fixes (labels, `aria-live`, focus indicators, progress bars).
+
 ## [1.1.0] - 2026-06-16
 
 ### Fixed (round 4 — functional audit, validated against real 学习通/知到 accounts)
