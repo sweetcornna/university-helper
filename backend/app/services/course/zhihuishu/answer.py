@@ -1,19 +1,20 @@
 """智慧树 AI 答题模块"""
+
+import hashlib
 import json
 import re
-import time
-import hashlib
 import string
+import time
 from random import choice as random_choice
-from typing import Optional, Dict, List
-from urllib.parse import urlsplit, urlunsplit, urlencode, parse_qsl
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 import requests
 
 
 class ZhihuishuAnswer:
     """智慧树 AI 答题服务"""
 
-    def __init__(self, cookies: dict, ai_config: dict, proxies: Optional[dict] = None):
+    def __init__(self, cookies: dict, ai_config: dict, proxies: dict | None = None):
         self.cookies = cookies
         self.proxies = proxies or {}
         self.session = requests.Session()
@@ -29,7 +30,7 @@ class ZhihuishuAnswer:
         self.api_key = openai_config.get("api_key", "")
         self.model_name = openai_config.get("model_name", "gpt-4")
 
-    def answer_question(self, question: Dict) -> Optional[str]:
+    def answer_question(self, question: dict) -> str | None:
         """
         回答问题
 
@@ -47,12 +48,11 @@ class ZhihuishuAnswer:
         try:
             if self.use_zhidao_ai:
                 return self._zhidao_completion(prompt)
-            else:
-                return self._openai_completion(prompt)
+            return self._openai_completion(prompt)
         except Exception as e:
             raise Exception(f"Failed to answer question: {e}")
 
-    def _build_prompt(self, question: Dict) -> str:
+    def _build_prompt(self, question: dict) -> str:
         """构建提示词"""
         q_text = question.get("title", "")
         choices = question.get("choices", [])
@@ -80,8 +80,7 @@ class ZhihuishuAnswer:
 
         for attempt in range(max_retries):
             try:
-                response = requests.post(url, headers=headers, json=body,
-                                       timeout=30, stream=self.stream)
+                response = requests.post(url, headers=headers, json=body, timeout=30, stream=self.stream)
                 response.raise_for_status()
 
                 if self.stream:
@@ -92,7 +91,7 @@ class ZhihuishuAnswer:
 
                 return result
 
-            except requests.exceptions.RequestException as e:
+            except requests.exceptions.RequestException:
                 if attempt < max_retries - 1:
                     time.sleep(1.0)
                 else:
@@ -123,7 +122,7 @@ class ZhihuishuAnswer:
 
                 return result
 
-            except requests.exceptions.RequestException as e:
+            except requests.exceptions.RequestException:
                 if attempt < max_retries - 1:
                     time.sleep(1.0)
                 else:
@@ -140,12 +139,11 @@ class ZhihuishuAnswer:
                 continue
 
             try:
-                json_data = json.loads(line.decode('utf-8')[5:])
+                json_data = json.loads(line.decode("utf-8")[5:])
                 content = json_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
                 if content:
                     cache += content
-                    match = re.search(f"{re.escape(aim_start)}(.*?){re.escape(aim_end)}",
-                                    cache, re.DOTALL)
+                    match = re.search(f"{re.escape(aim_start)}(.*?){re.escape(aim_end)}", cache, re.DOTALL)
                     if match:
                         return cache
             except json.JSONDecodeError:
@@ -163,7 +161,7 @@ class ZhihuishuAnswer:
 
         input_string = self._build_input_string(data)
         signature = self._generate_signature(input_string)
-        query_params['sign'] = signature
+        query_params["sign"] = signature
 
         new_query_string = urlencode(query_params)
         new_url = urlunsplit((scheme, netloc, path, new_query_string, fragment))
@@ -173,11 +171,11 @@ class ZhihuishuAnswer:
     def _generate_session_nid(self) -> str:
         """生成随机会话 ID"""
         chars = string.ascii_lowercase + string.digits
-        return "chatcmpl-" + ''.join(random_choice(chars) for _ in range(24))
+        return "chatcmpl-" + "".join(random_choice(chars) for _ in range(24))
 
     def _generate_signature(self, input_string: str) -> str:
         """生成 MD5 签名"""
-        return hashlib.md5((self.prefix + input_string).encode('utf-8')).hexdigest()
+        return hashlib.md5((self.prefix + input_string).encode("utf-8")).hexdigest()
 
     def _build_input_string(self, data: dict) -> str:
         """构建签名输入字符串"""
@@ -185,6 +183,6 @@ class ZhihuishuAnswer:
             "messageList": "[object Object]",
             "modelCode": data.get("modelCode", ""),
             "sessionNid": data.get("sessionNid", ""),
-            "stream": data.get("stream", False)
+            "stream": data.get("stream", False),
         }
-        return json.dumps(json_data, separators=(',', ':')).replace('"true"', 'true').replace('"false"', 'false')
+        return json.dumps(json_data, separators=(",", ":")).replace('"true"', "true").replace('"false"', "false")

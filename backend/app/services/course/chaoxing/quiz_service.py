@@ -1,11 +1,12 @@
-# -*- coding: utf-8 -*-
-import re
 import random
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from loguru import logger
+
 import requests
+from loguru import logger
+
 from .answer import AI
 from .answer_check import cut
 from .decode import decode_questions_info
@@ -44,7 +45,7 @@ def random_answer(q, options: str) -> str:
 
             weights = weights_map.get(max_possible, [0.3, 0.4, 0.3])
             possible_counts = list(range(min_possible, max_possible + 1))
-            weights = weights[:len(possible_counts)]
+            weights = weights[: len(possible_counts)]
             weights_sum = sum(weights)
             if weights_sum > 0:
                 weights = [w / weights_sum for w in weights]
@@ -66,17 +67,14 @@ def random_answer(q, options: str) -> str:
 
 
 def multi_cut(answer: str, origin_html_content: str = ""):
-    cut_char = [
-        "\n", ",", "，", "|", "\r", "\t", "#", "*", "-", "_", "+",
-        "@", "~", "/", "\\", ".", "&", " ", "、",
-    ]
+    # (Previously declared an unused `cut_char` delimiter list; the actual
+    # splitting lives in cut(). Removed the dead local. ruff F841)
     res = cut(answer)
     if res is None:
         logger.warning(f"未能从网页中提取题目信息, 以下为相关信息：\n\t{answer}\n\n{origin_html_content}\n")
         logger.warning("未能正确提取题目选项信息! 请反馈并提供以上信息")
         return None
-    else:
-        return res
+    return res
 
 
 def clean_res(res):
@@ -84,7 +82,7 @@ def clean_res(res):
     if isinstance(res, str):
         res = [res]
     for c in res:
-        cleaned = re.sub(r'^[A-Za-z]|[.,!?;:，。！？；：]', '', c)
+        cleaned = re.sub(r"^[A-Za-z]|[.,!?;:，。！？；：]", "", c)
         cleaned_res.append(cleaned.strip())
     return cleaned_res
 
@@ -102,7 +100,7 @@ def with_retry(max_retries=3, delay=1):
                 try:
                     _resp = func(*args, **kwargs)
 
-                    if '教师未创建完成该测验' in _resp.text:
+                    if "教师未创建完成该测验" in _resp.text:
                         raise PermissionError("教师未创建完成该测验")
 
                     questions = decode_questions_info(_resp.text)
@@ -111,12 +109,13 @@ def with_retry(max_retries=3, delay=1):
                         return (_resp, questions)
 
                     logger.warning(
-                        f"无效响应 (Code: {getattr(_resp, 'status_code', 'Unknown')}), 重试中... ({retries + 1}/{max_retries})")
+                        f"无效响应 (Code: {getattr(_resp, 'status_code', 'Unknown')}), 重试中... ({retries + 1}/{max_retries})"
+                    )
 
                 except requests.exceptions.RequestException as e:
                     logger.warning(f"请求失败: {str(e)[:50]}, 重试中... ({retries + 1}/{max_retries})")
                 retries += 1
-                time.sleep(delay * (2 ** retries))
+                time.sleep(delay * (2**retries))
             raise MaxRetryExceeded(f"超过最大重试次数 ({max_retries})")
 
         return wrapper
@@ -247,9 +246,7 @@ class QuizAnswerProcessor:
 
             with ThreadPoolExecutor(max_workers=ai_concurrency) as executor:
                 future_to_q = {
-                    executor.submit(
-                        self.handle_question, q, inc_found_concurrent, origin_html_content
-                    ): q
+                    executor.submit(self.handle_question, q, inc_found_concurrent, origin_html_content): q
                     for q in questions["questions"]
                 }
                 # 收集 future 结果：ThreadPoolExecutor 会吞掉 worker 异常，
@@ -266,6 +263,7 @@ class QuizAnswerProcessor:
                         )
                         self._fallback_random_answer(q)
         else:
+
             def inc_found_seq():
                 nonlocal found_answers
                 found_answers += 1
@@ -312,7 +310,7 @@ class ChaoxingQuizService:
                     "enc": _job["enc"],
                     "mooc2": "1",
                     "courseid": _course["courseId"],
-                }
+                },
             )
 
         try:

@@ -7,11 +7,9 @@ import configparser
 import ipaddress
 import socket
 from abc import ABC, abstractmethod
-from typing import Dict, Optional
 from urllib.parse import urlparse
 
 import requests
-
 from loguru import logger
 
 # Hostnames that are never legitimate notification targets (cloud metadata, etc.).
@@ -38,7 +36,7 @@ def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
     )
 
 
-def validate_notification_url(url: Optional[str]) -> bool:
+def validate_notification_url(url: str | None) -> bool:
     """SSRF guard for outbound notification webhooks (F55).
 
     Accept only http/https URLs whose host does not resolve to a
@@ -107,26 +105,26 @@ class NotificationService(ABC):
         self._conf = None
         self.disabled = False
 
-    def config_set(self, config: Dict[str, str]) -> None:
+    def config_set(self, config: dict[str, str]) -> None:
         """
         设置通知服务的配置
-        
+
         Args:
             config: 包含配置参数的字典
         """
         self._conf = config
 
-    def _load_config_from_file(self) -> Optional[Dict[str, str]]:
+    def _load_config_from_file(self) -> dict[str, str] | None:
         """
         从配置文件中加载通知服务的配置
-        
+
         Returns:
             成功返回配置字典，失败返回None
         """
         try:
             config = configparser.ConfigParser()
             config.read(self.CONFIG_PATH, encoding="utf8")
-            return config['notification']
+            return config["notification"]
         except (KeyError, FileNotFoundError):
             logger.info("未找到notification配置，已忽略外部通知功能")
             self.disabled = True
@@ -145,7 +143,6 @@ class NotificationService(ABC):
         """
         初始化特定的通知服务，由子类实现
         """
-        pass
 
     @abstractmethod
     def _send(self, message: str) -> bool:
@@ -158,7 +155,6 @@ class NotificationService(ABC):
         Returns:
             发送成功返回True，失败返回False
         """
-        pass
 
     def _url_allowed(self) -> bool:
         """Reject outbound POSTs to unvalidated/internal URLs (F55 SSRF guard)."""
@@ -188,13 +184,13 @@ class NotificationFactory:
     """
 
     @staticmethod
-    def create_service(config: Optional[Dict[str, str]] = None) -> NotificationService:
+    def create_service(config: dict[str, str] | None = None) -> NotificationService:
         """
         根据配置创建通知服务实例
-        
+
         Args:
             config: 通知服务的配置，如果为None则从配置文件加载
-            
+
         Returns:
             通知服务实例
         """
@@ -224,7 +220,7 @@ class DefaultNotification(NotificationService):
     def get_notification_from_config(self) -> NotificationService:
         """
         根据配置创建具体的通知服务实例
-        
+
         Returns:
             通知服务实例
         """
@@ -235,7 +231,7 @@ class DefaultNotification(NotificationService):
             return self
 
         try:
-            provider_name = self._conf['provider']
+            provider_name = self._conf["provider"]
             if not provider_name:
                 raise KeyError("未指定通知服务提供商")
 
@@ -264,12 +260,12 @@ class ServerChan(NotificationService):
 
     def _init_service(self) -> None:
         """初始化Server酱服务"""
-        if not self._conf or not self._conf.get('url'):
+        if not self._conf or not self._conf.get("url"):
             self.disabled = True
             logger.info("未找到Server酱url配置，已忽略该通知服务")
             return
 
-        self.url = self._conf['url']
+        self.url = self._conf["url"]
         logger.info(f"已初始化Server酱通知服务，URL: {self.url}")
 
     def _send(self, message: str) -> bool:
@@ -283,15 +279,13 @@ class ServerChan(NotificationService):
             return False
 
         params = {
-            'text': message,  # 兼容两个版本的Server酱
-            'desp': message,
+            "text": message,  # 兼容两个版本的Server酱
+            "desp": message,
         }
-        headers = {
-            'Content-Type': 'application/json;charset=utf-8'
-        }
+        headers = {"Content-Type": "application/json;charset=utf-8"}
 
         try:
-            response = requests.post(self.url, json=params, headers=headers)
+            response = requests.post(self.url, json=params, headers=headers, timeout=10)
             response.raise_for_status()
             result = response.json()
             logger.info(f"Server酱通知发送成功: {result}")
@@ -310,12 +304,12 @@ class Qmsg(NotificationService):
 
     def _init_service(self) -> None:
         """初始化Qmsg酱服务"""
-        if not self._conf or not self._conf.get('url'):
+        if not self._conf or not self._conf.get("url"):
             self.disabled = True
             logger.info("未找到Qmsg酱url配置，已忽略该通知服务")
             return
 
-        self.url = self._conf['url']
+        self.url = self._conf["url"]
         logger.info(f"已初始化Qmsg酱通知服务，URL: {self.url}")
 
     def _send(self, message: str) -> bool:
@@ -328,11 +322,11 @@ class Qmsg(NotificationService):
         if not self._url_allowed():
             return False
 
-        params = {'msg': message}
-        headers = {'Content-Type': 'application/json;charset=utf-8'}
+        params = {"msg": message}
+        headers = {"Content-Type": "application/json;charset=utf-8"}
 
         try:
-            response = requests.post(self.url, params=params, headers=headers)
+            response = requests.post(self.url, params=params, headers=headers, timeout=10)
             response.raise_for_status()
             result = response.json()
             logger.info(f"Qmsg酱通知发送成功: {result}")
@@ -351,12 +345,12 @@ class Bark(NotificationService):
 
     def _init_service(self) -> None:
         """初始化Bark服务"""
-        if not self._conf or not self._conf.get('url'):
+        if not self._conf or not self._conf.get("url"):
             self.disabled = True
             logger.info("未找到Bark的url配置，已忽略该通知服务")
             return
 
-        self.url = self._conf['url']
+        self.url = self._conf["url"]
         logger.info(f"已初始化Bark通知服务，URL: {self.url}")
 
     def _send(self, message: str) -> bool:
@@ -369,10 +363,10 @@ class Bark(NotificationService):
         if not self._url_allowed():
             return False
 
-        params = {'body': message}
+        params = {"body": message}
 
         try:
-            response = requests.post(self.url, params=params)
+            response = requests.post(self.url, params=params, timeout=10)
             response.raise_for_status()
             result = response.json()
             logger.info(f"Bark通知发送成功: {result}")
@@ -383,6 +377,7 @@ class Bark(NotificationService):
             logger.error(f"Bark返回数据解析失败: {e}")
         return False
 
+
 class Telegram(NotificationService):
     """
     通过Telegram发送通知
@@ -390,12 +385,12 @@ class Telegram(NotificationService):
 
     def _init_service(self) -> None:
         """初始化Telegram服务"""
-        if not self._conf or not self._conf.get('url') or not self._conf.get('tg_chat_id'):
+        if not self._conf or not self._conf.get("url") or not self._conf.get("tg_chat_id"):
             self.disabled = True
             logger.info("未找到Telegram的url或tg_chat_id配置，已忽略该通知服务")
             return
-        self.tg_chat_id = self._conf['tg_chat_id']
-        self.url = self._conf['url']
+        self.tg_chat_id = self._conf["tg_chat_id"]
+        self.url = self._conf["url"]
         logger.info(f"已初始化Telegram通知服务，Chat_id: {self.tg_chat_id} URL: {self.url}")
 
     def _send(self, message: str) -> bool:
@@ -408,17 +403,13 @@ class Telegram(NotificationService):
         if not self._url_allowed():
             return False
 
-        params = {
-            'chat_id': self.tg_chat_id,
-            'text': message,
-            'parse_mode': 'HTML'
-        }
+        params = {"chat_id": self.tg_chat_id, "text": message, "parse_mode": "HTML"}
 
         try:
-            response = requests.post(self.url, data=params)
+            response = requests.post(self.url, data=params, timeout=10)
             response.raise_for_status()
             result = response.json()
-            if result.get('ok'):
+            if result.get("ok"):
                 logger.info(f"Telegram通知发送成功: {result}")
                 return True
             logger.error(f"Telegram通知发送失败: {result}")
@@ -427,6 +418,7 @@ class Telegram(NotificationService):
         except ValueError as e:
             logger.error(f"Telegram返回数据解析失败: {e}")
         return False
+
 
 # 为了向后兼容，保留原来的Notification类
 Notification = DefaultNotification

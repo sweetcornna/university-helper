@@ -1,8 +1,9 @@
 import os
 import re
 
-from .decode import _ocr_image_to_text, ENABLE_LOCAL_OCR, is_vision_ocr_enabled
 from loguru import logger
+
+from .decode import ENABLE_LOCAL_OCR, _ocr_image_to_text, is_vision_ocr_enabled
 
 
 def _has_any_ocr_backend() -> bool:
@@ -11,18 +12,14 @@ def _has_any_ocr_backend() -> bool:
     Mirrors decode._ocr_image_to_text's `has_any_ocr` gate so question-title OCR
     is applied whenever it can succeed — not only when LOCAL OCR is on.
     """
-    return bool(
-        ENABLE_LOCAL_OCR
-        or is_vision_ocr_enabled()
-        or os.environ.get("CHAOXING_OCR_ENDPOINT", "").strip()
-    )
+    return bool(ENABLE_LOCAL_OCR or is_vision_ocr_enabled() or os.environ.get("CHAOXING_OCR_ENDPOINT", "").strip())
 
 
 def _strip_json_block(md_str: str) -> str:
     """去掉Markdown代码块包裹，返回纯JSON字符串"""
     if not isinstance(md_str, str):
         return ""
-    pattern = r'^\s*```(?:json)?\s*(.*?)\s*```\s*$'
+    pattern = r"^\s*```(?:json)?\s*(.*?)\s*```\s*$"
     match = re.search(pattern, md_str, re.DOTALL)
     return match.group(1).strip() if match else md_str.strip()
 

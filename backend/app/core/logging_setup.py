@@ -48,11 +48,11 @@ _DICT_CONFIG = {
         },
     },
     "loggers": {
-        "uvicorn":         {"handlers": ["stdout"], "level": "INFO",  "propagate": False},
-        "uvicorn.error":   {"handlers": ["stdout"], "level": "INFO",  "propagate": False},
-        "uvicorn.access":  {"handlers": ["stdout"], "level": "WARNING", "propagate": False},
-        "app":             {"handlers": ["stdout"], "level": _log_level(), "propagate": False},
-        "chaoxing":        {"handlers": ["stdout"], "level": _log_level(), "propagate": False},
+        "uvicorn": {"handlers": ["stdout"], "level": "INFO", "propagate": False},
+        "uvicorn.error": {"handlers": ["stdout"], "level": "INFO", "propagate": False},
+        "uvicorn.access": {"handlers": ["stdout"], "level": "WARNING", "propagate": False},
+        "app": {"handlers": ["stdout"], "level": _log_level(), "propagate": False},
+        "chaoxing": {"handlers": ["stdout"], "level": _log_level(), "propagate": False},
     },
     "root": {"handlers": ["stdout"], "level": _log_level()},
 }

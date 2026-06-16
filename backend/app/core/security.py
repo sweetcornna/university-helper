@@ -1,11 +1,10 @@
-import jwt
-import bcrypt
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import Dict
+from datetime import UTC, datetime, timedelta
+
+import bcrypt
+import jwt
 
 from app.config import settings
-
 
 # bcrypt only considers the first 72 bytes of the password and silently
 # ignores (truncates) the rest. Without an explicit guard, two distinct
@@ -19,9 +18,7 @@ BCRYPT_MAX_PASSWORD_BYTES = 72
 def _encode_password(password: str) -> bytes:
     encoded = password.encode("utf-8")
     if len(encoded) > BCRYPT_MAX_PASSWORD_BYTES:
-        raise ValueError(
-            f"Password must not exceed {BCRYPT_MAX_PASSWORD_BYTES} bytes"
-        )
+        raise ValueError(f"Password must not exceed {BCRYPT_MAX_PASSWORD_BYTES} bytes")
     return encoded
 
 
@@ -43,9 +40,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(encoded, hashed_password.encode())
 
 
-def create_access_token(data: Dict) -> str:
+def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_ts = int(now.timestamp())
     # iat/nbf/jti give us a future-proof revocation surface (jti can be
     # blacklisted on logout) without changing the wire format consumers see.
@@ -60,7 +57,7 @@ def create_access_token(data: Dict) -> str:
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
-def decode_token(token: str) -> Dict:
+def decode_token(token: str) -> dict:
     try:
         return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     except jwt.ExpiredSignatureError:

@@ -38,12 +38,12 @@ def configure_tracing(app: Any) -> None:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # type: ignore[import-not-found]
             OTLPSpanExporter,
         )
-        from opentelemetry.sdk.resources import Resource  # type: ignore[import-not-found]
-        from opentelemetry.sdk.trace import TracerProvider  # type: ignore[import-not-found]
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore[import-not-found]
         from opentelemetry.instrumentation.fastapi import (  # type: ignore[import-not-found]
             FastAPIInstrumentor,
         )
+        from opentelemetry.sdk.resources import Resource  # type: ignore[import-not-found]
+        from opentelemetry.sdk.trace import TracerProvider  # type: ignore[import-not-found]
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore[import-not-found]
     except ImportError:
         logger.warning(
             "OTEL_EXPORTER_OTLP_ENDPOINT=%s but opentelemetry-* packages are not "

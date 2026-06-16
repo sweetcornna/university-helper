@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
 """Course data fetching service for Chaoxing."""
 
 from concurrent.futures import ThreadPoolExecutor
 
 from loguru import logger
 
-from .decode import decode_course_point, decode_course_card, decode_course_folder
-from .rate_limiter import RateLimiter
 from .constants import CARD_FETCH_WORKERS
+from .decode import decode_course_card, decode_course_folder, decode_course_point
+from .rate_limiter import RateLimiter
 
 # API URL constants
 COURSE_INTERACTION_URL = "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/interaction"
@@ -41,6 +40,7 @@ class ChaoxingCourseDataService:
                 "superstarClass": 0,
             }
             from .decode import decode_course_list
+
             _resp = _session.post(_url, data=_data)
             course_list += decode_course_list(_resp.text)
         return course_list
@@ -75,7 +75,7 @@ class ChaoxingCourseDataService:
             "ut": "s",
             "cpi": course["cpi"],
             "v": "2025-0424-1038-3",
-            "mooc2": 1
+            "mooc2": 1,
         }
 
         logger.trace("开始读取章节所有任务点...")

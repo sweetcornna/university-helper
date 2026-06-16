@@ -1,14 +1,15 @@
-# -*- coding: utf-8 -*-
 import random
 import time
-from typing import Literal, Optional
 from hashlib import md5
+from typing import Literal
+
 import requests
 from loguru import logger
 from requests import RequestException
 from tqdm import tqdm
+
 from .config import GlobalConst as gc
-from .constants import VIDEO_WAIT_TIME_MIN, VIDEO_WAIT_TIME_MAX, VIDEO_SLEEP_THRESHOLD, MILLISECONDS_MULTIPLIER
+from .constants import MILLISECONDS_MULTIPLIER, VIDEO_SLEEP_THRESHOLD, VIDEO_WAIT_TIME_MAX, VIDEO_WAIT_TIME_MIN
 from .rate_limiter import RateLimiter
 
 
@@ -57,13 +58,12 @@ class ChaoxingMediaService:
 
         return resp.json().get("isPassed", False), resp.status_code
 
-    def _refresh_video_status(self, session: requests.Session, job: dict, _type: Literal["Video", "Audio"]) -> Optional[dict]:
+    def _refresh_video_status(
+        self, session: requests.Session, job: dict, _type: Literal["Video", "Audio"]
+    ) -> dict | None:
         self.rate_limiter.limit_rate(random_time=True, random_max=0.2)
         headers = gc.VIDEO_HEADERS if _type == "Video" else gc.AUDIO_HEADERS
-        info_url = (
-            f"https://mooc1.chaoxing.com/ananas/status/{job['objectid']}?"
-            f"k={self.get_fid()}&flag=normal"
-        )
+        info_url = f"https://mooc1.chaoxing.com/ananas/status/{job['objectid']}?" f"k={self.get_fid()}&flag=normal"
         try:
             resp = session.get(info_url, timeout=8, headers=headers)
         except RequestException as exc:
@@ -86,7 +86,9 @@ class ChaoxingMediaService:
 
         return None
 
-    def _recover_after_forbidden(self, session: requests.Session, job: dict, _type: Literal["Video", "Audio"], account=None, login_func=None):
+    def _recover_after_forbidden(
+        self, session: requests.Session, job: dict, _type: Literal["Video", "Audio"], account=None, login_func=None
+    ):
         self.session_manager.update_cookies()
         refreshed = self._refresh_video_status(session, job, _type)
         if refreshed:
@@ -141,27 +143,35 @@ class ChaoxingMediaService:
             except Exception as exc:
                 logger.debug(f"视频进度回调执行失败(初始): {exc}")
 
-        pbar = tqdm(total=duration, initial=play_time, desc=_job["name"],
-                    unit_scale=True, bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}')
+        pbar = tqdm(
+            total=duration,
+            initial=play_time,
+            desc=_job["name"],
+            unit_scale=True,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}",
+        )
 
         forbidden_retry = 0
         max_forbidden_retry = 2
 
         # 仅以真实的 play_time 上报一次。旧代码紧接着又以 playingTime==duration
         # 再报一次，等于一上来就声称整段视频已看完，覆盖了第一次上报。
-        passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration, play_time, _type, headers=headers)
+        passed, state = self.video_progress_log(
+            _session, _course, _job, _job_info, _dtoken, duration, play_time, _type, headers=headers
+        )
 
         if passed:
-            logger.info("任务瞬间完成: {}", _job['name'])
+            logger.info("任务瞬间完成: {}", _job["name"])
             return True
 
         while not passed:
             if callable(should_stop) and should_stop():
-                logger.info("任务被取消: {}", _job['name'])
+                logger.info("任务被取消: {}", _job["name"])
                 return False
             if play_time - last_log_time >= wait_time or play_time == duration:
-                passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration,
-                                                        int(play_time), _type, headers=headers)
+                passed, state = self.video_progress_log(
+                    _session, _course, _job, _job_info, _dtoken, duration, int(play_time), _type, headers=headers
+                )
 
                 if state == 403:
                     if forbidden_retry >= max_forbidden_retry:
@@ -191,7 +201,7 @@ class ChaoxingMediaService:
 
             dt = (time.time() - last_iter) * _speed
             last_iter = time.time()
-            play_time = min(duration, play_time+dt)
+            play_time = min(duration, play_time + dt)
 
             pbar.n = int(play_time)
             pbar.refresh()
@@ -204,5 +214,5 @@ class ChaoxingMediaService:
 
             time.sleep(VIDEO_SLEEP_THRESHOLD)
 
-        logger.info("任务完成: {}", _job['name'])
+        logger.info("任务完成: {}", _job["name"])
         return True

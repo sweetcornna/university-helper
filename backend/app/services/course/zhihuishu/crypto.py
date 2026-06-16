@@ -1,8 +1,10 @@
 """智慧树加密工具模块"""
+
 import json as _json
 import time as _time
+from base64 import b64decode, b64encode
+
 from Crypto.Cipher import AES
-from base64 import b64encode, b64decode
 
 IV = b"1g3qqdh4jvbskb9x"
 HOME_KEY = b"7q9oko0vqb3la20r"
@@ -45,7 +47,7 @@ class Cipher:
     @staticmethod
     def unpad(data: bytes) -> str:
         data = data.decode()
-        return data[:-ord(data[-1])]
+        return data[: -ord(data[-1])]
 
     def encrypt(self, data: str) -> str:
         cipher = AES.new(self.key, AES.MODE_CBC, self.iv)
@@ -71,7 +73,7 @@ class WatchPoint:
             self.wp.append(self.gen(i))
 
     def get(self) -> str:
-        return ','.join(map(str, self.wp))
+        return ",".join(map(str, self.wp))
 
     def reset(self, init: int = 0):
         self.wp = [0, 1]

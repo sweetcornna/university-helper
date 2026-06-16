@@ -1,7 +1,8 @@
-# -*- coding: utf-8 -*-
 import functools
+
 import requests
 from requests.adapters import HTTPAdapter
+
 from .config import GlobalConst as gc
 
 

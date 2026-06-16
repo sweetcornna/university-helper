@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-import asyncio
 import argparse
+import asyncio
 import configparser
 import enum
 import sys
@@ -10,37 +9,42 @@ import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from queue import Empty, PriorityQueue
+
 try:
     from queue import ShutDown
 except ImportError:
     # ShutDown is only available in Python 3.13+
     class ShutDown(Exception):
         pass
+
+
 from threading import RLock
 from typing import Any
 
+from loguru import logger
 from tqdm import tqdm
 
-from .answer import Tiku
-from .client import Chaoxing, Account, StudyResult
-from .exceptions import LoginError, InputFormatError
-from loguru import logger
 from app.services.notification import NotificationFactory
+
+from .answer import Tiku
+from .client import Account, Chaoxing, StudyResult
+from .exceptions import InputFormatError, LoginError
 from .live import Live
 from .live_process import LiveProcessor
 
+
 class ChapterResult(enum.Enum):
-    SUCCESS=0,
-    ERROR=1,
-    NOT_OPEN=2,
-    PENDING=3
-    CANCELLED=4
+    SUCCESS = (0,)
+    ERROR = (1,)
+    NOT_OPEN = (2,)
+    PENDING = 3
+    CANCELLED = 4
 
 
 def should_stop(config: dict[str, Any] | None = None) -> bool:
     if not isinstance(config, dict):
         return False
-    callback = config.get('should_stop')
+    callback = config.get("should_stop")
     return bool(callable(callback) and callback())
 
 
@@ -71,19 +75,17 @@ def parse_args():
 
     parser.add_argument("--use-cookies", action="store_true", help="使用cookies登录")
 
-    parser.add_argument(
-        "-c", "--config", type=str, default=None, help="使用配置文件运行程序"
-    )
+    parser.add_argument("-c", "--config", type=str, default=None, help="使用配置文件运行程序")
     parser.add_argument("-u", "--username", type=str, default=None, help="手机号账号")
     parser.add_argument("-p", "--password", type=str, default=None, help="登录密码")
+    parser.add_argument("-l", "--list", type=str, default=None, help="要学习的课程ID列表, 以 , 分隔")
+    parser.add_argument("-s", "--speed", type=float, default=1.0, help="视频播放倍速 (默认1, 最大2)")
     parser.add_argument(
-        "-l", "--list", type=str, default=None, help="要学习的课程ID列表, 以 , 分隔"
-    )
-    parser.add_argument(
-        "-s", "--speed", type=float, default=1.0, help="视频播放倍速 (默认1, 最大2)"
-    )
-    parser.add_argument(
-        "-j", "--jobs", type=int, default=4, help="同时进行的章节数 (默认4, 如果一个章节有多个任务点，不会限制同时处理任务点的数量)"
+        "-j",
+        "--jobs",
+        type=int,
+        default=4,
+        help="同时进行的章节数 (默认4, 如果一个章节有多个任务点，不会限制同时处理任务点的数量)",
     )
 
     parser.add_argument(
@@ -94,9 +96,12 @@ def parse_args():
         help="启用调试模式, 输出DEBUG级别日志",
     )
     parser.add_argument(
-        "-a", "--notopen-action", type=str, default="retry", 
+        "-a",
+        "--notopen-action",
+        type=str,
+        default="retry",
         choices=["retry", "ask", "continue"],
-        help="遇到关闭任务点时的行为: retry-重试, ask-询问, continue-继续"
+        help="遇到关闭任务点时的行为: retry-重试, ask-询问, continue-继续",
     )
 
     # 在解析之前捕获 -h 的行为
@@ -111,17 +116,19 @@ def load_config_from_file(config_path):
     """从配置文件加载设置"""
     config = configparser.ConfigParser()
     config.read(config_path, encoding="utf8")
-    
+
     common_config: dict[str, Any] = {}
     tiku_config: dict[str, Any] = {}
     notification_config: dict[str, Any] = {}
-    
+
     # 检查并读取common节
     if config.has_section("common"):
         common_config = dict(config.items("common"))
         # 处理course_list，将字符串转换为列表
         if "course_list" in common_config and common_config["course_list"]:
-            common_config["course_list"] = [item.strip() for item in common_config["course_list"].split(",") if item.strip()]
+            common_config["course_list"] = [
+                item.strip() for item in common_config["course_list"].split(",") if item.strip()
+            ]
         # 处理speed，将字符串转换为浮点数
         if "speed" in common_config:
             common_config["speed"] = float(common_config["speed"])
@@ -148,7 +155,7 @@ def load_config_from_file(config_path):
     # 检查并读取notification节
     if config.has_section("notification"):
         notification_config = dict(config.items("notification"))
-    
+
     return common_config, tiku_config, notification_config
 
 
@@ -161,7 +168,7 @@ def build_config_from_args(args):
         "course_list": [item.strip() for item in args.list.split(",") if item.strip()] if args.list else None,
         "speed": args.speed if args.speed else 1.0,
         "jobs": args.jobs,
-        "notopen_action": args.notopen_action if args.notopen_action else "retry"
+        "notopen_action": args.notopen_action if args.notopen_action else "retry",
     }
     return common_config, {}, {}
 
@@ -169,11 +176,10 @@ def build_config_from_args(args):
 def init_config():
     """初始化配置"""
     args = parse_args()
-    
+
     if args.config:
         return load_config_from_file(args.config)
-    else:
-        return build_config_from_args(args)
+    return build_config_from_args(args)
 
 
 def init_chaoxing(common_config, tiku_config):
@@ -181,32 +187,40 @@ def init_chaoxing(common_config, tiku_config):
     username = common_config.get("username", "")
     password = common_config.get("password", "")
     use_cookies = common_config.get("use_cookies", False)
-    
+
     # 如果没有提供用户名密码，从命令行获取
     if (not username or not password) and not use_cookies:
         username = input("请输入你的手机号, 按回车确认\n手机号:")
         password = input("请输入你的密码, 按回车确认\n密码:")
-    
+
     account = Account(username, password)
-    
+
     # 设置题库
     tiku = Tiku()
     tiku.config_set(tiku_config)  # 载入配置
     tiku = tiku.get_tiku_from_config()  # 载入题库
     tiku.init_tiku()  # 初始化题库
-    
+
     # 获取查询延迟设置
     query_delay = tiku_config.get("delay", 0)
     # 获取AI题库并发配置（仅在使用AI题库时生效）
     ai_concurrency = tiku_config.get("ai_concurrency")
-    
+
     # 实例化超星API
     chaoxing = Chaoxing(account=account, tiku=tiku, query_delay=query_delay, ai_concurrency=ai_concurrency)
-    
+
     return chaoxing
 
 
-def process_job(chaoxing: Chaoxing, course: dict, job: dict, job_info: dict, speed: float, progress_callback=None, should_stop_callback=None) -> StudyResult:
+def process_job(
+    chaoxing: Chaoxing,
+    course: dict,
+    job: dict,
+    job_info: dict,
+    speed: float,
+    progress_callback=None,
+    should_stop_callback=None,
+) -> StudyResult:
     """处理单个任务点"""
     if callable(should_stop_callback) and should_stop_callback():
         return StudyResult.CANCELLED
@@ -236,50 +250,41 @@ def process_job(chaoxing: Chaoxing, course: dict, job: dict, job_info: dict, spe
                 should_stop=should_stop_callback,
             )
         if video_result.is_failure():
-            logger.warning(
-                f"出现异常任务 -> 任务章节: {course['title']} 任务ID: {job['jobid']}, 已跳过"
-            )
+            logger.warning(f"出现异常任务 -> 任务章节: {course['title']} 任务ID: {job['jobid']}, 已跳过")
         return video_result
     # 文档任务
-    elif job["type"] == "document":
+    if job["type"] == "document":
         logger.trace(f"识别到文档任务, 任务章节: {course['title']} 任务ID: {job['jobid']}")
         return chaoxing.study_document(course, job)
     # 测验任务
-    elif job["type"] == "workid":
+    if job["type"] == "workid":
         logger.trace(f"识别到章节检测任务, 任务章节: {course['title']}")
         return chaoxing.study_work(course, job, job_info)
     # 阅读任务
-    elif job["type"] == "read":
+    if job["type"] == "read":
         logger.trace(f"识别到阅读任务, 任务章节: {course['title']}")
         return chaoxing.study_read(course, job, job_info)
     # 直播任务
-    elif job["type"] == "live":
+    if job["type"] == "live":
         logger.trace(f"识别到直播任务, 任务章节: {course['title']} 任务ID: {job['jobid']}")
         try:
             # 准备直播所需参数
             defaults = {
                 "userid": chaoxing.get_uid(),
                 "clazzId": course.get("clazzId"),
-                "knowledgeid": job_info.get("knowledgeid")
+                "knowledgeid": job_info.get("knowledgeid"),
             }
-            
+
             # 创建直播对象
-            live = Live(
-                attachment=job,
-                defaults=defaults,
-                course_id=course.get("courseId")
-            )
-            
+            live = Live(attachment=job, defaults=defaults, course_id=course.get("courseId"))
+
             # 启动直播处理线程
             run_state = {"result": None}
 
             def _run_live():
                 run_state["result"] = asyncio.run(LiveProcessor.run_live(live, speed, should_stop_callback))
 
-            thread = threading.Thread(
-                target=_run_live,
-                daemon=True
-            )
+            thread = threading.Thread(target=_run_live, daemon=True)
             thread.start()
             while thread.is_alive():
                 thread.join(timeout=0.5)
@@ -300,6 +305,7 @@ class ChapterTask:
     point: dict[str, Any]
     result: ChapterResult = ChapterResult.PENDING
     tries: int = 0
+
 
 class JobProcessor:
     def __init__(self, chaoxing: Chaoxing, course: dict[str, Any], tasks: list[ChapterTask], config: dict[str, Any]):
@@ -425,8 +431,9 @@ class JobProcessor:
                     if task.tries >= self.max_tries:
                         logger.error(
                             "章节未开启: {} 可能由于上一章节的章节检测未完成, 也可能由于该章节因为时效已关闭，"
-                            "请手动检查完成并提交再重试。或者在配置中配置(自动跳过关闭章节/开启题库并启用提交)"
-                        , task.point["title"])
+                            "请手动检查完成并提交再重试。或者在配置中配置(自动跳过关闭章节/开启题库并启用提交)",
+                            task.point["title"],
+                        )
                         self.task_queue.task_done()
                         continue
 
@@ -444,8 +451,7 @@ class JobProcessor:
 
                 case ChapterResult.ERROR:
                     task.tries += 1
-                    logger.warning("Retrying task {} ({}/{} attempts)", task.point["title"], task.tries,
-                                   self.max_tries)
+                    logger.warning("Retrying task {} ({}/{} attempts)", task.point["title"], task.tries, self.max_tries)
                     if task.tries >= self.max_tries:
                         logger.error("Max retries reached for task: {}", task.point["title"])
                         self.failed_tasks.append(task)
@@ -494,7 +500,13 @@ class JobProcessor:
             pass
 
 
-def process_chapter(chaoxing: Chaoxing, course:dict[str, Any], point:dict[str, Any], speed:float, config: dict[str, Any] | None = None) -> ChapterResult:
+def process_chapter(
+    chaoxing: Chaoxing,
+    course: dict[str, Any],
+    point: dict[str, Any],
+    speed: float,
+    config: dict[str, Any] | None = None,
+) -> ChapterResult:
     """处理单个章节
 
     当所有任务点成功完成时，如果 config 中提供了 chapter_done_callback，
@@ -524,10 +536,10 @@ def process_chapter(chaoxing: Chaoxing, course:dict[str, Any], point:dict[str, A
                 except Exception as e:
                     logger.debug(f"调用 chapter_done_callback 时出错: {e}")
         return ChapterResult.SUCCESS
-    
+
     # 随机等待，避免请求过快
-    chaoxing.rate_limiter.limit_rate(random_time=True,random_min=0, random_max=0.2)
-    
+    chaoxing.rate_limiter.limit_rate(random_time=True, random_min=0, random_max=0.2)
+
     # 获取当前章节的所有任务点
     job_info = None
     jobs, job_info = chaoxing.get_job_list(course, point)
@@ -549,7 +561,7 @@ def process_chapter(chaoxing: Chaoxing, course:dict[str, Any], point:dict[str, A
         pass
 
     # TODO: 个别章节很恶心，多到5个点，可以并行处理，将来会让不同课程不同章节的所有任务点共享一个队列，从而实现全局并行
-    job_results:list[StudyResult]=[]
+    job_results: list[StudyResult] = []
     video_progress_callback = config.get("video_progress_callback") if config else None
     stop_callback = config.get("should_stop") if config else None
     executor = ThreadPoolExecutor(max_workers=5)
@@ -611,15 +623,12 @@ def process_chapter(chaoxing: Chaoxing, course:dict[str, Any], point:dict[str, A
     return ChapterResult.SUCCESS
 
 
-
-def process_course(chaoxing: Chaoxing, course:dict[str, Any], config: dict):
+def process_course(chaoxing: Chaoxing, course: dict[str, Any], config: dict):
     """处理单个课程"""
     logger.info(f"开始学习课程: {course['title']}")
-    
+
     # 获取当前课程的所有章节
-    point_list = chaoxing.get_course_point(
-        course["courseId"], course["clazzId"], course["cpi"]
-    )
+    point_list = chaoxing.get_course_point(course["courseId"], course["clazzId"], course["cpi"])
 
     # 为了支持课程任务回滚, 采用下标方式遍历任务点
 
@@ -627,7 +636,7 @@ def process_course(chaoxing: Chaoxing, course:dict[str, Any], config: dict):
     tqdm.format_sizeof = format_time
     tqdm.set_lock(RLock())
 
-    tasks=[]
+    tasks = []
 
     for i, point in enumerate(point_list["points"]):
         task = ChapterTask(point=point, index=i)
@@ -635,26 +644,7 @@ def process_course(chaoxing: Chaoxing, course:dict[str, Any], config: dict):
     p = JobProcessor(chaoxing, course, tasks, config)
     p.run()
 
-
     tqdm.format_sizeof = _old_format_sizeof
-
-    """
-    while __point_index < len(point_list["points"]):
-        point = point_list["points"][__point_index]
-        logger.debug(f"当前章节 __point_index: {__point_index}")
-        
-        result, auto_skip_notopen = process_chapter(
-            chaoxing, course, point, RB, notopen_action, speed, auto_skip_notopen
-        )
-        
-        if result == -1:  # 退出当前课程
-            break
-        elif result == 0:  # 重试前一章节
-            __point_index -= 1  # 默认第一个任务总是开放的
-        else:  # 继续下一章节
-            __point_index += 1
-    """
-
 
 
 def filter_courses(all_course, course_list):
@@ -666,9 +656,7 @@ def filter_courses(all_course, course_list):
             print(f"ID: {course['courseId']} 课程名: {course['title']}")
         print("*" * 28)
         try:
-            course_list = input(
-                "请输入想要学习的课程列表,以逗号分隔,例: 2151141,189191,198198\n"
-            ).split(",")
+            course_list = input("请输入想要学习的课程列表,以逗号分隔,例: 2151141,189191,198198\n").split(",")
         except Exception as e:
             raise InputFormatError("输入格式错误") from e
 
@@ -679,15 +667,15 @@ def filter_courses(all_course, course_list):
         if course["courseId"] in course_list and course["courseId"] not in course_ids:
             course_task.append(course)
             course_ids.append(course["courseId"])
-    
+
     # 如果没有指定课程，则学习所有课程
     if not course_task:
         course_task = all_course
-    
+
     return course_task
 
 
-def format_time(num, suffix='', divisor=''):
+def format_time(num, suffix="", divisor=""):
     total_time = round(num)
     sec = total_time % 60
     mins = (total_time % 3600) // 60
@@ -723,21 +711,21 @@ def main():
         _login_state = chaoxing.login(login_with_cookies=common_config.get("use_cookies", False))
         if not _login_state["status"]:
             raise LoginError(_login_state["msg"])
-        
+
         # 获取所有的课程列表
         all_course = chaoxing.get_course_list()
-        
+
         # 过滤要学习的课程
         course_task = filter_courses(all_course, common_config.get("course_list"))
-        
+
         # 开始学习
         logger.info(f"课程列表过滤完毕, 当前课程任务数量: {len(course_task)}")
         for course in course_task:
             process_course(chaoxing, course, common_config)
-        
+
         logger.info("所有课程学习任务已完成")
         notification.send("chaoxing : 所有课程学习任务已完成")
-        
+
     except SystemExit as e:
         if e.code != 0:
             logger.error(f"错误: 程序异常退出, 返回码: {e.code}")

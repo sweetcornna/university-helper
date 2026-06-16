@@ -1,8 +1,11 @@
-# -*- coding: utf-8 -*-
 from enum import Enum
 
 from .answer import Tiku
 from .auth_service import ChaoxingAuthService
+from .constants import (
+    DEFAULT_RATE_LIMIT,
+    VIDEO_LOG_RATE_LIMIT,
+)
 from .course_data_service import ChaoxingCourseDataService
 from .course_service import ChaoxingCourseService
 from .quiz_service import ChaoxingQuizService
@@ -10,10 +13,6 @@ from .rate_limiter import RateLimiter
 from .session_manager import SessionManager
 from .video_service import ChaoxingVideoService
 from .work_legacy_service import ChaoxingWorkLegacyService
-from .constants import (
-    DEFAULT_RATE_LIMIT,
-    VIDEO_LOG_RATE_LIMIT,
-)
 
 
 class Account:
@@ -43,6 +42,7 @@ class StudyResult(Enum):
     def is_cancelled(self):
         return self == StudyResult.CANCELLED
 
+
 class Chaoxing:
     def __init__(self, account: Account = None, tiku: Tiku = None, **kwargs):
         self.account = account
@@ -57,9 +57,7 @@ class Chaoxing:
 
         self.auth_service = ChaoxingAuthService(account, session_manager=self.session_manager)
         self.course_service = ChaoxingCourseService(session_manager=self.session_manager)
-        self.quiz_service = ChaoxingQuizService(
-            tiku, self.rollback_times, kwargs, session_manager=self.session_manager
-        )
+        self.quiz_service = ChaoxingQuizService(tiku, self.rollback_times, kwargs, session_manager=self.session_manager)
 
         self.video_service = ChaoxingVideoService(
             get_fid_func=self.get_fid,
@@ -114,8 +112,12 @@ class Chaoxing:
     def get_enc(self, clazzId, jobid, objectId, playingTime, duration, userid):
         return self.video_service.get_enc(clazzId, jobid, objectId, playingTime, duration, userid)
 
-    def video_progress_log(self, _session, _course, _job, _job_info, _dtoken, _duration, _playingTime, _type="Video", headers=None):
-        return self.video_service.video_progress_log(_session, _course, _job, _job_info, _dtoken, _duration, _playingTime, _type, headers=headers)
+    def video_progress_log(
+        self, _session, _course, _job, _job_info, _dtoken, _duration, _playingTime, _type="Video", headers=None
+    ):
+        return self.video_service.video_progress_log(
+            _session, _course, _job, _job_info, _dtoken, _duration, _playingTime, _type, headers=headers
+        )
 
     def _refresh_video_status(self, session, job, _type):
         return self.video_service._refresh_video_status(session, job, _type)
@@ -123,7 +125,9 @@ class Chaoxing:
     def _recover_after_forbidden(self, session, job, _type):
         return self.video_service._recover_after_forbidden(session, job, _type)
 
-    def study_video(self, _course, _job, _job_info, _speed=1.0, _type="Video", progress_callback=None, should_stop=None):
+    def study_video(
+        self, _course, _job, _job_info, _speed=1.0, _type="Video", progress_callback=None, should_stop=None
+    ):
         return self.video_service.study_video(_course, _job, _job_info, _speed, _type, progress_callback, should_stop)
 
     # ------------------------------------------------------------------

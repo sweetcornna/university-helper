@@ -1,33 +1,39 @@
-# -*- coding: utf-8 -*-
 """Video/Audio learning service for Chaoxing."""
 
-import re
 import random
+import re
 import time
-from typing import Optional, Literal
+from typing import Literal
 
 import requests
-from requests import RequestException
 from loguru import logger
+from requests import RequestException
 from tqdm import tqdm
 
 from .config import GlobalConst as gc
-from .course_service import get_timestamp
-from .rate_limiter import RateLimiter
 from .constants import (
-    VIDEO_LOG_RATE_LIMIT,
-    VIDEO_WAIT_TIME_MIN,
-    VIDEO_WAIT_TIME_MAX,
-    VIDEO_SLEEP_THRESHOLD,
     MAX_FORBIDDEN_RETRY,
     MILLISECONDS_MULTIPLIER,
+    VIDEO_LOG_RATE_LIMIT,
+    VIDEO_SLEEP_THRESHOLD,
+    VIDEO_WAIT_TIME_MAX,
+    VIDEO_WAIT_TIME_MIN,
 )
+from .course_service import get_timestamp
+from .rate_limiter import RateLimiter
 
 
 class ChaoxingVideoService:
     """Handles video and audio progress logging and study tasks."""
 
-    def __init__(self, get_fid_func, get_uid_func, rate_limiter: RateLimiter, video_log_limiter: RateLimiter, session_manager=None):
+    def __init__(
+        self,
+        get_fid_func,
+        get_uid_func,
+        rate_limiter: RateLimiter,
+        video_log_limiter: RateLimiter,
+        session_manager=None,
+    ):
         self._get_fid = get_fid_func
         self._get_uid = get_uid_func
         self.rate_limiter = rate_limiter
@@ -40,6 +46,7 @@ class ChaoxingVideoService:
 
     def get_enc(self, clazzId, jobid, objectId, playingTime, duration, userid):
         from hashlib import md5
+
         return md5(
             f"[{clazzId}][{userid}][{jobid}][{objectId}][{playingTime * MILLISECONDS_MULTIPLIER}][d_yHJ!$pdA~5][{duration * MILLISECONDS_MULTIPLIER}][0_{duration}]".encode()
         ).hexdigest()
@@ -49,16 +56,16 @@ class ChaoxingVideoService:
     # ------------------------------------------------------------------
 
     def video_progress_log(
-            self,
-            _session,
-            _course,
-            _job,
-            _job_info,
-            _dtoken,
-            _duration,
-            _playingTime,
-            _type: str = "Video",
-            headers: Optional[dict] = None,
+        self,
+        _session,
+        _course,
+        _job,
+        _job_info,
+        _dtoken,
+        _duration,
+        _playingTime,
+        _type: str = "Video",
+        headers: dict | None = None,
     ) -> tuple[bool, int]:
         """
         Log video/audio progress to the server.
@@ -77,7 +84,9 @@ class ChaoxingVideoService:
             logger.error(_job["otherinfo"])
             raise RuntimeError("this is not possible")
 
-        enc = self.get_enc(_course["clazzId"], _job["jobid"], _job["objectid"], _playingTime, _duration, self._get_uid())
+        enc = self.get_enc(
+            _course["clazzId"], _job["jobid"], _job["objectid"], _playingTime, _duration, self._get_uid()
+        )
         params = {
             "clazzId": _course["clazzId"],
             "playingTime": _playingTime,
@@ -91,14 +100,10 @@ class ChaoxingVideoService:
             "isdrag": "3",
             "view": "pc",
             "enc": enc,
-            "dtype": _type
+            "dtype": _type,
         }
 
-        _url = (
-            f"https://mooc1.chaoxing.com/mooc-ans/multimedia/log/a/"
-            f"{_course['cpi']}/"
-            f"{_dtoken}"
-        )
+        _url = f"https://mooc1.chaoxing.com/mooc-ans/multimedia/log/a/" f"{_course['cpi']}/" f"{_dtoken}"
 
         face_capture_enc = _job["videoFaceCaptureEnc"]
         att_duration = _job["attDuration"]
@@ -111,9 +116,9 @@ class ChaoxingVideoService:
         if att_duration_enc:
             params["attDurationEnc"] = att_duration_enc
 
-        rt = _job['rt']
+        rt = _job["rt"]
         if not rt:
-            rt_search = re.search(r"-rt_([1d])", _job['otherinfo'])
+            rt_search = re.search(r"-rt_([1d])", _job["otherinfo"])
             if rt_search:
                 rt_char = rt_search.group(1)
                 rt = "0.9" if rt_char == "d" else "1"
@@ -121,25 +126,24 @@ class ChaoxingVideoService:
 
         if rt:
             logger.trace(f"Got rt: {rt}")
-            params.update({"rt": rt,
-                           "_t": get_timestamp()})
+            params.update({"rt": rt, "_t": get_timestamp()})
             resp = _session.get(_url, params=params, headers=headers)
         else:
             logger.warning("Failed to get rt")
             for rt in [0.9, 1]:
-                params.update({"rt": rt,
-                               "_t": get_timestamp()})
+                params.update({"rt": rt, "_t": get_timestamp()})
                 resp = _session.get(_url, params=params, headers=headers)
                 if resp.status_code == 200:
                     logger.trace(resp.text)
                     return resp.json()["isPassed"], 200
-                elif resp.status_code == 403:
+                if resp.status_code == 403:
                     logger.warning("出现403报错, 正常尝试切换rt")
                 else:
-                    logger.warning("未知错误 jobid={}, status_code={}, 摘要:\n{}",
-                                   _job.get("jobid"),
-                                   resp.status_code,
-                                   resp.text[:200]
+                    logger.warning(
+                        "未知错误 jobid={}, status_code={}, 摘要:\n{}",
+                        _job.get("jobid"),
+                        resp.status_code,
+                        resp.text[:200],
                     )
                     break
 
@@ -147,7 +151,7 @@ class ChaoxingVideoService:
             logger.trace(resp.text)
             return resp.json()["isPassed"], 200
 
-        elif resp.status_code == 403:
+        if resp.status_code == 403:
             logger.debug(
                 "视频进度上报返回403, jobid={}, 摘要={}",
                 _job.get("jobid"),
@@ -168,13 +172,12 @@ class ChaoxingVideoService:
     # Refresh / recovery
     # ------------------------------------------------------------------
 
-    def _refresh_video_status(self, session: requests.Session, job: dict, _type: Literal["Video", "Audio"]) -> Optional[dict]:
+    def _refresh_video_status(
+        self, session: requests.Session, job: dict, _type: Literal["Video", "Audio"]
+    ) -> dict | None:
         self.rate_limiter.limit_rate(random_time=True, random_max=0.2)
         headers = gc.VIDEO_HEADERS if _type == "Video" else gc.AUDIO_HEADERS
-        info_url = (
-            f"https://mooc1.chaoxing.com/ananas/status/{job['objectid']}?"
-            f"k={self._get_fid()}&flag=normal"
-        )
+        info_url = f"https://mooc1.chaoxing.com/ananas/status/{job['objectid']}?" f"k={self._get_fid()}&flag=normal"
         try:
             resp = session.get(info_url, timeout=8, headers=headers)
         except RequestException as exc:
@@ -266,8 +269,13 @@ class ChaoxingVideoService:
             except Exception as exc:
                 logger.debug(f"视频进度回调执行失败(初始): {exc}")
 
-        pbar = tqdm(total=duration, initial=play_time, desc=_job["name"],
-                    unit_scale=True, bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}')
+        pbar = tqdm(
+            total=duration,
+            initial=play_time,
+            desc=_job["name"],
+            unit_scale=True,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}",
+        )
 
         forbidden_retry = 0
         max_forbidden_retry = MAX_FORBIDDEN_RETRY
@@ -278,19 +286,21 @@ class ChaoxingVideoService:
         MAX_REPORTS_WHILE_SATURATED = 10
         saturated_reports = 0
 
-        passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration, play_time, _type, headers=headers)
+        passed, state = self.video_progress_log(
+            _session, _course, _job, _job_info, _dtoken, duration, play_time, _type, headers=headers
+        )
 
         if passed:
-            logger.info("任务瞬间完成: {}", _job['name'])
+            logger.info("任务瞬间完成: {}", _job["name"])
             return StudyResult.SUCCESS
 
         while not passed:
             if callable(should_stop) and should_stop():
                 return StudyResult.CANCELLED
             if play_time - last_log_time >= wait_time or play_time == duration:
-
-                passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration,
-                                                        int(play_time), _type, headers=headers)
+                passed, state = self.video_progress_log(
+                    _session, _course, _job, _job_info, _dtoken, duration, int(play_time), _type, headers=headers
+                )
 
                 if state == 403:
                     if forbidden_retry >= max_forbidden_retry:
@@ -359,5 +369,5 @@ class ChaoxingVideoService:
 
             time.sleep(VIDEO_SLEEP_THRESHOLD)
 
-        logger.info("任务完成: {}", _job['name'])
+        logger.info("任务完成: {}", _job["name"])
         return StudyResult.SUCCESS

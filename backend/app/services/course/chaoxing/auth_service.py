@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
-from loguru import logger
 import requests
+from loguru import logger
 from requests import RequestException
+
 from .cipher import AESCipher
 from .config import GlobalConst as gc
 
@@ -50,11 +50,10 @@ class ChaoxingAuthService:
             self.session_manager.set_cookies(_session.cookies.get_dict())
             logger.info("登录成功...")
             return {"status": True, "msg": "登录成功"}
-        else:
-            # 超星失败响应不保证包含 'msg2'（如验证码/风控/限流的不同结构），
-            # 直接索引会抛 KeyError 并被包装成模糊的 'Unexpected task failure'。
-            msg = resp_data.get("msg2") or resp_data.get("msg") or resp_data.get("msg1") or "登录失败"
-            return {"status": False, "msg": str(msg)}
+        # 超星失败响应不保证包含 'msg2'（如验证码/风控/限流的不同结构），
+        # 直接索引会抛 KeyError 并被包装成模糊的 'Unexpected task failure'。
+        msg = resp_data.get("msg2") or resp_data.get("msg") or resp_data.get("msg1") or "登录失败"
+        return {"status": False, "msg": str(msg)}
 
     def _validate_cookie_session(self) -> bool:
         session = self.session_manager.get_session()

@@ -30,14 +30,14 @@ import logging
 import os
 import threading
 import time
-from typing import Optional, Protocol
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
 
 class SessionStore(Protocol):
-    def get(self, key: str) -> Optional[bytes]: ...
-    def set(self, key: str, value: bytes, ttl: Optional[int] = None) -> None: ...
+    def get(self, key: str) -> bytes | None: ...
+    def set(self, key: str, value: bytes, ttl: int | None = None) -> None: ...
     def delete(self, key: str) -> None: ...
 
 
@@ -46,9 +46,9 @@ class InMemorySessionStore:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._data: dict[str, tuple[bytes, Optional[float]]] = {}
+        self._data: dict[str, tuple[bytes, float | None]] = {}
 
-    def get(self, key: str) -> Optional[bytes]:
+    def get(self, key: str) -> bytes | None:
         with self._lock:
             entry = self._data.get(key)
             if entry is None:
@@ -59,7 +59,7 @@ class InMemorySessionStore:
                 return None
             return value
 
-    def set(self, key: str, value: bytes, ttl: Optional[int] = None) -> None:
+    def set(self, key: str, value: bytes, ttl: int | None = None) -> None:
         expires_at = time.time() + ttl if ttl else None
         with self._lock:
             self._data[key] = (value, expires_at)
@@ -83,10 +83,10 @@ class RedisSessionStore:
             ) from exc
         self._client = redis.Redis.from_url(url, decode_responses=False)
 
-    def get(self, key: str) -> Optional[bytes]:
+    def get(self, key: str) -> bytes | None:
         return self._client.get(key)
 
-    def set(self, key: str, value: bytes, ttl: Optional[int] = None) -> None:
+    def set(self, key: str, value: bytes, ttl: int | None = None) -> None:
         if ttl:
             self._client.setex(key, ttl, value)
         else:
@@ -96,7 +96,7 @@ class RedisSessionStore:
         self._client.delete(key)
 
 
-_store: Optional[SessionStore] = None
+_store: SessionStore | None = None
 _store_lock = threading.Lock()
 
 

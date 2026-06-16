@@ -1,15 +1,14 @@
-# -*- coding: utf-8 -*-
 """Legacy work/quiz handling service for Chaoxing."""
 
-import re
 import random
-import time
+import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from loguru import logger
 
-from .answer import Tiku, AI
+from .answer import AI, Tiku
 from .answer_check import cut
 from .decode import decode_questions_info
 from .exceptions import MaxRetryExceeded
@@ -51,9 +50,7 @@ class ChaoxingWorkLegacyService:
             logger.debug(f"当前选项列表[cut后] -> {_op_list}")
 
             if not _op_list:
-                logger.error(
-                    "选项为空, 未能正确提取题目选项信息! 请反馈并提供以上信息"
-                )
+                logger.error("选项为空, 未能正确提取题目选项信息! 请反馈并提供以上信息")
                 return answer
 
             available_options = len(_op_list)
@@ -75,7 +72,7 @@ class ChaoxingWorkLegacyService:
                 weights = weights_map.get(max_possible, [0.3, 0.4, 0.3])
                 possible_counts = list(range(min_possible, max_possible + 1))
 
-                weights = weights[:len(possible_counts)]
+                weights = weights[: len(possible_counts)]
 
                 weights_sum = sum(weights)
                 if weights_sum > 0:
@@ -105,13 +102,10 @@ class ChaoxingWorkLegacyService:
         """
         res = cut(answer)
         if res is None:
-            logger.warning(
-                f"未能从网页中提取题目信息, 以下为相关信息：\n\t{answer}\n\n{origin_html_content}\n"
-            )
+            logger.warning(f"未能从网页中提取题目信息, 以下为相关信息：\n\t{answer}\n\n{origin_html_content}\n")
             logger.warning("未能正确提取题目选项信息! 请反馈并提供以上信息")
             return None
-        else:
-            return res
+        return res
 
     @staticmethod
     def _clean_res(res):
@@ -119,7 +113,7 @@ class ChaoxingWorkLegacyService:
         if isinstance(res, str):
             res = [res]
         for c in res:
-            cleaned = re.sub(r'^[A-Za-z]|[.,!?;:，。！？；：]', '', c)
+            cleaned = re.sub(r"^[A-Za-z]|[.,!?;:，。！？；：]", "", c)
             cleaned_res.append(cleaned.strip())
         return cleaned_res
 
@@ -161,11 +155,11 @@ class ChaoxingWorkLegacyService:
                         "enc": _job["enc"],
                         "mooc2": "1",
                         "courseid": _course["courseId"],
-                    }
+                    },
                 )
 
                 # 未创建完成该测验则不进行答题
-                if '教师未创建完成该测验' in _resp.text:
+                if "教师未创建完成该测验" in _resp.text:
                     raise PermissionError("教师未创建完成该测验")
 
                 questions = decode_questions_info(_resp.text)
@@ -174,14 +168,15 @@ class ChaoxingWorkLegacyService:
                     return (_resp, questions)
 
                 logger.warning(
-                    f"无效响应 (Code: {getattr(_resp, 'status_code', 'Unknown')}), 重试中... ({retries + 1}/{max_retries})")
+                    f"无效响应 (Code: {getattr(_resp, 'status_code', 'Unknown')}), 重试中... ({retries + 1}/{max_retries})"
+                )
 
             except PermissionError:
                 raise
             except Exception as e:
                 logger.warning(f"请求失败: {str(e)[:50]}, 重试中... ({retries + 1}/{max_retries})")
             retries += 1
-            time.sleep(delay * (2 ** retries))
+            time.sleep(delay * (2**retries))
         raise MaxRetryExceeded(f"超过最大重试次数 ({max_retries})")
 
     # ------------------------------------------------------------------
@@ -266,6 +261,7 @@ class ChaoxingWorkLegacyService:
     def _fallback_random_answer(self, q, origin_html_content=""):
         """当 _handle_question 抛异常时，为该题填入随机答案，避免提交时该题留空。"""
         try:
+
             def _multi_cut_with_context(ans):
                 return self._multi_cut(ans, origin_html_content)
 
@@ -317,9 +313,7 @@ class ChaoxingWorkLegacyService:
         _session = self.session_manager.get_session()
 
         try:
-            final_resp, questions = self._fetch_response(
-                _session, WORK_API_URL, _job, _job_info, _course
-            )
+            final_resp, questions = self._fetch_response(_session, WORK_API_URL, _job, _job_info, _course)
         except Exception as e:
             logger.error(f"请求失败: {e}")
             return StudyResult.ERROR
@@ -348,9 +342,7 @@ class ChaoxingWorkLegacyService:
 
             with ThreadPoolExecutor(max_workers=ai_concurrency) as executor:
                 future_to_q = {
-                    executor.submit(
-                        self._handle_question, q, inc_found_concurrent, _ORIGIN_HTML_CONTENT
-                    ): q
+                    executor.submit(self._handle_question, q, inc_found_concurrent, _ORIGIN_HTML_CONTENT): q
                     for q in questions["questions"]
                 }
                 # 收集 future 结果：ThreadPoolExecutor 会吞掉 worker 异常，
@@ -367,6 +359,7 @@ class ChaoxingWorkLegacyService:
                         )
                         self._fallback_random_answer(q, _ORIGIN_HTML_CONTENT)
         else:
+
             def inc_found_seq():
                 nonlocal found_answers
                 found_answers += 1

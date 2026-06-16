@@ -1,11 +1,10 @@
 import logging
 import threading
+from collections import defaultdict
+from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address
 
-from fastapi import Request, HTTPException, status
-from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional, Tuple
+from fastapi import HTTPException, Request, status
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +17,7 @@ class RateLimiter:
     def __init__(self, requests: int = 5, window: int = 60):
         self.requests = requests
         self.window = window
-        self._cache: Dict[str, Tuple[int, datetime]] = defaultdict(lambda: (0, datetime.now()))
+        self._cache: dict[str, tuple[int, datetime]] = defaultdict(lambda: (0, datetime.now()))
         self._request_count: int = 0
         # check_rate_limit is now invoked via asyncio.to_thread (off the event
         # loop), so concurrent threads can touch _cache / _request_count at once.
@@ -44,8 +43,7 @@ class RateLimiter:
         """Remove expired entries to prevent unbounded memory growth."""
         now = datetime.now()
         expired_keys = [
-            key for key, (_, start_time) in self._cache.items()
-            if now - start_time > timedelta(seconds=self.window)
+            key for key, (_, start_time) in self._cache.items() if now - start_time > timedelta(seconds=self.window)
         ]
         for key in expired_keys:
             del self._cache[key]
@@ -68,7 +66,7 @@ class RateLimiter:
                 self._cleanup_expired()
                 self._evict_oldest()
 
-    def _get_forwarded_client_id(self, request: Request) -> Optional[str]:
+    def _get_forwarded_client_id(self, request: Request) -> str | None:
         # X-Forwarded-For is only consulted when the direct peer is a known
         # private/loopback proxy (see _is_trusted_proxy). nginx forwards
         # `X-Forwarded-For $proxy_add_x_forwarded_for`, which APPENDS the real
@@ -115,11 +113,11 @@ class RateLimiter:
 
     def _current_window_start(self, now: datetime) -> datetime:
         """Floor `now` to the current window boundary in UTC."""
-        aware = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        aware = now.astimezone(UTC) if now.tzinfo else now.replace(tzinfo=UTC)
         bucket = int(aware.timestamp()) // self.window * self.window
-        return datetime.fromtimestamp(bucket, tz=timezone.utc)
+        return datetime.fromtimestamp(bucket, tz=UTC)
 
-    def _check_via_db(self, client_id: str, now: datetime) -> Optional[bool]:
+    def _check_via_db(self, client_id: str, now: datetime) -> bool | None:
         """Atomically increment counter in Postgres for the current window.
 
         Returns True if allowed, False if limit exceeded, or None if the DB
@@ -151,8 +149,7 @@ class RateLimiter:
 
                     if self._request_count % self.DB_CLEANUP_INTERVAL == 0:
                         cur.execute(
-                            "DELETE FROM rate_limit_counters "
-                            "WHERE window_start < %s",
+                            "DELETE FROM rate_limit_counters " "WHERE window_start < %s",
                             (window_start - timedelta(seconds=self.window * 2),),
                         )
             return new_count <= self.requests
@@ -187,10 +184,7 @@ class RateLimiter:
             allowed = db_result
 
         if not allowed:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Rate limit exceeded"
-            )
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
 
 
 rate_limiter = RateLimiter()
