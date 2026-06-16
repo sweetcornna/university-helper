@@ -861,6 +861,12 @@ export default function Zhihuishu() {
       setQrStatus(nextStatus)
       setQrMessage(resp?.message || '等待扫码')
 
+      // The backend regenerates the QR image when the original expires; render the
+      // refreshed code so a slow scan can still succeed. (F-qr-refresh)
+      if (resp?.qr_code) {
+        setQrCode((prev) => (prev === resp.qr_code ? prev : resp.qr_code))
+      }
+
       if (nextStatus === 'success') {
         stopQrPolling()
         setZhihuishuLoggedIn(true)

@@ -32,10 +32,21 @@ class FakeLearning:
     def get_video_list(self, course_id):
         return self._chapters
 
-    def watch_video(self, course_id, video_id, duration):
+    def watch_video(self, course_id, video_id, duration, speed=1.0,
+                    is_cancelled=None, is_paused=None):
+        # Signature mirrors the real ZhihuishuLearning.watch_video: the adapter now
+        # forwards speed + pause/cancel checkers so a long video honors倍速 and
+        # reacts mid-playback. Record them so tests can assert the contract.
         with self.lock:
             self.watch_calls.append(
-                {"course_id": course_id, "video_id": video_id, "duration": duration}
+                {
+                    "course_id": course_id,
+                    "video_id": video_id,
+                    "duration": duration,
+                    "speed": speed,
+                    "is_cancelled": is_cancelled,
+                    "is_paused": is_paused,
+                }
             )
         return self._watch_results.get(str(video_id), True)
 
@@ -197,11 +208,15 @@ def test_cancel_stops_loop_before_remaining_videos():
 
     real_watch = adapter.learning.watch_video
 
-    def blocking_watch(course_id, video_id, duration):
+    def blocking_watch(course_id, video_id, duration, speed=1.0,
+                       is_cancelled=None, is_paused=None):
         if video_id == "v1":
             started.set()
             release.wait(timeout=5)
-        return real_watch(course_id, video_id, duration)
+        return real_watch(
+            course_id, video_id, duration, speed=speed,
+            is_cancelled=is_cancelled, is_paused=is_paused,
+        )
 
     adapter.learning.watch_video = blocking_watch
 
@@ -216,6 +231,46 @@ def test_cancel_stops_loop_before_remaining_videos():
     # v2 must never be watched because the task was cancelled after v1.
     watched_ids = [c["video_id"] for c in adapter.learning.watch_calls]
     assert "v2" not in watched_ids
+
+
+def test_watch_video_receives_speed_and_control_callbacks():
+    """The adapter must forward speed and working pause/cancel checkers (F-speed/F-pause-cancel)."""
+    chapters = [{"videoLearningDtos": [{"videoId": "v1", "videoName": "A", "videoSec": 5}]}]
+    adapter = _make_adapter(chapters, ai_enabled=False)
+
+    adapter.start_course("c-speed", speed=1.75, auto_answer=False)
+    _wait_for_terminal(adapter, "c-speed")
+
+    assert adapter.learning.watch_calls, "watch_video was never called"
+    call = adapter.learning.watch_calls[0]
+    assert call["speed"] == 1.75
+    assert callable(call["is_cancelled"]) and callable(call["is_paused"])
+    # The forwarded checkers must reflect live task state, not be no-ops.
+    assert call["is_cancelled"]() is False
+    assert call["is_paused"]() is False
+
+
+def test_zero_duration_video_not_faked_complete():
+    """A 0/None-duration video must NOT be counted as completed (F-zero-duration).
+
+    Uses the REAL ZhihuishuLearning.watch_video (no watch_video override) to
+    exercise the duration guard; get_video_list is stubbed.
+    """
+    from app.services.course.zhihuishu.learning import ZhihuishuLearning
+
+    chapters = [{"videoLearningDtos": [{"videoId": "v0", "videoName": "NoDur", "videoSec": 0}]}]
+    adapter = ZhihuishuAdapter(ai_config={"enabled": False})
+    real_learning = ZhihuishuLearning(cookies={}, proxies={})
+    real_learning.get_video_list = lambda course_id: chapters
+    adapter.learning = real_learning
+
+    adapter.start_course("c-zero", speed=1.0, auto_answer=False)
+    progress = _wait_for_terminal(adapter, "c-zero")
+
+    # Zero-duration video is surfaced as failed, never as fake-completed 100%.
+    assert progress["completed"] == 0
+    assert progress["failed"] == 1
+    assert progress["percentage"] == 0.0
 
 
 if __name__ == "__main__":

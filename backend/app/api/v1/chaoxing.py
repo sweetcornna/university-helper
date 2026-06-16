@@ -656,10 +656,19 @@ async def chaoxing_task(task_id: str, user_id: str = Depends(get_current_user_id
 
 
 @router.get("/logs/{task_id}")
-async def chaoxing_logs(task_id: str, user_id: str = Depends(get_current_user_id)):
-    logs = await _run_blocking(
-        signin_manager.get_task_logs, user_id=user_id, task_id=task_id
+async def chaoxing_logs(
+    task_id: str,
+    cursor: Optional[int] = None,
+    user_id: str = Depends(get_current_user_id),
+):
+    log_state = await _run_blocking(
+        signin_manager.get_task_logs, user_id=user_id, task_id=task_id, cursor=cursor
     )
-    if logs is None:
+    if log_state is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {"status": True, "message": "ok", "data": logs}
+    return {
+        "status": True,
+        "message": "ok",
+        "data": log_state.get("logs", []),
+        "cursor": log_state.get("cursor", 0),
+    }

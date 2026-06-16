@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round 4 — functional audit, validated against real 学习通/知到 accounts)
+- **Zhihuishu course/video listing was fully broken** — Zhihuishu's `AppInterfaceSignInterceptor` now rejects unsigned requests (`code:400 "aes加密参数异常"`), so `get_course_list`/`get_video_list` returned empty. Requests are now AES-signed via the new `crypto.encrypt_secret_str()` (`secretStr` param + `HOME_KEY`) and read the response under `result` (the server moved it from `rt`). Verified live (request accepted, code 200). *(studyservice/video-list key still needs a real enrolled course to confirm.)*
+- **CORS middleware order** — `CORSMiddleware` is now outermost so `tenant_isolation`'s 401 carries `Access-Control-Allow-Origin`; the SPA's session-expiry redirect fires instead of the app appearing to hang. (Supersedes the round-3 "metrics first-registered" note, which had the nesting backwards; metrics now sits outside tenant_isolation so it still counts those 401s.)
+- **Chaoxing sign-in robustness** — activity-list `"data": null` no longer raises `AttributeError`; `int(None)` on `otherId/status/ifphoto` is coerced; one course's transient activity-list error no longer aborts the whole sign-in batch.
+- **Chaoxing chapter progress** now reaches 100% for courses with pre-finished chapters (the done-callback fires on the already-finished early-return path).
+- **Chaoxing sign-in task logs** use a stateless client-supplied cursor (was a destructive shared server cursor that blanked logs on reopen / overlapping polls).
+- **Zhihuishu video watching** honors the configured speed and reacts to pause/cancel mid-video; a 0/None-duration video is surfaced as failed instead of fake-completed.
+- **Zhihuishu QR refresh** — the QR regenerated after expiry is now delivered through the login-status poll and re-rendered.
+- **Zhihuishu auto-answer** no longer silently discards the computed answer (logs that platform submission is not yet implemented).
+- **Font-map resource path** resolves package-relative (was CWD-relative → wrong directory); a shipped `resource/font_map_table.json` is now found regardless of process CWD.
+- **Answer-title OCR** gate now triggers for any OCR backend (external vision / HTTP endpoint), not only local Paddle OCR.
+- **Rate limiter** DB round-trip on `/auth/login` and `/auth/register` is offloaded via `asyncio.to_thread` so it no longer blocks the async event loop.
+
 ### Added (round 3 — architectural foundations for previously-deferred items)
 - **PWA** via `vite-plugin-pwa` — service worker + precache for hashed static assets, `NetworkOnly` policy for `/api/*` to keep tenant-scoped data uncached; build produces `dist/sw.js` and `dist/workbox-*.js`.
 - **TypeScript foundation** — `frontend/tsconfig.json` with `allowJs: true`, strict mode, path alias `@/*`. New modules can be `.ts`/`.tsx`; existing `.jsx` keeps compiling unchanged. Shared API contract typings live in `frontend/src/types/api.d.ts`.

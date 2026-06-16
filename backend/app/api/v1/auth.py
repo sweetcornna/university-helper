@@ -1,9 +1,11 @@
+import asyncio
+import logging
+
 from fastapi import APIRouter, HTTPException, status, Request, Depends
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse
 from app.services.auth_service import AuthService
 from app.middleware.rate_limiter import rate_limiter
 from app.dependencies import get_current_user
-import logging
 
 router = APIRouter()
 auth_service = AuthService()
@@ -27,7 +29,9 @@ def _mask_email(email: str) -> str:
 # ValueError -> 400 with the (user-facing, non-sensitive) validation message.
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(request: RegisterRequest, req: Request):
-    rate_limiter.check_rate_limit(req)
+    # Offload the rate limiter's blocking psycopg2 round-trip so it does not
+    # stall the single uvicorn event loop; a raised HTTPException propagates back.
+    await asyncio.to_thread(rate_limiter.check_rate_limit, req)
     try:
         result = await auth_service.register_user(
             username=request.username,
@@ -45,7 +49,7 @@ async def register(request: RegisterRequest, req: Request):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(request: LoginRequest, req: Request):
-    rate_limiter.check_rate_limit(req)
+    await asyncio.to_thread(rate_limiter.check_rate_limit, req)
     try:
         result = await auth_service.login_user(
             email=request.email,

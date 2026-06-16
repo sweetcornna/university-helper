@@ -636,6 +636,8 @@ class ChaoxingSigninClient:
 
         tasks: List[Dict[str, Any]] = []
         now_ms = int(time.time() * 1000)
+        attempted = 0
+        failed = 0
 
         for course in courses:
             course_id = str(course.get("courseId", ""))
@@ -645,9 +647,20 @@ class ChaoxingSigninClient:
             if class_filter_set and class_id not in class_filter_set:
                 continue
 
-            payload = self._get_course_activity_list(course_id, class_id)
+            attempted += 1
+            try:
+                payload = self._get_course_activity_list(course_id, class_id)
+            except requests.RequestException as exc:
+                # One bad course must not abort the batch — skip it and keep going.
+                failed += 1
+                logger.warning(
+                    "activelist failed for course=%s class=%s: %s", course_id, class_id, exc
+                )
+                continue
             for activity in payload:
-                if int(activity.get("status", 0)) != 1:
+                # Chaoxing routinely sends keys present-but-null; `int(None)` would
+                # raise TypeError and abort the whole batch, so coerce with `or 0`.
+                if int(activity.get("status") or 0) != 1:
                     continue
                 activity_id = str(activity.get("id") or "")
                 if not activity_id:
@@ -669,6 +682,14 @@ class ChaoxingSigninClient:
 
                 tasks.append(self._activity_to_task(course, activity, sign_type=sign_type))
 
+        # If EVERY course we tried failed to fetch, surface the upstream failure
+        # instead of an empty (== "no active sign-in") result that a caller would
+        # treat as a successful no-op. (Codex P2)
+        if attempted and failed == attempted and not tasks:
+            raise requests.RequestException(
+                f"All {attempted} activity-list request(s) failed; "
+                "cannot determine active sign-in tasks"
+            )
         return tasks
 
     def get_class_subjects(self) -> List[Dict[str, Any]]:
@@ -716,7 +737,15 @@ class ChaoxingSigninClient:
                 continue
             if normalized_raw_course_id and current_course_id != normalized_raw_course_id:
                 continue
-            for activity in self._get_course_activity_list(current_course_id, current_class_id):
+            try:
+                course_activity_list = self._get_course_activity_list(current_course_id, current_class_id)
+            except requests.RequestException as exc:
+                logger.warning(
+                    "activelist failed for course=%s class=%s: %s",
+                    current_course_id, current_class_id, exc,
+                )
+                continue
+            for activity in course_activity_list:
                 detail = {}
                 active_id = str(activity.get("id") or "").strip()
                 if include_details and active_id:
@@ -728,6 +757,12 @@ class ChaoxingSigninClient:
         return activities
 
     def _get_course_activity_list(self, course_id: str, class_id: str) -> List[Dict[str, Any]]:
+        # Raises requests.RequestException on ANY fetch failure — network error,
+        # non-2xx HTTP (e.g. 502), OR a non-JSON body (e.g. an auth-redirect login
+        # page served as 200 HTML) — so callers can tell a transient/upstream
+        # failure apart from a genuinely empty activeList. Returning [] for all of
+        # them would let a failure look like a successful "no active sign-in" no-op.
+        # Callers guard PER COURSE so one bad course still does not abort the batch.
         resp = self.session.get(
             ACTIVE_LIST_URL,
             params={
@@ -738,8 +773,18 @@ class ChaoxingSigninClient:
             },
             timeout=12,
         )
-        data = self._safe_json(resp)
-        active_list = data.get("data", {}).get("activeList", [])
+        resp.raise_for_status()  # requests.HTTPError (a RequestException) on 4xx/5xx
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            # Not JSON → an error/redirect page, NOT an empty activeList.
+            raise requests.RequestException(
+                "activelist returned a non-JSON response"
+            ) from exc
+        # `data.get("data", {})` does NOT guard an explicit ``"data": null`` (common
+        # when a per-course session/cookie is invalid) — `None.get(...)` would raise
+        # AttributeError and crash discovery; use `or {}`.
+        active_list = (data.get("data") or {}).get("activeList", [])
         return active_list if isinstance(active_list, list) else []
 
     def _resolve_sign_type(
@@ -748,7 +793,9 @@ class ChaoxingSigninClient:
         active_id: str,
         info: Optional[Dict[str, Any]] = None,
     ) -> str:
-        other_id = int(activity.get("otherId", 0))
+        # `or 0` (not the 2-arg .get default) so a present-but-null field — which
+        # Chaoxing sends routinely — does not raise TypeError on int(None).
+        other_id = int(activity.get("otherId") or 0)
         if other_id == 3:
             return "gesture"
         if other_id == 5:
@@ -758,10 +805,10 @@ class ChaoxingSigninClient:
         if other_id == 2:
             return "qrcode"
         if other_id == 0:
-            if int(activity.get("ifphoto", 0)) == 1:
+            if int(activity.get("ifphoto") or 0) == 1:
                 return "photo"
             info = info if info is not None else self.get_ppt_active_info(active_id)
-            if int(info.get("ifphoto", 0)) == 1:
+            if int((info or {}).get("ifphoto") or 0) == 1:
                 return "photo"
             return "normal"
         return "normal"
@@ -799,7 +846,7 @@ class ChaoxingSigninClient:
             "className": str(course.get("className") or course.get("clazzName") or course_name).strip(),
             "name": activity.get("nameOne") or activity.get("name") or "",
             "type": sign_type or self._resolve_sign_type(activity, active_id, detail),
-            "otherId": int(activity.get("otherId", 0)),
+            "otherId": int(activity.get("otherId") or 0),
             "status": "active" if status_code == 1 else "ended" if status_code in (2, 3) else "unknown",
             "statusCode": status_code,
             "deadline": deadline_iso,
@@ -1232,7 +1279,14 @@ class ChaoxingSigninManager:
 
     def get_active_tasks(self, user_id: str, sign_type: str = "all") -> List[Dict[str, Any]]:
         client = self._get_client(user_id)
-        live_tasks = client.get_active_tasks(expected_type=sign_type) if client else []
+        live_tasks: List[Dict[str, Any]] = []
+        if client:
+            try:
+                live_tasks = client.get_active_tasks(expected_type=sign_type)
+            except requests.RequestException as exc:
+                # Dashboard feed: a transient upstream failure should fall back to
+                # the persisted background-task feed rather than 500 the poll.
+                logger.warning("live active-task discovery failed: %s", exc)
         if live_tasks:
             return [self._decorate_live_task(task) for task in live_tasks]
         return self._build_background_task_feed(user_id)
@@ -1351,7 +1405,14 @@ class ChaoxingSigninManager:
             return {"status": False, "message": "Login state unavailable"}
 
         filters = [course_id] if course_id else None
-        tasks = client.get_active_tasks(course_filters=filters, expected_type=sign_type)
+        try:
+            tasks = client.get_active_tasks(course_filters=filters, expected_type=sign_type)
+        except requests.RequestException as exc:
+            return {
+                "status": False,
+                "message": f"Failed to query active sign-in tasks: {exc}",
+                "data": [],
+            }
         if not tasks:
             return {"status": False, "message": "No active sign-in task found", "data": []}
 
@@ -1393,12 +1454,19 @@ class ChaoxingSigninManager:
             return {"status": False, "message": "Login state unavailable"}
 
         course_filters = [course_id] if course_id else None
-        tasks = client.get_active_tasks(
-            course_filters=course_filters,
-            class_filters=[normalized_class_id],
-            active_id=active_id,
-            expected_type=sign_type,
-        )
+        try:
+            tasks = client.get_active_tasks(
+                course_filters=course_filters,
+                class_filters=[normalized_class_id],
+                active_id=active_id,
+                expected_type=sign_type,
+            )
+        except requests.RequestException as exc:
+            return {
+                "status": False,
+                "message": f"Failed to query active sign-in tasks: {exc}",
+                "data": [],
+            }
         if not tasks:
             return {"status": False, "message": "No active class sign-in task found", "data": []}
 
@@ -1527,12 +1595,19 @@ class ChaoxingSigninManager:
             return
 
         self._append_task_log(task_id, "Login successful")
-        tasks = client.get_active_tasks(
-            course_filters=course_list,
-            class_filters=class_list if subject_type == "class" else None,
-            active_id=active_id,
-            expected_type=sign_type,
-        )
+        try:
+            tasks = client.get_active_tasks(
+                course_filters=course_list,
+                class_filters=class_list if subject_type == "class" else None,
+                active_id=active_id,
+                expected_type=sign_type,
+            )
+        except requests.RequestException as exc:
+            # Upstream fetch failed for every course — surface as an error so the
+            # task is retried/visible, not silently reported as a completed no-op.
+            self._update_task(task_id, status="error", message=f"Failed to query active sign-in tasks: {exc}")
+            self._append_task_log(task_id, f"Failed to query active sign-in tasks: {exc}", "error")
+            return
         if not tasks:
             self._update_task(task_id, status="completed", message="No active sign-in task")
             self._append_task_log(task_id, "No active sign-in task found")
@@ -1668,26 +1743,38 @@ class ChaoxingSigninManager:
             reverse=True,
         )
 
-    def get_task_logs(self, user_id: str, task_id: str) -> Optional[List[Dict[str, Any]]]:
+    def get_task_logs(
+        self, user_id: str, task_id: str, cursor: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Return logs from ``cursor`` (default 0) WITHOUT mutating server state.
+
+        Stateless, per-request slicing — mirrors learning_manager.get_task_logs.
+        The old version advanced a single shared server-side cursor on every read,
+        so reopening a task or two overlapping polls (3s poll vs manual refresh)
+        raced on it and showed blank/partial logs. The client now tracks its own
+        cursor and passes it back.
+        """
         normalized_user_id = str(user_id or "").strip()
         normalized_task_id = str(task_id or "").strip()
+
+        def _slice(task: Dict[str, Any]) -> Dict[str, Any]:
+            all_logs = task.get("logs", [])
+            start = int(cursor) if cursor is not None else 0
+            if start < 0:
+                start = 0
+            return {"logs": list(all_logs[start:]), "cursor": len(all_logs)}
+
         with self._lock:
             task = self._tasks.get(normalized_task_id)
             if task and task.get("user_id") == normalized_user_id:
-                start = int(task.get("_log_cursor", 0))
-                logs = list(task.get("logs", [])[start:])
-                task["_log_cursor"] = len(task.get("logs", []))
-                return logs
+                return _slice(task)
 
         self._load_task_from_store(normalized_user_id, normalized_task_id)
         with self._lock:
             task = self._tasks.get(normalized_task_id)
             if not task or task.get("user_id") != normalized_user_id:
                 return None
-            start = int(task.get("_log_cursor", 0))
-            logs = list(task.get("logs", [])[start:])
-            task["_log_cursor"] = len(task.get("logs", []))
-            return logs
+            return _slice(task)
 
     @staticmethod
     def _task_public_payload(task: Dict[str, Any]) -> Dict[str, Any]:

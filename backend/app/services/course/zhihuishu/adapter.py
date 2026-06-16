@@ -399,6 +399,18 @@ class ZhihuishuAdapter:
                 index += 1
         return videos
 
+    def _is_task_cancelled(self, task_id: str) -> bool:
+        """Thread-safe check used by watch_video to abort mid-playback."""
+        with self._task_lock:
+            task = self._task_state
+            return bool(task and task.get("task_id") == task_id and task.get("cancelled"))
+
+    def _is_task_paused(self, task_id: str) -> bool:
+        """Thread-safe check used by watch_video to pause mid-playback."""
+        with self._task_lock:
+            task = self._task_state
+            return bool(task and task.get("task_id") == task_id and task.get("paused"))
+
     def _mark_task_error(self, task_id: str, message: str) -> None:
         with self._task_lock:
             task = self._tasks.get(task_id)
@@ -478,6 +490,7 @@ class ZhihuishuAdapter:
                 video_id = current_video.get("id")
                 duration = int(current_video.get("duration") or 0)
                 questions = list(current_video.get("questions") or [])
+                speed = float(task.get("speed") or 1.0)
 
             # --- Phase 2: blocking platform call OUTSIDE the lock ---
             watch_ok = False
@@ -485,7 +498,18 @@ class ZhihuishuAdapter:
             try:
                 if self.learning is None:
                     raise Exception("Not logged in")
-                watch_ok = bool(self.learning.watch_video(course_id, video_id, duration))
+                # Pass speed + pause/cancel checkers so a long video honors the
+                # configured倍速 and reacts to pause/cancel mid-playback.
+                watch_ok = bool(
+                    self.learning.watch_video(
+                        course_id,
+                        video_id,
+                        duration,
+                        speed=speed,
+                        is_cancelled=lambda: self._is_task_cancelled(task_id),
+                        is_paused=lambda: self._is_task_paused(task_id),
+                    )
+                )
             except Exception as exc:  # noqa: BLE001 - surface as failed video, keep going
                 logger.warning(
                     "Zhihuishu watch_video failed: task_id=%s video_id=%s err=%s",
@@ -515,7 +539,18 @@ class ZhihuishuAdapter:
                         if self._task_state.get("cancelled"):
                             break
                     try:
-                        self.answer.answer_question(question)
+                        computed = self.answer.answer_question(question)
+                        # NOTE (audit F-answer): answer_question only COMPUTES an
+                        # answer via AI; submitting it to Zhihuishu's QA/exam save
+                        # endpoint is NOT yet implemented (endpoint + signing must be
+                        # reverse-engineered live). Log the computed result so it is
+                        # not silently discarded and the limitation is observable.
+                        if computed:
+                            logger.info(
+                                "Zhihuishu answer computed but NOT submitted "
+                                "(submission unimplemented): task_id=%s",
+                                task_id,
+                            )
                     except Exception as exc:  # noqa: BLE001 - log, do not abort the course
                         logger.warning(
                             "Zhihuishu answer_question failed: task_id=%s err=%s",

@@ -30,7 +30,14 @@ KX_RADICALS_TAB = str.maketrans(
 
 def resource_path(relative_path: str) -> str:
     """
-    获取资源文件的路径，兼容PyInstaller打包后的环境
+    获取资源文件的路径，兼容PyInstaller打包后的环境。
+
+    解析顺序（返回第一个真实存在的候选，否则回退到稳定的 backend 根目录候选）：
+      1. PyInstaller 临时目录 (sys._MEIPASS)
+      2. backend 根目录（由本文件位置推导，与进程 CWD 无关）—— 生产环境
+         uvicorn 的 CWD 不一定是 backend，旧实现用 os.path.abspath(".")
+         会解析到错误目录导致即便已放置 resource/ 也找不到。(audit F14)
+      3. 进程当前工作目录
 
     Args:
         relative_path: 相对路径
@@ -38,14 +45,22 @@ def resource_path(relative_path: str) -> str:
     Returns:
         资源文件的绝对路径
     """
-    try:
-        # PyInstaller创建临时文件夹，定位路径
-        base_path = sys._MEIPASS
-    except Exception:
-        # 非打包环境，使用当前目录
-        base_path = os.path.abspath(".")
-    
-    return os.path.join(base_path, relative_path)
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, relative_path))
+    # .../backend/app/services/course/chaoxing/cxsecret_font.py -> parents[4] == backend
+    backend_root = Path(__file__).resolve().parents[4]
+    backend_candidate = str(backend_root / relative_path)
+    candidates.append(backend_candidate)
+    candidates.append(os.path.join(os.path.abspath("."), relative_path))
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    # Stable fallback independent of CWD so a shipped file is found even if cwd
+    # differs; if it is genuinely absent the caller degrades gracefully.
+    return backend_candidate
 
 
 class FontHashDAO:
