@@ -3,6 +3,11 @@
 # University Helper
 
 <p align="center">
+  <strong>演示网站：</strong>
+  <a href="https://shuake.cornna.xyz">shuake.cornna.xyz</a>
+</p>
+
+<p align="center">
   <img src="docs/university-helper-promo.gif" alt="University Helper 产品宣传片：你睡觉时，它在超星学习通 / 智慧树替你签到、刷课、答题，天亮前全部完成" width="640" />
   <br />
   <sub><b>「你睡觉，它上课」</b> — 60 秒产品宣传片，使用 Remotion 逐帧渲染</sub>
