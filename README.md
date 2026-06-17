@@ -16,6 +16,11 @@
 </p>
 
 <p align="center">
+  <strong>Demo:</strong>
+  <a href="https://shuake.cornna.xyz">shuake.cornna.xyz</a>
+</p>
+
+<p align="center">
   <img src="docs/university-helper-promo.gif" alt="University Helper — 60-second product film: while you sleep, it signs in, watches lectures and answers quizzes on Chaoxing and Zhihuishu, finishing by dawn" width="640" />
   <br />
   <sub><b>“You sleep, it studies.”</b> — 60-second product film, rendered frame-by-frame with Remotion</sub>
