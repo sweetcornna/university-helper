@@ -45,7 +45,8 @@ class ZhihuishuAdapter:
         return {"success": True, "cookies": cookies}
 
     def _init_services(self, cookies: dict):
-        self.learning = ZhihuishuLearning(cookies, self.proxies)
+        # uuid（从 CASLOGC cookie 解出）是进度上报 ev 的必需字段，透传给 learning。
+        self.learning = ZhihuishuLearning(cookies, self.proxies, uuid=self.auth.uuid)
         self.answer = ZhihuishuAnswer(cookies, self.ai_config, self.proxies)
 
     @staticmethod
@@ -96,6 +97,17 @@ class ZhihuishuAdapter:
                 return course
         raise Exception("Course not found")
 
+    def _resolve_rac_id(self, course_id: str) -> str:
+        """把前端选中的 courseId 映射为视频接口所需的 recruitAndCourseId（= 课程 secret）。
+
+        映射失败（取不到列表/课程不在列表里）时回退用 course_id 本身，保证不致命。
+        """
+        try:
+            course = self.get_course_detail(course_id)
+        except Exception:
+            return str(course_id)
+        return str(course.get("recruitAndCourseId") or course.get("secret") or course_id)
+
     def get_videos(self, course_id: str) -> list[dict]:
         if not self.learning:
             raise Exception("Not logged in")
@@ -104,8 +116,32 @@ class ZhihuishuAdapter:
             if self._task_state and self._task_state.get("course_id") == course_id:
                 return list(self._task_state.get("videos", []))
 
-        chapters = self.learning.get_video_list(course_id)
-        return self._flatten_videos(chapters)
+        rac_id = self._resolve_rac_id(course_id)
+        data = self.learning.get_video_list(rac_id)
+        videos = self._flatten_videos(data, rac_id)
+        self._annotate_watch_state(videos, data)
+        return videos
+
+    def _annotate_watch_state(self, videos: list[dict], data: Any) -> None:
+        """给每个视频补上 study_total_time / watch_state，供 watch_video 续播与跳过已完成。
+
+        失败（接口异常 / mock 无该方法）时静默忽略：watch_video 会按未学（从 0 开始）处理。
+        """
+        if not videos:
+            return
+        recruit_id = data.get("recruitId") if isinstance(data, dict) else None
+        lesson_ids = sorted({v["lesson_id"] for v in videos if v.get("lesson_id")}, key=str)
+        video_ids = sorted({v["small_lesson_id"] for v in videos if v.get("small_lesson_id")}, key=str)
+        try:
+            info = self.learning.query_study_info(lesson_ids, video_ids, recruit_id)
+        except Exception:  # noqa: BLE001 - 状态拉取失败不致命
+            return
+        lv = info.get("lv") or {}
+        lesson = info.get("lesson") or {}
+        for v in videos:
+            state = lv.get(str(v.get("small_lesson_id"))) or lesson.get(str(v.get("lesson_id"))) or {}
+            v["study_total_time"] = state.get("studyTotalTime") or 0
+            v["watch_state"] = state.get("watchState") or 0
 
     def start_course(self, course_id: str, speed: float = 1.0, auto_answer: bool = True) -> dict:
         if not self.learning:
@@ -368,24 +404,67 @@ class ZhihuishuAdapter:
         return []
 
     @staticmethod
-    def _flatten_videos(chapters: list[dict[str, Any]]) -> list[dict]:
+    def _flatten_videos(data: Any, rac_id: str | None = None) -> list[dict]:
+        """把 videolist 的 ``data`` 拍平成任务用的视频列表，并携带上报所需上下文。
+
+        真实结构是 ``videoChapterDtos[].videoLessons[].videoSmallLessons[]``；单视频小节
+        （lesson 自带 ``videoId``、无 ``videoSmallLessons``）按一个 small lesson（id=0）处理。
+        同时兼容旧/测试结构（章节直接挂 ``videoLearningDtos``/``videoDtos``）。
+        """
+        if isinstance(data, dict):
+            chapters = data.get("videoChapterDtos") or []
+            course_id = data.get("courseId")
+            recruit_id = data.get("recruitId")
+        else:
+            chapters = data or []
+            course_id = None
+            recruit_id = None
+
         videos: list[dict[str, Any]] = []
         index = 1
-        for chapter in chapters or []:
-            chapter_videos = chapter.get("videoLearningDtos") or chapter.get("videoDtos") or []
-            for item in chapter_videos:
-                title = item.get("videoName") or item.get("name") or item.get("lessonVideoName") or f"Video {index}"
-                videos.append(
-                    {
-                        "id": str(item.get("videoId") or item.get("id") or index),
-                        "title": title,
-                        "duration": item.get("videoSec") or item.get("duration") or 0,
-                        "status": "pending",
-                        "progress": 0,
-                        "questions": ZhihuishuAdapter._extract_questions(item),
-                    }
-                )
-                index += 1
+        for chapter in chapters:
+            chapter_id = chapter.get("id") or chapter.get("chapterId")
+            lessons = (
+                chapter.get("videoLessons") or chapter.get("videoLearningDtos") or chapter.get("videoDtos") or []
+            )
+            for lesson in lessons:
+                lesson_id = lesson.get("id") or lesson.get("lessonId")
+                smalls = lesson.get("videoSmallLessons") or [lesson]
+                for small in smalls:
+                    is_single = small is lesson
+                    video_id = small.get("videoId") or small.get("id")
+                    title = (
+                        small.get("name")
+                        or small.get("videoName")
+                        or lesson.get("name")
+                        or lesson.get("videoName")
+                        or lesson.get("lessonVideoName")
+                        or f"Video {index}"
+                    )
+                    video_sec = small.get("videoSec") or small.get("duration") or 0
+                    questions = ZhihuishuAdapter._extract_questions(small)
+                    if not questions and not is_single:
+                        questions = ZhihuishuAdapter._extract_questions(lesson)
+                    videos.append(
+                        {
+                            "id": str(video_id or index),
+                            "title": title,
+                            "duration": video_sec,
+                            "status": "pending",
+                            "progress": 0,
+                            "questions": questions,
+                            # --- 进度上报上下文 ---
+                            "recruit_and_course_id": rac_id,
+                            "recruit_id": recruit_id,
+                            "course_id": course_id,
+                            "chapter_id": chapter_id,
+                            "lesson_id": lesson_id,
+                            "small_lesson_id": 0 if is_single else small.get("id"),
+                            "video_id": video_id,
+                            "video_sec": video_sec,
+                        }
+                    )
+                    index += 1
         return videos
 
     def _is_task_cancelled(self, task_id: str) -> bool:
@@ -474,10 +553,8 @@ class ZhihuishuAdapter:
                 task["current_video"] = current_video.get("title")
                 task["status"] = "running"
                 task["message"] = "Task is running"
-                course_id = task.get("course_id")
                 auto_answer = bool(task.get("auto_answer", True))
                 video_id = current_video.get("id")
-                duration = int(current_video.get("duration") or 0)
                 questions = list(current_video.get("questions") or [])
                 speed = float(task.get("speed") or 1.0)
 
@@ -487,13 +564,12 @@ class ZhihuishuAdapter:
             try:
                 if self.learning is None:
                     raise Exception("Not logged in")
-                # Pass speed + pause/cancel checkers so a long video honors the
-                # configured倍速 and reacts to pause/cancel mid-playback.
+                # Pass the full video context dict (recruit/chapter/lesson/video ids +
+                # videoSec) so watch_video can sign the real saveDatabaseIntervalTimeV2
+                # report, plus speed + pause/cancel checkers for倍速 and mid-playback control.
                 watch_ok = bool(
                     self.learning.watch_video(
-                        course_id,
-                        video_id,
-                        duration,
+                        current_video,
                         speed=speed,
                         is_cancelled=lambda: self._is_task_cancelled(task_id),
                         is_paused=lambda: self._is_task_paused(task_id),
