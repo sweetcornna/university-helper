@@ -1,5 +1,6 @@
 """智慧树加密工具模块"""
 
+import datetime as _datetime
 import json as _json
 import time as _time
 from base64 import b64decode, b64encode
@@ -30,6 +31,39 @@ def encrypt_secret_str(payload=None, key: bytes = HOME_KEY, iv: bytes = IV) -> s
         payload = {"dateFormate": int(_time.time() * 1000)}
     text = payload if isinstance(payload, str) else _json.dumps(payload, ensure_ascii=False)
     return Cipher(key, iv).encrypt(text)
+
+
+def get_ev(data: list, key: str = "zzpttjd") -> str:
+    """Build the ``ev`` / ``sdsew`` obfuscation param used by Zhihuishu's video
+    progress-report endpoints (saveDatabaseIntervalTime / ...V2).
+
+    The fields in ``data`` are ``';'``-joined, then each character is XOR-ed
+    against a cyclically-repeating ``key`` and emitted as 2-hex-digit pairs.
+    ``saveDatabaseIntervalTime`` uses the default key ``zzpttjd`` (the meet-course
+    endpoint uses ``zhihuishu``). Ported verbatim from the upstream reference so
+    the produced ``ev`` is byte-compatible with the live API.
+    """
+
+    def _key_stream():
+        while True:
+            for ch in key:
+                yield ord(ch)
+
+    stream = _key_stream()
+    joined = ";".join(map(str, data))
+    ev = ""
+    for ch in joined:
+        tmp = hex(ord(ch) ^ next(stream)).replace("0x", "")
+        if len(tmp) < 2:
+            tmp = "0" + tmp
+        # upstream slices [-4:]; for a single byte this equals the 2-hex pair.
+        ev += tmp[-4:]
+    return ev
+
+
+def hms(seconds: int) -> str:
+    """Format a second count as ``H:MM:SS`` for the ``ev`` time field."""
+    return str(_datetime.timedelta(seconds=int(seconds)))
 
 
 class Cipher:

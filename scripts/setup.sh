@@ -4,7 +4,7 @@ set -euo pipefail
 
 # Release this one-click installer targets. Bump alongside backend/app/main.py
 # and frontend/package.json when cutting a new version.
-APP_VERSION="1.2.1"
+APP_VERSION="1.2.2"
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
