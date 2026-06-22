@@ -424,9 +424,7 @@ class ZhihuishuAdapter:
         index = 1
         for chapter in chapters:
             chapter_id = chapter.get("id") or chapter.get("chapterId")
-            lessons = (
-                chapter.get("videoLessons") or chapter.get("videoLearningDtos") or chapter.get("videoDtos") or []
-            )
+            lessons = chapter.get("videoLessons") or chapter.get("videoLearningDtos") or chapter.get("videoDtos") or []
             for lesson in lessons:
                 lesson_id = lesson.get("id") or lesson.get("lessonId")
                 smalls = lesson.get("videoSmallLessons") or [lesson]
