@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from loguru import logger
 
-from .answer import AI, Tiku
+from .answer import Tiku
 from .answer_check import cut
 from .decode import decode_questions_info
 from .exceptions import MaxRetryExceeded
@@ -324,8 +324,8 @@ class ChaoxingWorkLegacyService:
         total_questions = len(questions["questions"])
         found_answers = 0
 
-        # 若使用 AI 题库，则在同一张卷内并发搜题
-        if isinstance(self.tiku, AI):
+        # 若题库含 AI（含 AI 回退链），则在同一张卷内并发搜题
+        if self.tiku.wants_concurrent_query:
             lock = threading.Lock()
 
             def inc_found_concurrent():

@@ -238,24 +238,54 @@ class Tiku:
             self.DISABLE = True
             logger.info("未找到题库配置, 已忽略题库功能")
             return self
-        # FIXME: Implement using StrEnum instead. This is not only buggy but also not safe
         # Import providers at runtime to build the lookup (avoids circular imports)
-        from .answer_providers import AI, SiliconFlow, TikuAdapter, TikuLike, TikuYanxi
+        from .answer_providers import (
+            AI,
+            SiliconFlow,
+            TikuAdapter,
+            TikuGo,
+            TikuLike,
+            TikuLocalCache,
+            TikuYanxi,
+        )
 
         _provider_map = {
             "TikuYanxi": TikuYanxi,
+            "TikuGo": TikuGo,
             "TikuLike": TikuLike,
             "TikuAdapter": TikuAdapter,
+            "LocalCache": TikuLocalCache,
             "AI": AI,
             "SiliconFlow": SiliconFlow,
         }
-        if cls_name not in _provider_map:
+
+        # provider 支持逗号分隔的多题库回退链：单个 → 直接返回该题库；
+        # 多个 → 构造 TikuFallback，按配置顺序逐个兜底。
+        names = [name.strip() for name in str(cls_name).split(",") if name.strip()]
+        if not names:
             self.DISABLE = True
-            logger.error(f"未知的题库 provider: {cls_name}")
+            logger.error("题库 provider 配置为空, 已忽略题库功能")
             return self
-        new_cls = _provider_map[cls_name]()
-        new_cls.config_set(self._conf)
-        return new_cls
+
+        unknown = [name for name in names if name not in _provider_map]
+        if unknown:
+            self.DISABLE = True
+            logger.error(f"未知的题库 provider: {', '.join(unknown)}")
+            return self
+
+        if len(names) == 1:
+            new_cls = _provider_map[names[0]]()
+            new_cls.config_set(self._conf)
+            return new_cls
+
+        chain = []
+        for name in names:
+            provider = _provider_map[name]()
+            provider.config_set(self._conf)
+            chain.append(provider)
+        fallback = TikuFallback(chain)
+        fallback.config_set(self._conf)
+        return fallback
 
     def judgement_select(self, answer: str) -> bool:
         """
@@ -284,3 +314,128 @@ class Tiku:
         if self.SUBMIT:
             return ""
         return "1"
+
+    @property
+    def wants_concurrent_query(self) -> bool:
+        """Whether a card's questions should be answered concurrently.
+
+        Only the AI provider opts in — it is built for it (each request is bounded
+        by its own semaphore). Other providers (incl. SiliconFlow) stay sequential,
+        preserving existing behaviour. TikuFallback overrides this to opt in when
+        any link in the chain is an AI provider.
+        """
+        from .answer_providers import AI
+
+        return isinstance(self, AI)
+
+
+class TikuFallback(Tiku):
+    """多题库回退：按配置顺序依次查询，命中即返回，未命中/类型不符则回退到下一个。
+
+    The fallback wraps an ordered list of already-configured Tiku providers.
+    `judgement_select()`/`get_submit_params()`/`COVER_RATE`/`DISABLE` are served by
+    the base class from this fallback's own config, so the consumers in
+    quiz_service / work_legacy_service treat it like any other Tiku. `query()` is
+    overridden (see below) because the per-provider validation already happens
+    inside `_query`, so the base class must NOT re-validate the chosen answer.
+    """
+
+    def __init__(self, providers=None) -> None:
+        super().__init__()
+        self.name = "多题库回退"
+        self.providers = list(providers or [])
+
+    def query(self, q_info: dict) -> str | None:
+        """Cache → chain, with the chain result taken as authoritative.
+
+        `_query` already validates each provider's answer (lenient acceptance for
+        AI/SiliconFlow links, `check_answer` for the rest). The base `Tiku.query()`
+        would re-run the strict `check_answer` here — and because ``self`` is the
+        fallback, not an AI instance, it would discard valid multi-token LLM
+        answers that a direct AI selection keeps. Overriding query() makes an
+        AI-bearing chain behave exactly like selecting that AI directly.
+        """
+        if self.DISABLE:
+            return None
+        _apply_ocr_to_title_if_needed(q_info)
+        q_info["title"] = sub(r"^\d+", "", q_info["title"])
+        q_info["title"] = sub(r"（\d+\.\d+分）$", "", q_info["title"])
+
+        cache_dao = CacheDAO()
+        cached = cache_dao.get_cache(q_info["title"])
+        if cached:
+            logger.info(f"从缓存中获取答案：{q_info['title']} -> {cached}")
+            return cached.strip()
+
+        answer = self._query(q_info)
+        if answer:
+            answer = answer.strip()
+            logger.info(f"从{self.name}获取答案：{q_info['title']} -> {answer}")
+            cache_dao.add_cache(q_info["title"], answer)
+            return answer
+        logger.error(f"从{self.name}获取答案失败：{q_info['title']}")
+        return None
+
+    @property
+    def wants_concurrent_query(self) -> bool:
+        from .answer_providers import AI
+
+        return any(isinstance(p, AI) for p in self.providers)
+
+    def _init_tiku(self):
+        # Initialize each child; silently drop any that disable themselves or
+        # fail to initialize (e.g. token-required provider with no token, or AI
+        # without endpoint/key). A mixed chain stays usable as long as one works.
+        active = []
+        for provider in self.providers:
+            try:
+                if provider._conf is None:
+                    provider.config_set(self._conf)
+                provider.init_tiku()
+                if provider.DISABLE:
+                    logger.info(f"题库 {provider.name} 不可用，已从回退链移除")
+                    continue
+                active.append(provider)
+            except Exception as e:
+                logger.error(f"初始化题库 {provider.name} 失败，已从回退链移除: {e}")
+        self.providers = active
+        if not self.providers:
+            logger.error("多题库回退初始化失败: 没有可用题库")
+            self.DISABLE = True
+        else:
+            logger.info("多题库回退已启用，查询顺序: " + " → ".join(p.name for p in self.providers))
+
+    def _query(self, q_info: dict) -> str | None:
+        # Import here to avoid a circular import with answer_providers.
+        from .answer_providers import AI, SiliconFlow
+
+        q_type = q_info.get("type")
+        for provider in self.providers:
+            try:
+                answer = provider._query(q_info)
+            except Exception as e:
+                logger.exception(f"{self.name} 查询时 {provider.name} 异常: {e}")
+                continue
+            if not answer:
+                logger.info(f"{provider.name} 未命中，回退到下一个题库")
+                continue
+            answer = answer.strip()
+
+            # Mirror Tiku.query()'s AI/SiliconFlow special-casing so a chain that
+            # ends in an LLM behaves exactly like selecting that LLM directly.
+            if isinstance(provider, (AI, SiliconFlow)):
+                if q_type == "judgement":
+                    normalized = provider._normalize_judgement_answer(answer)
+                    if normalized is None:
+                        logger.info(f"{provider.name} 判断题答案无法归一化，回退到下一个题库")
+                        continue
+                    logger.info(f"{provider.name} 命中答案")
+                    return normalized
+                logger.info(f"{provider.name} 命中答案")
+                return answer
+
+            if check_answer(answer, q_type, provider):
+                logger.info(f"{provider.name} 命中答案")
+                return answer
+            logger.info(f"{provider.name} 返回答案类型与题目类型不符，回退到下一个题库")
+        return None

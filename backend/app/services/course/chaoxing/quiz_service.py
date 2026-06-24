@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from loguru import logger
 
-from .answer import AI
 from .answer_check import cut
 from .decode import decode_questions_info
 from .exceptions import MaxRetryExceeded
@@ -229,7 +228,7 @@ class QuizAnswerProcessor:
         total_questions = len(questions["questions"])
         found_answers = 0
 
-        if isinstance(self.tiku, AI):
+        if self.tiku.wants_concurrent_query:
             lock = threading.Lock()
 
             def inc_found_concurrent():

@@ -13,7 +13,12 @@ export default function useTaskConfig() {
   const [unopenedStrategy, setUnopenedStrategy] = useState('retry')
 
 
-  const [tikuProvider, setTikuProvider] = useState('TikuYanxi')
+  // Ordered list of answer-bank providers; sent to the backend as a
+  // comma-separated `provider` (单个=单题库，多个=按顺序回退). Default chain:
+  // 言溪 first (best, if a token is set), then the free GO题库 — so 答题 still
+  // works without a Token. (The shared answer cache is always consulted first,
+  // so adding 本地缓存 as an extra link would be redundant.)
+  const [tikuProvider, setTikuProvider] = useState(['TikuYanxi', 'TikuGo'])
 
 
   const [tikuToken, setTikuToken] = useState('')

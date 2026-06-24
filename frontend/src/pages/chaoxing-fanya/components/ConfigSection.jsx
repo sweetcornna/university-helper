@@ -15,8 +15,9 @@ const SUBMIT_MODES = [
 // is kept as a sub-label so it stays unambiguous, but the cryptic identifiers
 // no longer face the student directly.
 const TIKU_PROVIDERS = [
-  { value: 'TikuYanxi', label: '言溪题库', hint: '通用题库', recommended: true },
-  { value: 'TikuLike', label: 'Like 题库', hint: '备用题库' },
+  { value: 'TikuYanxi', label: '言溪题库', hint: '通用题库（需 Token）', recommended: true },
+  { value: 'TikuGo', label: 'GO 题库', hint: '免费搜题源' },
+  { value: 'TikuLike', label: 'Like 题库', hint: '备用题库（需 Token）' },
   { value: 'TikuAdapter', label: '题库适配器', hint: '自定义适配' },
   { value: 'AI', label: 'AI 智能答题', hint: '无匹配时由 AI 作答' },
   { value: 'SiliconFlow', label: '硅基流动', hint: 'AI 服务（需 Token）' },
@@ -63,6 +64,65 @@ function PillGroup({ label, options, value, onChange }) {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// Ordered multi-select pill group. `value` is an array of selected option
+// values in fallback order; clicking toggles membership (append on select,
+// remove on deselect). Selected pills show their ①②③ position so the user can
+// see the 多题库回退 order at a glance.
+function MultiPillGroup({ label, options, value, onChange, hint }) {
+  const toggle = (optValue) => {
+    if (value.includes(optValue)) {
+      onChange(value.filter((item) => item !== optValue))
+    } else {
+      onChange([...value, optValue])
+    }
+  }
+  const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨']
+  return (
+    <div role="group" aria-label={label}>
+      <span className="mb-2 block text-sm font-medium text-text/80">{label}</span>
+      <div className="flex flex-wrap gap-2">
+        {options.map((opt) => {
+          const order = value.indexOf(opt.value)
+          const active = order >= 0
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              aria-pressed={active}
+              onClick={() => toggle(opt.value)}
+              className={`flex flex-col items-start rounded-xl border px-4 py-2 text-sm font-medium transition-all duration-200 cursor-pointer ${
+                active
+                  ? 'border-transparent bg-primary text-white shadow-md'
+                  : 'border-border bg-surface text-text/70 hover:border-border hover:bg-surface-hover'
+              }`}
+            >
+              <span className="flex items-center gap-1.5">
+                {active && <span className="text-xs">{CIRCLED[order] || `(${order + 1})`}</span>}
+                {opt.label}
+                {opt.recommended && (
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                      active ? 'bg-surface/20 text-white' : 'bg-success-surface text-success'
+                    }`}
+                  >
+                    推荐
+                  </span>
+                )}
+              </span>
+              {opt.hint && (
+                <span className={`text-[11px] ${active ? 'text-white/70' : 'text-text-muted'}`}>
+                  {opt.hint}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+      {hint && <p className="mt-2 text-xs text-text-muted">{hint}</p>}
     </div>
   )
 }
@@ -150,11 +210,12 @@ export default function ConfigSection({
         </summary>
 
         <div className="mt-4 space-y-4">
-          <PillGroup
-            label="题库来源"
+          <MultiPillGroup
+            label="题库来源（可多选，按点击顺序回退）"
             options={TIKU_PROVIDERS}
             value={tikuProvider}
             onChange={setTikuProvider}
+            hint="可选多个题库：前一个未命中时自动回退到下一个。例如「言溪 → GO 题库」。"
           />
 
           <div>
