@@ -1,0 +1,140 @@
+# Released stack — pull prebuilt images and run, no local build required.
+#
+#   UH_TAG=v1.3.0 docker compose -f docker-compose.release.yml -p university-helper up -d
+#
+# The `app` and `web` images are published to GHCR by .github/workflows/release.yml
+# on every `v*` tag. `scripts/deploy_server.sh` wraps this file (generates .env,
+# pulls, waits for health). Use docker-compose.server.yml instead when you want
+# to build from source. The web service is the only one published on a public
+# interface; app/postgres stay internal.
+services:
+  app:
+    image: ghcr.io/sweetcornna/university-helper-app:${UH_TAG:-latest}
+    container_name: shuake-easy-learning-app
+    restart: on-failure:5
+    # Local-only publish for health checks / debugging; external traffic goes
+    # through the web container. Override APP_PORT in .env if 8000 is taken.
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    environment:
+      MAIN_DB_HOST: postgres
+      MAIN_DB_NAME: main_db
+      MAIN_DB_USER: easylearning
+      MAIN_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      MAIN_DB_PORT: 5432
+      SECRET_KEY: ${SECRET_KEY}
+      SHUAKE_COMPAT_SECRET: ${SHUAKE_COMPAT_SECRET:-}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      # nginx (web container / host) terminates TLS; the app must not redirect
+      # http->https itself or it would loop / break plain-IP access.
+      ENFORCE_HTTPS: "false"
+      ENV: ${ENV:-production}
+      REDIS_URL: ${REDIS_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:8000/health', timeout=3); sys.exit(0)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    stop_grace_period: 30s
+    networks:
+      - shuake-net
+
+  web:
+    image: ghcr.io/sweetcornna/university-helper-web:${UH_TAG:-latest}
+    container_name: shuake-easy-learning-web
+    restart: on-failure:5
+    depends_on:
+      app:
+        condition: service_healthy
+    # Public entrypoint. Reachable at http://<host>:${HTTP_PORT}. Put a
+    # TLS-terminating reverse proxy in front for production (deploy_server.sh
+    # --domain can scaffold host nginx + certbot).
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    networks:
+      - shuake-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: shuake-easy-learning-db
+    restart: on-failure:5
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=300"
+      - "-c"
+      - "shared_buffers=128MB"
+      - "-c"
+      - "effective_cache_size=384MB"
+      - "-c"
+      - "work_mem=8MB"
+      - "-c"
+      - "maintenance_work_mem=64MB"
+      - "-c"
+      - "wal_compression=on"
+      - "-c"
+      - "log_min_duration_statement=500ms"
+    environment:
+      POSTGRES_USER: easylearning
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: main_db
+    volumes:
+      - shuake-postgres-data:/var/lib/postgresql/data
+      - ./database:/docker-entrypoint-initdb.d:ro
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-easylearning} -d $${POSTGRES_DB:-main_db}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: '0.75'
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - shuake-net
+
+networks:
+  shuake-net:
+    driver: bridge
+
+volumes:
+  shuake-postgres-data:

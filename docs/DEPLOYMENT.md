@@ -8,6 +8,30 @@ This document is the **single source of truth** for deploying University Helper.
 
 ---
 
+## Quick start: a fresh server (one command)
+
+To stand up University Helper on a **new** Docker host, use the guided installer
+rather than the hotfix flow below (which targets the already-provisioned box). It
+generates a hardened `.env` with random secrets, pulls the prebuilt multi-arch
+images from GHCR (`ghcr.io/sweetcornna/university-helper-{app,web}`), starts the
+stack, waits for health, and scaffolds a host-nginx + Let's Encrypt vhost.
+
+```bash
+git clone https://github.com/sweetcornna/university-helper.git
+cd university-helper
+bash scripts/deploy_server.sh --domain <your-domain>     # production with TLS
+# or:  bash scripts/deploy_server.sh --host <server-ip>  # plain-http on an IP
+# or:  bash scripts/deploy_server.sh --build             # build from source instead of pulling
+```
+
+This wraps [`docker-compose.release.yml`](../docker-compose.release.yml). The
+prebuilt images are published by [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+on every `v*` tag. Windows hosts can use `scripts/deploy_server.ps1`. The
+sections below document the **existing** `shuake.cornna.xyz` production box,
+where ongoing changes ship via `scripts/hotfix_publish.sh`.
+
+---
+
 ## Production Topology (authoritative)
 
 | Concern | Value |

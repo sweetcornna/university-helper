@@ -1,0 +1,44 @@
+# Build context for Dockerfile.web. BuildKit uses this file in place of the root
+# .dockerignore for `-f Dockerfile.web` builds. The root .dockerignore excludes
+# frontend/ and nginx/ (the backend image doesn't need them) — but this image is
+# exactly the SPA + nginx config, so they must stay in. We only need frontend/
+# and nginx/; everything else is excluded to keep the context small.
+.git
+.gitignore
+.gitattributes
+.github/
+
+# Backend / data / docs are irrelevant to the web image.
+backend/
+database/
+docs/
+*.md
+LICENSE
+
+# Node build artifacts — the image runs `npm ci && npm run build` itself.
+**/node_modules
+**/dist
+**/.cache
+**/coverage
+**/tests/
+
+# Env / secrets — never bake into the image.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Editor / OS junk
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+**/._*
+**/.DS_Store
+
+# Legacy / local scripts and dumps
+scripts/_legacy/
+*.sql.gz
+*.backup

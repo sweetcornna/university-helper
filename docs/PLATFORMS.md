@@ -8,7 +8,7 @@ University Helper is a web application: a FastAPI backend, a React/Vite frontend
 |---|---|---|---|
 | Linux | Local development, production deployment, operations | Docker Engine + Compose, Python 3.11, Node 20, Bash | Fully supported target for servers. |
 | macOS | Local development and deployment client | Docker Desktop or Colima, Python 3.11, Node 20, Bash | Use the same `scripts/setup.sh` flow as Linux. |
-| Windows | Local development and deployment client | WSL2 Ubuntu + Docker Desktop WSL integration | Native PowerShell deployment is not the primary supported path. Run Bash scripts inside WSL2. |
+| Windows | Server (Docker Desktop) and deployment client | `scripts/deploy_server.ps1` (PowerShell), or WSL2 Ubuntu + Docker Desktop WSL integration | PowerShell deploys the pull/up/health flow; TLS/host-nginx setup is left to a Linux box or your own reverse proxy. |
 | Android | End-user app access | Install/open the PWA from Chrome/Edge at `https://shuake.cornna.xyz` | No native APK is shipped. Browser/PWA behavior depends on Android/browser version. |
 
 ## Linux quick start
@@ -52,10 +52,22 @@ University Helper does not currently include a native Android project, APK build
 
 ## Server deployment
 
-Server deployment targets Linux. For first-time setup use:
+The guided installer only needs Docker. It generates a hardened `.env`, pulls the
+prebuilt multi-arch images (`ghcr.io/sweetcornna/university-helper-{app,web}`),
+starts the stack, waits for health, and — with `--domain` — scaffolds a
+host-nginx + Let's Encrypt vhost.
 
 ```bash
-bash scripts/deploy_server.sh --host <server-ip> --domain <domain>
+# Linux / macOS / WSL2 — first-time deploy
+bash scripts/deploy_server.sh --domain <domain>     # production with TLS
+bash scripts/deploy_server.sh --host <server-ip>    # plain-http on an IP
+bash scripts/deploy_server.sh --build               # build from source instead of pulling
+```
+
+On native Windows (Docker Desktop), use the PowerShell equivalent:
+
+```powershell
+pwsh scripts/deploy_server.ps1 -Port 8080
 ```
 
 For incremental updates to an already-provisioned production box, use:

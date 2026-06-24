@@ -22,8 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disabled answering). It now works as a real token-free, cache-only source.
 - Fanya **题库来源** picker is now multi-select with explicit ①②③ fallback order;
   the default chain `言溪 → GO题库` answers even without a Token.
-- Guided first-time server deployment script: `scripts/deploy_server.sh`.
-- Cross-platform run guidance for Linux, macOS, Windows via WSL2, and Android PWA.
+- **One-command deploy + prebuilt release images.**
+  - `scripts/deploy_server.sh` — guided first-time deploy (Linux/macOS/WSL): detects
+    Docker, generates a hardened `.env` with random secrets (`SECRET_KEY`,
+    `POSTGRES_PASSWORD`, Fernet `CREDENTIAL_ENCRYPTION_KEY`), pulls images (or
+    `--build` from source), starts the stack, waits for health, and scaffolds a
+    host-nginx + Let's Encrypt vhost under `deploy/nginx/<domain>.conf` when a
+    `--domain` is given.
+  - `scripts/deploy_server.ps1` — native Windows (PowerShell + Docker Desktop)
+    equivalent of the pull/up/health flow.
+  - `Dockerfile.web` — bakes the built SPA into nginx, so the released stack needs
+    no host-side `frontend/dist` or `npm` build.
+  - `docker-compose.release.yml` — pull-and-run stack (app + web + postgres)
+    referencing the GHCR images, no local build.
+  - `.github/workflows/release.yml` — on a `v*` tag, builds and pushes multi-arch
+    (linux/amd64 + linux/arm64) images to
+    `ghcr.io/sweetcornna/university-helper-{app,web}` and cuts a GitHub Release.
+- Cross-platform run guidance for Linux, macOS, Windows (PowerShell or WSL2), and Android PWA.
 
 ### Changed
 - README (EN + zh-CN) gains an **Answer banks (题库)** section documenting every

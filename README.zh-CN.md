@@ -49,8 +49,11 @@ University Helper 是 Web 应用。Linux 是生产服务器目标；macOS、Linu
 |---|---|---|
 | Linux | 本地开发 + 生产部署 | Docker Engine + Compose、Python 3.11、Node 20 |
 | macOS | 本地开发 + 部署客户端 | Docker Desktop 或 Colima、Python 3.11、Node 20 |
-| Windows | 本地开发 + 部署客户端 | WSL2 Ubuntu + Docker Desktop WSL 集成 |
+| Windows | 服务端（Docker Desktop）+ 部署客户端 | `scripts/deploy_server.ps1`（PowerShell）或 WSL2 + `deploy_server.sh` |
 | Android | 终端用户访问 | 在 Chrome/Edge 中安装 PWA；当前不提供原生 APK |
+
+「可在 Windows/macOS/Linux 运行」指的是**服务端**可在任何装有 Docker 的机器上一条命令跑起来
+（下方有多架构预构建镜像）；任意设备（含安卓）通过浏览器或已安装的 PWA 访问即可。
 
 详细说明见 [平台支持](./docs/PLATFORMS.md)。
 
@@ -127,22 +130,43 @@ npm run dev                  # http://localhost:3000，/api 代理到 :8000
 
 ## 推荐部署方式
 
-> **唯一权威文档：[`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)。生产部署只使用 `scripts/hotfix_publish.sh`。**
+> **唯一权威文档：[`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)。**
 
-服务端部署建议使用：
+### 一键部署（推荐）
 
-- [`docker-compose.server.yml`](./docker-compose.server.yml)
-- [`Dockerfile.server`](./Dockerfile.server)
-- [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)
+引导式安装脚本只依赖 Docker：自动生成带随机密钥的 `.env`
+（`SECRET_KEY` / `POSTGRES_PASSWORD` / Fernet `CREDENTIAL_ENCRYPTION_KEY`）、
+拉取预构建镜像、启动整套服务、等待健康检查，并在传入 `--domain` 时为宿主机
+nginx + Let's Encrypt 生成可启用的反代模板。
 
-快速启动：
+```bash
+git clone https://github.com/sweetcornna/university-helper.git
+cd university-helper
+
+# Linux / macOS / WSL2
+bash scripts/deploy_server.sh --domain your.domain          # 带 TLS 的生产部署
+bash scripts/deploy_server.sh --host 203.0.113.10           # 仅用 IP 的 http 部署
+bash scripts/deploy_server.sh                               # 本机：http://localhost:8080
+
+# Windows（PowerShell + Docker Desktop）
+pwsh scripts/deploy_server.ps1 -Port 8080
+```
+
+每次发版都会向 GHCR 推送 **多架构（amd64 + arm64）** 镜像，无需本地编译：
+
+- `ghcr.io/sweetcornna/university-helper-app` —— FastAPI 后端
+- `ghcr.io/sweetcornna/university-helper-web` —— nginx + 已构建的前端
+
+加 `--build`（Windows 为 `-Build`）则改为从源码本地构建。
+
+### 手动部署（从源码构建）
 
 ```bash
 cp .env.example .env
 docker compose -f docker-compose.server.yml up -d --build
 ```
 
-仓库根目录下的 `.env.example` 已按 `docker-compose.server.yml` 准备好。原根目录下的 `deploy.*` 脚本已经移动到 [`scripts/_legacy/`](./scripts/_legacy/)，禁止运行。
+仓库根目录下的 `.env.example` 已按 `docker-compose.server.yml` 准备好。原根目录下的 `deploy.*` 脚本已经移动到 [`scripts/_legacy/`](./scripts/_legacy/)，禁止运行。增量更新生产环境请用 `scripts/hotfix_publish.sh`。
 
 ## 测试
 

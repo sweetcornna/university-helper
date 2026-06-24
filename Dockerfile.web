@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1.7
+#
+# Frontend + edge-proxy image: builds the React/Vite SPA and bakes it into an
+# nginx image together with the project's hardened nginx config. Unlike the
+# bind-mount `web` service in docker-compose.newhost.yml, this image is fully
+# self-contained, so the released docker-compose.release.yml can `pull && up`
+# with no host-side `frontend/dist` or `npm` build step.
+#
+# Build from the repo root:
+#   docker build -f Dockerfile.web -t university-helper-web:latest .
+# Optional China mirror for faster installs:
+#   docker build -f Dockerfile.web --build-arg NPM_REGISTRY=https://registry.npmmirror.com -t university-helper-web .
+
+# ---------- builder ----------
+FROM node:20-alpine AS builder
+
+# Empty default → npm's public registry (best for CI on GitHub-hosted runners).
+# Override with a mirror (e.g. https://registry.npmmirror.com) for builds in CN.
+ARG NPM_REGISTRY=
+
+WORKDIR /app
+
+# Install deps against the lockfile first so this layer caches across source edits.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+    && npm ci
+
+COPY frontend/ ./
+# SPA calls the API via the relative base "/api/v1" (see src/utils/api.js), so the
+# bundle is host-agnostic — no build-time API URL needs to be injected.
+RUN npm run build
+
+# ---------- runtime ----------
+FROM nginx:1.27-alpine AS runtime
+
+# Reuse the project's hardened nginx config (rate-limit zones, CSP/HSTS headers,
+# SPA history fallback, no-cache on the service-worker control files). Its
+# `upstream backend { server app:8000; }` resolves to the `app` compose service.
+COPY nginx/nginx.conf /etc/nginx/nginx.conf
+COPY nginx/proxy_params.conf /etc/nginx/proxy_params.conf
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+# Lightweight liveness probe: busybox wget ships in the alpine base. Hitting "/"
+# exercises the SPA fallback without depending on the app/db being up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://localhost/ || exit 1
+
+# nginx:alpine's default CMD already runs `nginx -g 'daemon off;'`.

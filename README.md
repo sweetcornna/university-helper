@@ -9,6 +9,7 @@
 <p align="center">
   <a href="../../actions/workflows/test.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/sweetcornna/university-helper/test.yml?branch=main&label=ci&style=flat-square" /></a>
   <a href="../../actions/workflows/codeql.yml"><img alt="CodeQL" src="https://img.shields.io/github/actions/workflow/status/sweetcornna/university-helper/codeql.yml?branch=main&label=codeql&style=flat-square" /></a>
+  <a href="../../releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/sweetcornna/university-helper?style=flat-square&label=release" /></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/sweetcornna/university-helper?style=flat-square" /></a>
   <img alt="python" src="https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white&style=flat-square" />
   <img alt="react" src="https://img.shields.io/badge/react-18-61DAFB?logo=react&logoColor=black&style=flat-square" />
@@ -70,8 +71,12 @@ supported as a PWA client.
 |---|---|---|
 | Linux | Full local dev + production deployment | Docker Engine + Compose, Python 3.11, Node 20 |
 | macOS | Local dev + deploy client | Docker Desktop or Colima, Python 3.11, Node 20 |
-| Windows | Local dev + deploy client | WSL2 Ubuntu + Docker Desktop WSL integration |
+| Windows | Server (Docker Desktop) + deploy client | `scripts/deploy_server.ps1` (PowerShell) or WSL2 + `deploy_server.sh` |
 | Android | End-user client | Install the PWA from Chrome/Edge; no native APK is shipped |
+
+"Runs on Windows/macOS/Linux" means the **server** runs anywhere Docker runs —
+one command via the prebuilt multi-arch images below — and any device (Android
+included) reaches it through the browser or installed PWA.
 
 See [Platform Support](./docs/PLATFORMS.md) for platform-specific steps.
 
@@ -159,7 +164,36 @@ automatically, so a mixed chain stays usable as long as one link works.
 ## Deployment
 
 > **Single source of truth: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).**
-> Production uses `docker-compose.server.yml` + `Dockerfile.server` + host nginx.
+
+### One-command deploy (recommended)
+
+The guided installer needs only Docker. It generates a hardened `.env` (random
+`SECRET_KEY` / `POSTGRES_PASSWORD` / Fernet `CREDENTIAL_ENCRYPTION_KEY`), pulls
+the prebuilt images, starts the stack, waits for health, and (with `--domain`)
+scaffolds a host-nginx + Let's Encrypt vhost.
+
+```bash
+git clone https://github.com/sweetcornna/university-helper.git
+cd university-helper
+
+# Linux / macOS / WSL2
+bash scripts/deploy_server.sh --domain your.domain          # production w/ TLS
+bash scripts/deploy_server.sh --host 203.0.113.10           # plain-http on an IP
+bash scripts/deploy_server.sh                               # local: http://localhost:8080
+
+# Windows (PowerShell + Docker Desktop)
+pwsh scripts/deploy_server.ps1 -Port 8080
+```
+
+Pre-built **multi-arch (amd64 + arm64)** images are published to GHCR on every
+release, so there is nothing to compile:
+
+- `ghcr.io/sweetcornna/university-helper-app` — FastAPI backend
+- `ghcr.io/sweetcornna/university-helper-web` — nginx + the built SPA
+
+Add `--build` (`-Build` on Windows) to build from source instead of pulling.
+
+### Manual (build from source)
 
 ```bash
 cp .env.example .env       # fill SECRET_KEY, POSTGRES_PASSWORD, CREDENTIAL_ENCRYPTION_KEY, CORS_ORIGINS
