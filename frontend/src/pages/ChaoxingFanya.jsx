@@ -136,7 +136,11 @@ export default function ChaoxingFanya() {
           concurrency: taskConfig.concurrency,
           unopened_strategy: taskConfig.unopenedStrategy,
           tiku_config: {
-            provider: taskConfig.tikuProvider,
+            // Ordered providers → comma-separated `provider` (单题库 or 回退链).
+            provider: (Array.isArray(taskConfig.tikuProvider)
+              ? taskConfig.tikuProvider
+              : [taskConfig.tikuProvider]
+            ).join(','),
             token: taskConfig.tikuToken.trim(),
             coverage_threshold: taskConfig.coverageThreshold,
             judge_mapping: {

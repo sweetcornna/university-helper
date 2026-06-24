@@ -55,6 +55,33 @@ scripts/        安装、测试、备份、部署脚本
 - `POST /api/v1/course/zhihuishu/password-login`
 - `POST /api/v1/course/zhihuishu/tasks/course`
 
+## 题库
+
+自动答题时，每道题都会经过一个可配置的**题库**（`tiku`）查询。命中的答案会按题型
+校验并写入缓存，因此一份 N 题的试卷只需 O(1) 次缓存读取。题库来源通过
+`tiku_config.provider` 配置（泛雅页面对应「题库来源」）。
+
+| 题库 | `provider` 取值 | Token | 说明 |
+|------|----------------|-------|------|
+| 言溪题库 | `TikuYanxi` | 需要 | 通用题库。 |
+| GO 题库 | `TikuGo` | 可选 | 免费搜题源（网课小工具，`q.icodef.com`），有节流。 |
+| Like 题库 | `TikuLike` | 需要 | 备用题库（datam.site）。 |
+| 题库适配器 | `TikuAdapter` | — | 指向自建的 [tikuAdapter](https://github.com/DokiDoki1103/tikuAdapter)（`url`）。 |
+| AI 智能答题 | `AI` | — | OpenAI 兼容大模型（`endpoint`/`key`/`model`）。 |
+| 硅基流动 | `SiliconFlow` | 需要 | 硅基流动大模型。 |
+| 本地缓存 | `LocalCache` | — | 仅用已缓存答案，从不调用外部 API。 |
+
+**多题库回退。** `provider` 支持逗号分隔的有序列表：前一个未命中或返回的答案类型
+不符时，自动回退到下一个。无法初始化的题库（如缺 Token 的题库、缺 key 的大模型）
+会被自动从回退链中剔除，因此只要链中有一个可用，整条链就仍然有效。
+
+```jsonc
+// tiku_config —— 先言溪，未命中再用免费的 GO题库 兜底
+{ "provider": "TikuYanxi,TikuGo", "token": "<言溪 token>" }
+```
+
+> 答案缓存总会在所有题库之前先查一次，因此 `LocalCache` 仅在单独选用（纯缓存模式）时才有意义，放进回退链里是冗余的。
+
 ## 本地开发
 
 ### 1. 后端

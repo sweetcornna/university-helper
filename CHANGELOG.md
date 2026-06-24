@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **题库 (answer-bank) parity with upstream + multi-题库 fallback.** Ported the
+  **GO 题库** (`TikuGo`, free `q.icodef.com` search source) from
+  [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing) and added a
+  **多题库回退** chain: `tiku_config.provider` now accepts a comma-separated,
+  ordered list and the worker falls through to the next bank when one misses or
+  returns a type-mismatched answer. Providers that fail to initialize (token-less
+  bank, key-less LLM) are dropped from the chain automatically. A chain ending in
+  an LLM keeps the AI judgement-normalization behaviour of a direct LLM selection.
+- **本地缓存题库 (`LocalCache`)** provider — the frontend already listed a "本地缓存"
+  option but the backend factory didn't register it (selecting it silently
+  disabled answering). It now works as a real token-free, cache-only source.
+- Fanya **题库来源** picker is now multi-select with explicit ①②③ fallback order;
+  the default chain `言溪 → GO题库` answers even without a Token.
+- README (EN + zh-CN) gains an **Answer banks (题库)** section documenting every
+  source, which need a token, and how to configure a fallback chain.
+
 ## [1.2.1] - 2026-06-16
 
 ### Fixed

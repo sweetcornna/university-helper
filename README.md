@@ -105,6 +105,37 @@ automatically by the docker entrypoint. Alembic migrations live in
 `POST /api/v1/course/start` · `GET /api/v1/course/status/{task_id}`
 `POST /api/v1/course/zhihuishu/{qr-login,password-login,tasks/course}`
 
+## Answer banks (题库)
+
+When auto-answering Chaoxing quizzes, the worker resolves each question through a
+configurable **answer bank** (`tiku`). The chosen answer is checked against the
+question type and cached, so a quiz of N questions does O(1) cache reads. Set the
+source(s) under `tiku_config.provider` (the Fanya page surfaces this as **题库来源**).
+
+| Provider | `provider` value | Token | Notes |
+|----------|------------------|-------|-------|
+| 言溪题库 | `TikuYanxi` | required | General-purpose bank. |
+| GO 题库 | `TikuGo` | optional | Free search source (网课小工具, `q.icodef.com`); throttled. |
+| Like 题库 | `TikuLike` | required | Backup bank (datam.site). |
+| 题库适配器 | `TikuAdapter` | — | Points at a self-hosted [tikuAdapter](https://github.com/DokiDoki1103/tikuAdapter) (`url`). |
+| AI 智能答题 | `AI` | — | OpenAI-compatible LLM (`endpoint`/`key`/`model`). |
+| 硅基流动 | `SiliconFlow` | required | SiliconFlow LLM. |
+| 本地缓存 | `LocalCache` | — | Cache-only; never calls an external API. |
+
+**多题库回退 (fallback chain).** `provider` accepts a comma-separated, ordered
+list — the worker tries each in turn and falls through to the next when one
+misses or returns a type-mismatched answer. Providers that can't initialize
+(e.g. a token-less bank, or an LLM with no key) are dropped from the chain
+automatically, so a mixed chain stays usable as long as one link works.
+
+```jsonc
+// tiku_config — try 言溪 first, then fall back to the free GO题库
+{ "provider": "TikuYanxi,TikuGo", "token": "<yanxi-token>" }
+```
+
+> The shared answer cache is always consulted before any provider, so the
+> `LocalCache` source only adds value when selected on its own (cache-only mode).
+
 ## Deployment
 
 > **Single source of truth: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).**
