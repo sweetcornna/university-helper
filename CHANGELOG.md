@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-24
+
 ### Added
 - **题库 (answer-bank) parity with upstream + multi-题库 fallback.** Ported the
   **GO 题库** (`TikuGo`, free `q.icodef.com` search source) from
@@ -20,8 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disabled answering). It now works as a real token-free, cache-only source.
 - Fanya **题库来源** picker is now multi-select with explicit ①②③ fallback order;
   the default chain `言溪 → GO题库` answers even without a Token.
+- Guided first-time server deployment script: `scripts/deploy_server.sh`.
+- Cross-platform run guidance for Linux, macOS, Windows via WSL2, and Android PWA.
+
+### Changed
 - README (EN + zh-CN) gains an **Answer banks (题库)** section documenting every
   source, which need a token, and how to configure a fallback chain.
+- Deployment docs now match the current Aliyun production topology:
+  `8.134.33.19`, `shuake.cornna.xyz`, `docker-compose.server.yml` +
+  `docker-compose.newhost.yml`, and host nginx proxying to the `web` container.
+- Version metadata is synchronized across backend, frontend, setup script, and release docs.
 
 ## [1.2.1] - 2026-06-16
 
