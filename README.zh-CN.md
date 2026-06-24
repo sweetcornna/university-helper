@@ -36,10 +36,23 @@ scripts/        安装、测试、备份、部署脚本
 
 ## 技术栈
 
-- 后端：Python 3.10+、FastAPI、Pydantic、psycopg2、JWT
-- 前端：React 18、Vite、React Router、Tailwind CSS、Zustand
-- 数据层：PostgreSQL
-- 部署：Docker / Docker Compose
+- 后端：Python 3.11、FastAPI 0.115、Pydantic v2、psycopg2、PyJWT、bcrypt、Fernet 凭据加密
+- 前端：React 18、Vite 5、React Router 6、Tailwind CSS
+- 数据层：PostgreSQL 15
+- 部署：Docker / Docker Compose + nginx
+
+## 支持平台
+
+University Helper 是 Web 应用。Linux 是生产服务器目标；macOS、Linux、Windows 可作为开发/部署客户端；Android 以 PWA 方式使用。
+
+| 平台 | 支持范围 | 推荐方式 |
+|---|---|---|
+| Linux | 本地开发 + 生产部署 | Docker Engine + Compose、Python 3.11、Node 20 |
+| macOS | 本地开发 + 部署客户端 | Docker Desktop 或 Colima、Python 3.11、Node 20 |
+| Windows | 本地开发 + 部署客户端 | WSL2 Ubuntu + Docker Desktop WSL 集成 |
+| Android | 终端用户访问 | 在 Chrome/Edge 中安装 PWA；当前不提供原生 APK |
+
+详细说明见 [平台支持](./docs/PLATFORMS.md)。
 
 ## 主要 API 区域
 
@@ -84,37 +97,33 @@ scripts/        安装、测试、备份、部署脚本
 
 ## 本地开发
 
-### 1. 后端
+### 快速启动
+
+```bash
+bash scripts/setup.sh        # 创建 .env，安装 Python/Node 依赖
+make start                   # 启动 docker-compose 栈（app + postgres）
+make test                    # 运行后端 + 前端测试
+```
+
+Windows 用户请在 WSL2 中运行以上命令，并开启 Docker Desktop 的 WSL 集成。
+
+### 后端单独启动
 
 ```bash
 cd backend
-cp .env.example .env
-pip install -r requirements.txt email-validator
+cp .env.example .env         # 然后编辑 SECRET_KEY / CORS_ORIGINS / 数据库配置
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-启动后端前，至少需要在 `backend/.env` 中配置：
-
-- `MAIN_DB_HOST`
-- `MAIN_DB_NAME`
-- `MAIN_DB_USER`
-- `MAIN_DB_PASSWORD`
-- `SECRET_KEY`
-- `CORS_ORIGINS`
-
-### 2. 前端
+### 前端单独启动
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev                  # http://localhost:3000，/api 代理到 :8000
 ```
-
-默认情况下，Vite 开发服务器运行在 `http://localhost:3000`，并会把 `/api` 请求代理到 `http://localhost:8000`。
-
-### 3. 数据库
-
-使用 PostgreSQL 15+，并通过 [`database/`](./database) 下的脚本初始化数据库。
 
 ## 推荐部署方式
 

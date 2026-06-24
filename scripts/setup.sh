@@ -10,6 +10,21 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 echo "=== university-helper · local setup (v${APP_VERSION}) ==="
+case "$(uname -s)" in
+  Darwin)
+    echo "Platform: macOS detected. Docker Desktop or Colima is recommended."
+    ;;
+  Linux)
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+      echo "Platform: WSL detected. Use Docker Desktop with WSL integration enabled."
+    else
+      echo "Platform: Linux detected. Docker Engine + Compose v2 is recommended."
+    fi
+    ;;
+  *)
+    echo "Platform: unsupported shell environment. Use Linux/macOS Bash or Windows via WSL2."
+    ;;
+esac
 
 command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "docker compose v2 is required"; exit 1; }
@@ -45,4 +60,5 @@ fi
 echo "Optional: enable pre-commit hooks with: pre-commit install"
 echo "Run:        make start    # docker-compose stack"
 echo "Tests:      make test     # backend + frontend"
+echo "Server deploy: bash scripts/deploy_server.sh --host <server-ip> --domain <domain>"
 echo "=== setup complete ==="

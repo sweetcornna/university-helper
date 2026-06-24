@@ -60,7 +60,25 @@ scripts/        setup / test / backup / hotfix-publish helpers
 - **Deployment**: Docker + Compose (production), host nginx fronts the app
 - **CI**: GitHub Actions (lint · type · test · build · trivy · CodeQL)
 
+## Supported platforms
+
+University Helper is a web app. Linux is the production server target; macOS,
+Linux, and Windows are supported as development/deployment clients; Android is
+supported as a PWA client.
+
+| Platform | Status | Recommended path |
+|---|---|---|
+| Linux | Full local dev + production deployment | Docker Engine + Compose, Python 3.11, Node 20 |
+| macOS | Local dev + deploy client | Docker Desktop or Colima, Python 3.11, Node 20 |
+| Windows | Local dev + deploy client | WSL2 Ubuntu + Docker Desktop WSL integration |
+| Android | End-user client | Install the PWA from Chrome/Edge; no native APK is shipped |
+
+See [Platform Support](./docs/PLATFORMS.md) for platform-specific steps.
+
 ## Local development
+
+Use the quick bootstrap on Linux, macOS, or Windows via WSL2. The script expects
+Bash, Python 3.11, Node 20/npm, Docker, and Docker Compose.
 
 ### Quick bootstrap
 
@@ -69,6 +87,8 @@ bash scripts/setup.sh        # creates .env, installs python/node deps
 make start                   # docker-compose stack (app + postgres)
 make test                    # pytest + vitest
 ```
+
+Windows users: run these commands inside WSL2, with Docker Desktop WSL integration enabled.
 
 ### Backend only
 
