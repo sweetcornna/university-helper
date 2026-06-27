@@ -48,6 +48,28 @@ pub fn run() {
                         CommandEvent::Stdout(bytes) => {
                             let line = String::from_utf8_lossy(&bytes);
                             if let Some(p) = parse_listening_port(&line) {
+                                // The sidecar prints the token BEFORE uvicorn finishes
+                                // binding, so wait until the loopback socket actually
+                                // accepts a connection — otherwise the webview lands on
+                                // a connection-refused page and the splash is already
+                                // gone. Poll TCP connect (no HTTP dep) for up to ~20s.
+                                let addr = std::net::SocketAddr::from(([127, 0, 0, 1], p));
+                                let mut ready = false;
+                                for _ in 0..200 {
+                                    if std::net::TcpStream::connect_timeout(
+                                        &addr,
+                                        std::time::Duration::from_millis(200),
+                                    )
+                                    .is_ok()
+                                    {
+                                        ready = true;
+                                        break;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(100));
+                                }
+                                if !ready {
+                                    eprintln!("[uh-backend] 127.0.0.1:{p} never became reachable");
+                                }
                                 let url = format!("http://127.0.0.1:{p}");
                                 let h = handle.clone();
                                 // Window creation must run on the main thread.

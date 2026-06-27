@@ -138,9 +138,9 @@ def main() -> None:
     configure_env(port, dist)
 
     # The ONE line Tauri (workstream E) parses for the port. Printed BEFORE
-    # uvicorn.run so the parent can navigate while the server finishes binding
-    # (Tauri then polls /health). flush=True is mandatory — frozen stdout is
-    # block-buffered.
+    # uvicorn.run; the Tauri shell then waits for the loopback socket to accept a
+    # connection before navigating (so it never lands on a refused page).
+    # flush=True is mandatory — frozen stdout is block-buffered.
     print(f"{TOKEN_PREFIX} {port}", flush=True)
 
     import uvicorn

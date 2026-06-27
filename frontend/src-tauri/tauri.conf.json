@@ -38,7 +38,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "PLACEHOLDER_UPDATER_PUBKEY__FILLED_BY_WORKSTREAM_F_KEYGEN",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFBQTk3MTBBREEyNUU2RUQKUldUdDVpWGFDbkdwR2tFVm5rb2VRYWRSdVJBZkZMQm5vY0ZoRWVYcTYxQ2JrTG5lQWF4TXB2aGkK",
       "endpoints": [
         "https://github.com/sweetcornna/university-helper/releases/latest/download/latest.json"
       ]

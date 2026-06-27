@@ -53,9 +53,13 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD            # prompts; do not ec
 gh secret list | grep TAURI_SIGNING
 ```
 
-Paste the `.pub` content into `frontend/src-tauri/tauri.conf.json`
-→ `plugins.updater.pubkey` (replacing the `PLACEHOLDER_…` value); keep
-`endpoints` at `https://github.com/sweetcornna/university-helper/releases/latest/download/latest.json`.
+A default keypair is **already wired**: `frontend/src-tauri/tauri.conf.json`
+`plugins.updater.pubkey` holds a committed public key (no-password key generated at setup),
+so signed releases auto-update out of the box **once you add the matching private key** as the
+`TAURI_SIGNING_PRIVATE_KEY` secret (above). To use your own key instead, regenerate as above and
+paste the new `.pub` content into `plugins.updater.pubkey`; keep `endpoints` at
+`https://github.com/sweetcornna/university-helper/releases/latest/download/latest.json`.
+For production, prefer a **password-protected** key (set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
 
 Checklist:
 - [ ] `chmod 600 ~/.tauri/uh-updater.key`; the key + `.pub` live **outside** the repo (never staged).

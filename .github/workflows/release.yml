@@ -190,21 +190,9 @@ jobs:
             libssl-dev \
             file
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build the PyInstaller sidecar
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt pyinstaller
-          bash scripts/build_sidecar.sh        # from workstream D → dist/uh-backend[.exe]
-
-      - name: Smoke-test the sidecar /health
-        shell: bash
-        run: bash scripts/smoke_sidecar.sh      # from workstream D: boot frozen binary, curl /health == 200
-
+      # The SPA must be built BEFORE the sidecar: build_sidecar.sh requires
+      # frontend/dist (it is gitignored / absent in a fresh CI checkout) and
+      # PyInstaller embeds it via --add-data.
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -216,6 +204,21 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the PyInstaller sidecar (embeds the SPA from frontend/dist)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt pyinstaller
+          bash scripts/build_sidecar.sh        # from workstream D → dist/uh-backend[.exe]
+
+      - name: Smoke-test the sidecar /health
+        shell: bash
+        run: bash scripts/smoke_sidecar.sh      # from workstream D: boot frozen binary, curl /health == 200
 
       - name: Setup Rust (+ target)
         uses: dtolnay/rust-toolchain@stable
