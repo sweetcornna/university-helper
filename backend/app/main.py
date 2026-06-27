@@ -12,11 +12,12 @@ from app.api.v1 import auth, chaoxing
 from app.api.v1.course import cleanup_expired_entries
 from app.api.v1.metrics import record_request
 from app.api.v1.metrics import router as metrics_router
-from app.config import settings
+from app.config import LOCAL_USER_ID, settings
 from app.core.credential_crypto import init_cipher
 from app.core.exceptions import AppException
 from app.core.logging_setup import configure_logging
 from app.core.tracing import configure_tracing
+from app.dependencies import get_current_user, get_current_user_id
 from app.middleware.tenant_isolation import tenant_isolation_middleware
 from app.storage.factory import get_storage
 
@@ -201,6 +202,16 @@ from app.api.v1 import course
 app.include_router(course.router, prefix="/api/v1/course", tags=["course"])
 app.include_router(chaoxing.router, prefix="/api/v1/chaoxing", tags=["chaoxing"])
 app.include_router(metrics_router, tags=["metrics"])
+
+
+# PROFILE=local: inject the implicit single-user identity so the HTTPBearer
+# sub-dependencies never run — no Authorization header is required. course.py
+# receives {"user_id": "local"} and chaoxing.py receives "local"; both work
+# unchanged. No edits to routers or dependencies.py. Server mode skips this block
+# entirely, leaving dependency_overrides empty (runtime unchanged).
+if settings.PROFILE == "local":
+    app.dependency_overrides[get_current_user] = lambda: {"user_id": LOCAL_USER_ID}
+    app.dependency_overrides[get_current_user_id] = lambda: LOCAL_USER_ID
 
 
 @app.get("/")
