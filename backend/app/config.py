@@ -1,4 +1,6 @@
-from pydantic import field_validator
+from typing import Literal
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PUBLIC_ROUTES = [
@@ -21,11 +23,24 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Deployment profile. "server" = existing multi-tenant Postgres deploy (default,
+    # unchanged). "local" = single-user desktop app path.
+    PROFILE: Literal["server", "local"] = "server"
+
+    # Persistence backend. "postgres" = existing server DB (default). "sqlite" = local file.
+    STORAGE_BACKEND: Literal["postgres", "sqlite"] = "postgres"
+
+    # Local SQLite file path; required when STORAGE_BACKEND == "sqlite".
+    SQLITE_PATH: str = ""
+
+    # Path to the pre-built frontend dist bundle served by the desktop app.
+    FRONTEND_DIST: str = ""
+
     # Database
     MAIN_DB_HOST: str = "localhost"
     MAIN_DB_NAME: str = "main_db"
-    MAIN_DB_USER: str
-    MAIN_DB_PASSWORD: str
+    MAIN_DB_USER: str = ""
+    MAIN_DB_PASSWORD: str = ""
     MAIN_DB_PORT: int = 5432
 
     # JWT
@@ -69,5 +84,15 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS must be set in environment variables")
         return v
 
+    @model_validator(mode="after")
+    def _postgres_creds_required(self) -> "Settings":
+        if self.STORAGE_BACKEND == "postgres" and (not self.MAIN_DB_USER or not self.MAIN_DB_PASSWORD):
+            raise ValueError("MAIN_DB_USER and MAIN_DB_PASSWORD must be set when STORAGE_BACKEND is 'postgres'")
+        return self
+
 
 settings = Settings()
+
+# Opaque user id used by the single-user local profile. Handlers only need a
+# <=64-char string; a constant is sufficient (see spec §3.5).
+LOCAL_USER_ID = "local"

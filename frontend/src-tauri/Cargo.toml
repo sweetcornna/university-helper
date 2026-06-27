@@ -1,0 +1,32 @@
+[package]
+name = "uh-desktop"
+version = "1.4.0"                      # stamped from the git tag by scripts/set_version.sh (workstream F)
+description = "学道 — University Helper desktop shell"
+authors = ["sweetcornna"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+# The desktop entrypoint lives in the lib so a future mobile target can reuse run().
+name = "uh_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.11", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+
+# Updater is a desktop-only plugin (matches `cargo add … --target 'cfg(...)'` from the docs).
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

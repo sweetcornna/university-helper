@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>学道</title>
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body { display: grid; place-items: center; font-family: system-ui, sans-serif;
+             background: #0b1020; color: #e6e8ef; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #6ea8fe;
+             animation: pulse 1s ease-in-out infinite; margin-top: 12px; }
+      @keyframes pulse { 0%,100%{opacity:.3} 50%{opacity:1} }
+    </style>
+  </head>
+  <body>
+    <div style="text-align:center">
+      <h1 style="font-weight:600">学道</h1>
+      <p style="opacity:.7;margin:0">正在启动本地服务…</p>
+      <div class="dot" style="margin:12px auto 0"></div>
+    </div>
+  </body>
+</html>

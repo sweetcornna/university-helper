@@ -80,6 +80,28 @@ included) reaches it through the browser or installed PWA.
 
 See [Platform Support](./docs/PLATFORMS.md) for platform-specific steps.
 
+## Desktop app (download & run)
+
+Prefer a double-click app over Docker? Grab the native installer for your OS from the
+[**latest release**](../../releases/latest) — it bundles the backend and runs entirely on your
+machine (no Docker, no Postgres, no Python). Tasks run while the app window is open.
+
+| OS | Download | Notes |
+|---|---|---|
+| Windows 10/11 | `University.Helper_<ver>_x64-setup.exe` / `.msi` | unsigned → SmartScreen: **More info → Run anyway** |
+| macOS (Apple Silicon) | `University.Helper_<ver>_aarch64.dmg` | unsigned → **right-click the app → Open** (first launch only) |
+| macOS (Intel) | `University.Helper_<ver>_x64.dmg` | same right-click → Open |
+| Linux | `university-helper_<ver>_amd64.AppImage` / `.deb` | `chmod +x *.AppImage && ./*.AppImage` |
+
+The app **auto-updates** from GitHub Releases (signed updater payloads).
+
+> **Why the unsigned-build warning?** Builds are signed with a free updater key but are not yet OS
+> code-signed (paid). On macOS, right-click → **Open** once to add a Gatekeeper exception; on Windows,
+> click **More info → Run anyway** on the SmartScreen prompt. We are applying to the
+> [**SignPath Foundation**](https://signpath.org/) free OSS code-signing program for Windows; an
+> optional Apple Developer ID ($99/yr) for macOS notarization is planned. Once approved, these warnings
+> go away with no change to how you download.
+
 ## Local development
 
 Use the quick bootstrap on Linux, macOS, or Windows via WSL2. The script expects

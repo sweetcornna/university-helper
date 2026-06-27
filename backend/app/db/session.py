@@ -17,11 +17,18 @@ import threading
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
-
-from psycopg2.extras import RealDictCursor
-from psycopg2.pool import ThreadedConnectionPool
+from typing import TYPE_CHECKING
 
 from app.config import settings
+
+# psycopg2 is imported lazily (inside the pool builders) so that merely importing
+# this module does NOT load psycopg2's C extension and its bundled libcrypto. The
+# frozen local desktop build (STORAGE_BACKEND=sqlite) never opens a pool, so it can
+# exclude psycopg2 entirely — avoiding the macOS dylib clash where psycopg2's
+# bundled libcrypto shadows Python's _ssl. Server behavior is unchanged (the import
+# just happens on first pool creation instead of at module load).
+if TYPE_CHECKING:  # annotations only — no runtime psycopg2 import
+    from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +53,9 @@ _TENANT_NAME_RE = re.compile(r"^tenant_[a-z0-9]+$")
 def _get_main_pool() -> ThreadedConnectionPool:
     global main_pool
     if main_pool is None:
+        from psycopg2.extras import RealDictCursor
+        from psycopg2.pool import ThreadedConnectionPool
+
         main_pool = ThreadedConnectionPool(
             minconn=5,
             maxconn=30,
@@ -69,6 +79,9 @@ def _validate_tenant_db_name(tenant_db_name: str) -> None:
 
 
 def _build_tenant_pool(tenant_db_name: str) -> ThreadedConnectionPool:
+    from psycopg2.extras import RealDictCursor
+    from psycopg2.pool import ThreadedConnectionPool
+
     return ThreadedConnectionPool(
         minconn=2,
         maxconn=10,

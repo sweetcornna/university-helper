@@ -66,7 +66,7 @@ class TestAuthPerformance:
 
     def test_register_response_time(self, client, mock_db):
         """Registration should complete within acceptable time"""
-        with patch('app.services.auth_service.psycopg2.connect'):
+        with patch('psycopg2.connect'):
             mock_db.fetchone.side_effect = [None, {"id": 1}]
 
             start = time.time()

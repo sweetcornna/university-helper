@@ -73,7 +73,7 @@ async def test_register_user_sql_injection_attempt(auth_service, mock_conn, mock
     mock_cursor.fetchone.return_value = {"id": 1}
 
     with patch("app.services.auth_service.get_db_session", return_value=mock_conn), \
-         patch("app.services.auth_service.psycopg2.connect", return_value=mock_conn), \
+         patch("psycopg2.connect", return_value=mock_conn), \
          patch("app.services.auth_service.create_access_token", return_value="token"):
         await auth_service.register_user("user", "test@example.com", "Password1")
 
@@ -88,7 +88,7 @@ async def test_register_user_success(auth_service, mock_conn, mock_cursor):
     mock_cursor.fetchone.return_value = {"id": 1}
 
     with patch("app.services.auth_service.get_db_session", return_value=mock_conn), \
-         patch("app.services.auth_service.psycopg2.connect", return_value=mock_conn), \
+         patch("psycopg2.connect", return_value=mock_conn), \
          patch("app.services.auth_service.create_access_token", return_value="token123"):
         result = await auth_service.register_user("testuser", "test@example.com", "Password1")
 
@@ -138,7 +138,7 @@ async def test_register_recovers_from_orphaned_tenant_db(auth_service, mock_conn
     ddl_conn, _ddl_cur, executed = _make_ddl_mock(_effect)
 
     with patch("app.services.auth_service.get_db_session", return_value=mock_conn), \
-         patch("app.services.auth_service.psycopg2.connect", return_value=ddl_conn), \
+         patch("psycopg2.connect", return_value=ddl_conn), \
          patch("app.services.auth_service.create_access_token", return_value="token"):
         result = await auth_service.register_user("bob", "bob@example.com", "Password1")
 
@@ -172,7 +172,7 @@ async def test_register_rolls_back_user_and_drops_db_on_failure(auth_service, mo
     mock_cursor.execute.side_effect = _track
 
     with patch("app.services.auth_service.get_db_session", return_value=mock_conn), \
-         patch("app.services.auth_service.psycopg2.connect", return_value=ddl_conn), \
+         patch("psycopg2.connect", return_value=ddl_conn), \
          patch("app.services.auth_service.create_access_token", return_value="token"):
         with pytest.raises(RuntimeError):
             await auth_service.register_user("carol", "carol@example.com", "Password1")

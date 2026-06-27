@@ -1,0 +1,3 @@
+# Tracks the binaries/ dir. The triple-named sidecar (uh-backend-<triple>[.exe])
+# is git-ignored: CI drops the real PyInstaller build here; locally,
+# scripts/make-dev-sidecar.sh writes a dev stub.

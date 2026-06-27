@@ -7,3 +7,5 @@ mypy>=1.8
 bandit>=1.7
 alembic>=1.13
 SQLAlchemy>=2.0
+# Desktop sidecar packaging (build_sidecar.sh freezes desktop_entry.py).
+pyinstaller>=6.6,<7

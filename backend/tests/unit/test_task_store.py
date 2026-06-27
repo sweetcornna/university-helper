@@ -6,135 +6,137 @@ import app.services.course.task_store as task_store_module
 from app.services.course.task_store import TaskStore
 
 
-class _FakeCursor:
-    def __init__(self, rows):
-        self._rows = rows
-        self.executed = []
+class _RecordingTasks:
+    def __init__(self, get_result=None, list_result=None, history_result=None):
+        self.calls = []
+        self._get = get_result
+        self._list = list_result or []
+        self._history = history_result or []
 
-    def execute(self, sql, params=None):
-        self.executed.append((sql, params))
+    def ensure_tables(self):
+        self.calls.append(("ensure_tables",))
 
-    def fetchall(self):
-        return list(self._rows)
+    def upsert_task(self, task_kind, task_state_public):
+        self.calls.append(("upsert_task", task_kind, task_state_public))
 
-    def fetchone(self):
-        return self._rows[0] if self._rows else None
+    def get_task(self, task_kind, task_id, user_id=None):
+        self.calls.append(("get_task", task_kind, task_id, user_id))
+        return self._get
 
-    def close(self):
-        return None
+    def list_tasks(self, task_kind, user_id=None, limit=50):
+        self.calls.append(("list_tasks", task_kind, user_id, limit))
+        return list(self._list)
 
+    def append_history(self, history_kind, user_id, record, max_records=500):
+        self.calls.append(("append_history", history_kind, user_id, record, max_records))
 
-class _FakeConn:
-    def __init__(self, cursor):
-        self._cursor = cursor
-
-    def cursor(self):
-        return self._cursor
-
-
-class _FakeSessionCtx:
-    def __init__(self, conn):
-        self._conn = conn
-
-    def __enter__(self):
-        return self._conn
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
+    def list_history(self, history_kind, user_id=None, limit=500):
+        self.calls.append(("list_history", history_kind, user_id, limit))
+        return list(self._history)
 
 
-def test_task_store_list_tasks_uses_user_filter_and_updated_desc(monkeypatch):
-    store = TaskStore()
-    monkeypatch.setattr(store, "ensure_tables", lambda: None)
-
-    rows = [
-        {
-            "task_id": "task-new",
-            "user_id": "user-1",
-            "task_kind": "signin",
-            "status": "running",
-            "message": "new",
-            "started_at": None,
-            "updated_at": None,
-            "payload": {"task_id": "task-new", "user_id": "user-1"},
-        },
-        {
-            "task_id": "task-old",
-            "user_id": "user-1",
-            "task_kind": "signin",
-            "status": "failed",
-            "message": "old",
-            "started_at": None,
-            "updated_at": None,
-            "payload": {"task_id": "task-old", "user_id": "user-1"},
-        },
-    ]
-    fake_cursor = _FakeCursor(rows)
-    fake_conn = _FakeConn(fake_cursor)
-    monkeypatch.setattr(task_store_module, "get_db_session", lambda: _FakeSessionCtx(fake_conn))
-
-    tasks = store.list_tasks(task_kind="signin", user_id="user-1", limit=20)
-
-    assert [item["task_id"] for item in tasks] == ["task-new", "task-old"]
-    assert all(item["user_id"] == "user-1" for item in tasks)
-
-    assert len(fake_cursor.executed) == 1
-    sql, params = fake_cursor.executed[0]
-    assert "WHERE task_kind = %s AND user_id = %s" in sql
-    assert "ORDER BY updated_at DESC" in sql
-    assert params == ("signin", "user-1", 20)
+class _FakeStorage:
+    def __init__(self, tasks):
+        self.tasks = tasks
+        self.probe = None
 
 
-def test_task_store_get_task_uses_task_and_user_filters(monkeypatch):
-    store = TaskStore()
-    monkeypatch.setattr(store, "ensure_tables", lambda: None)
-
-    rows = [
-        {
-            "task_id": "task-1",
-            "user_id": "user-1",
-            "task_kind": "signin",
-            "status": "running",
-            "message": "active",
-            "started_at": None,
-            "updated_at": None,
-            "payload": {"task_id": "task-1", "user_id": "user-1"},
-        }
-    ]
-    fake_cursor = _FakeCursor(rows)
-    fake_conn = _FakeConn(fake_cursor)
-    monkeypatch.setattr(task_store_module, "get_db_session", lambda: _FakeSessionCtx(fake_conn))
-
-    task = store.get_task(task_kind="signin", task_id="task-1", user_id="user-1")
-
-    assert task is not None
-    assert task["task_id"] == "task-1"
-    assert task["user_id"] == "user-1"
-    sql, params = fake_cursor.executed[0]
-    assert "WHERE task_kind = %s AND task_id = %s AND user_id = %s" in sql
-    assert params == ("signin", "task-1", "user-1")
+def _install(monkeypatch, tasks):
+    monkeypatch.setattr(task_store_module, "get_storage", lambda: _FakeStorage(tasks))
 
 
-def test_task_store_upsert_task_returns_safely_when_task_id_missing(monkeypatch):
-    store = TaskStore()
-    call_count = {"db": 0}
+@pytest.fixture
+def real_cipher(monkeypatch):
+    """Enable REAL Fernet encryption for the duration of a test.
 
-    def _unexpected_db_call():
-        call_count["db"] += 1
-        return _FakeSessionCtx(_FakeConn(_FakeCursor([])))
+    A no-op cipher (the CI default with no key) would let a missing-encrypt
+    regression slip through, so these crypto-invariant tests need a real key.
+    Generates a fresh Fernet key, points ``CREDENTIAL_ENCRYPTION_KEY`` at it and
+    rebuilds the process cipher singleton, then drops the singleton in teardown
+    so the next test rebuilds from the (monkeypatch-restored) env.
+    """
+    from cryptography.fernet import Fernet
 
-    monkeypatch.setattr(task_store_module, "get_db_session", _unexpected_db_call)
+    from app.core import credential_crypto
 
-    store.upsert_task(
-        task_kind="signin",
-        task_state_public={
-            "user_id": "user-1",
-            "status": "running",
-            "message": "task-id missing should be no-op",
-        },
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    credential_crypto._reset_for_tests()
+    credential_crypto.init_cipher()  # build the Fernet cipher now; emits 'fernet:' prefixes
+    yield
+    credential_crypto._reset_for_tests()  # drop cached cipher so later tests rebuild cleanly
+
+
+def test_upsert_encrypts_sensitive_before_delegating(monkeypatch, real_cipher):
+    # REAL encryption: prove the value actually became ciphertext before delegation,
+    # not merely that the key survived the no-op cipher.
+    tasks = _RecordingTasks()
+    _install(monkeypatch, tasks)
+    TaskStore().upsert_task("signin", {"task_id": "t1", "user_id": "u1", "password": "hunter2"})
+    kind, kwarg = tasks.calls[0][1], tasks.calls[0][2]
+    assert kind == "signin"
+    assert kwarg["task_id"] == "t1"
+    # password must be ACTUALLY encrypted before it reaches storage.
+    assert kwarg["password"].startswith("fernet:")
+    assert kwarg["password"] != "hunter2"
+
+
+def test_append_history_encrypts_before_delegating(monkeypatch, real_cipher):
+    # The OTHER write path must also encrypt before delegating.
+    tasks = _RecordingTasks()
+    _install(monkeypatch, tasks)
+    TaskStore().append_history("signin", "u1", {"message": "m", "password": "hunter2"})
+    call = tasks.calls[0]
+    assert call[0] == "append_history"
+    assert call[1] == "signin"
+    assert call[2] == "u1"
+    record = call[3]
+    assert record["password"].startswith("fernet:")
+    assert record["password"] != "hunter2"
+
+
+def test_encrypt_handles_non_string_sensitive_value(monkeypatch, real_cipher):
+    # The old code ran _normalize_json before encrypt; the new code encrypts the raw
+    # dict. A non-string sensitive value must pass through untouched (encrypt_dict_fields
+    # only transforms truthy str values) without raising.
+    tasks = _RecordingTasks()
+    _install(monkeypatch, tasks)
+    TaskStore().upsert_task("signin", {"task_id": "t1", "user_id": "u1", "password": 12345})
+    kwarg = tasks.calls[0][2]
+    assert kwarg["password"] == 12345  # non-string left untouched, no exception
+
+
+def test_get_decrypts_storage_result(monkeypatch):
+    from app.core.credential_crypto import _reset_for_tests, encrypt_str
+
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", "")  # dev no-op unless a real key is set
+    _reset_for_tests()
+    enc = encrypt_str("hunter2")  # no-op in dev → "hunter2"; fernet:… if a key is configured
+    tasks = _RecordingTasks(get_result={"task_id": "t1", "user_id": "u1", "password": enc})
+    _install(monkeypatch, tasks)
+    got = TaskStore().get_task("signin", "t1", "u1")
+    assert got["password"] == "hunter2"
+    assert tasks.calls[0] == ("get_task", "signin", "t1", "u1")
+
+
+def test_list_tasks_and_history_delegate_and_decrypt(monkeypatch):
+    tasks = _RecordingTasks(
+        list_result=[{"task_id": "t1", "user_id": "u1"}],
+        history_result=[{"message": "m", "timestamp": "2026-01-01T00:00:00+00:00"}],
     )
+    _install(monkeypatch, tasks)
+    store = TaskStore()
+    assert [t["task_id"] for t in store.list_tasks("signin", "u1", 10)] == ["t1"]
+    assert store.list_history("signin", "u1", 5)[0]["message"] == "m"
+    assert ("list_tasks", "signin", "u1", 10) in tasks.calls
+    assert ("list_history", "signin", "u1", 5) in tasks.calls
 
-    assert call_count["db"] == 0
+
+def test_upsert_invalid_input_does_not_delegate(monkeypatch):
+    tasks = _RecordingTasks()
+    _install(monkeypatch, tasks)
+    TaskStore().upsert_task("", {"task_id": "t1", "user_id": "u1"})
+    TaskStore().upsert_task("signin", "not-a-dict")
+    assert tasks.calls == []
 
 
 def test_signin_manager_loads_full_history_for_user_even_after_partial_preload(monkeypatch):

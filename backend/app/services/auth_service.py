@@ -8,9 +8,6 @@ import os
 import re
 import time
 
-import psycopg2
-from psycopg2 import sql
-
 from app.config import settings
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.session import get_db_session
@@ -92,6 +89,9 @@ class AuthService:
         `tenant_<username>` DB here is necessarily an orphan: drop and recreate
         it to make registration idempotent/recoverable.
         """
+        import psycopg2
+        from psycopg2 import sql
+
         ddl_conn = None
         try:
             ddl_conn = psycopg2.connect(
@@ -125,6 +125,9 @@ class AuthService:
     def _drop_tenant_database(tenant_db_name: str) -> None:
         """Best-effort DROP of a tenant DB (used on the rollback path so a
         partially-created DB does not become an orphan). Never raises."""
+        import psycopg2
+        from psycopg2 import sql
+
         ddl_conn = None
         try:
             ddl_conn = psycopg2.connect(
@@ -154,6 +157,8 @@ class AuthService:
         rather than pre-checking with SELECTs — that would add two extra
         round-trips per registration without closing the race window.
         """
+        import psycopg2
+
         try:
             # `with conn.cursor()` guarantees the cursor is closed even when the
             # INSERT raises, so no open cursor is returned to the pool.

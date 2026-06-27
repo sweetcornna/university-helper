@@ -12,7 +12,8 @@
     "test:ui": "vitest --ui",
     "test:ci": "vitest run --coverage",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
-    "format": "prettier --write \"src/**/*.{js,jsx,json,css}\""
+    "format": "prettier --write \"src/**/*.{js,jsx,json,css}\"",
+    "tauri": "tauri"
   },
   "dependencies": {
     "clsx": "^2.0.0",
@@ -25,6 +26,7 @@
     "tailwind-merge": "^2.1.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.3",
     "@testing-library/jest-dom": "^6.5.0",
     "@testing-library/react": "^16.0.1",
     "@testing-library/user-event": "^14.5.2",
