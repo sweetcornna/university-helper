@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from app.api.v1 import auth, chaoxing
 from app.api.v1.course import cleanup_expired_entries
@@ -248,8 +248,15 @@ if settings.PROFILE == "local":
     app.dependency_overrides[get_current_user_id] = lambda: LOCAL_USER_ID
 
 
-@app.get("/")
+# Resolve the SPA dist ONCE at import. None in server mode (no frontend/dist in
+# the backend image) -> JSON root + no catch-all, i.e. server path unchanged.
+_SPA_DIST = resolve_frontend_dist()
+
+
+@app.get("/", include_in_schema=False)
 async def root():
+    if _SPA_DIST is not None:
+        return FileResponse(_SPA_DIST / "index.html")
     return {"message": "University Helper API"}
 
 
