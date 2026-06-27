@@ -37,6 +37,14 @@
       "binaries/uh-backend"
     ],
     "createUpdaterArtifacts": true,
+    "windows": {
+      "wix": {
+        "language": "zh-CN"
+      }
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

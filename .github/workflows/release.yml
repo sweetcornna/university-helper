@@ -164,7 +164,7 @@ jobs:
             rust_target: x86_64-pc-windows-msvc
           - os: macos-latest        # Apple Silicon runner → native arm64 sidecar + app
             rust_target: aarch64-apple-darwin
-          - os: macos-13            # Intel runner — PyInstaller can't cross-compile, so the
+          - os: macos-15-intel      # Intel runner — PyInstaller can't cross-compile, so the
             rust_target: x86_64-apple-darwin   # x86_64 leg MUST run natively (reconciliation #2)
     runs-on: ${{ matrix.os }}
     env:
@@ -265,13 +265,6 @@ jobs:
           # Updater signing (optional/free) — empty secrets ⇒ unsigned.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS notarization (optional/later) — empty secrets ⇒ ad-hoc/unsigned.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: frontend
           releaseId: ${{ needs.create-release.outputs.release_id }}
