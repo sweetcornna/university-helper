@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
@@ -192,6 +194,38 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"code": "InternalServerError", "message": "Internal server error"},
     )
+
+
+def resolve_frontend_dist() -> Path | None:
+    """Locate the built SPA (frontend/dist), or None when there is none to serve.
+
+    Resolution order:
+      1. settings.FRONTEND_DIST — authoritative. Tests inject a temp dir; the
+         frozen desktop launcher (workstream D) pins the bundled path. A
+         non-empty value that is not a real directory returns None (NO fallback)
+         so the "server / no SPA" state can be forced deterministically.
+      2. PyInstaller bundle: <sys._MEIPASS>/frontend/dist (added via
+         --add-data "frontend/dist:frontend/dist").
+      3. Dev checkout: <repo-root>/frontend/dist
+         (main.py is <repo>/backend/app/main.py -> parents[2] == <repo-root>).
+      4. None -> server mode: JSON root, no /assets mount, no catch-all.
+    """
+    configured = (settings.FRONTEND_DIST or "").strip()
+    if configured:
+        path = Path(configured)
+        return path if path.is_dir() else None
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bundled = Path(meipass) / "frontend" / "dist"
+        if bundled.is_dir():
+            return bundled
+
+    repo_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    if repo_dist.is_dir():
+        return repo_dist
+
+    return None
 
 
 # Routes
