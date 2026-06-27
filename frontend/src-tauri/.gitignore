@@ -1,0 +1,4 @@
+/target
+/gen/schemas
+# CI drops the real triple-named sidecar here; only the placeholder loader is tracked (E5)
+/binaries/uh-backend-*
