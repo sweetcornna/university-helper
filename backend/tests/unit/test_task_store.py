@@ -45,16 +45,64 @@ def _install(monkeypatch, tasks):
     monkeypatch.setattr(task_store_module, "get_storage", lambda: _FakeStorage(tasks))
 
 
-def test_upsert_encrypts_sensitive_before_delegating(monkeypatch):
+@pytest.fixture
+def real_cipher(monkeypatch):
+    """Enable REAL Fernet encryption for the duration of a test.
+
+    A no-op cipher (the CI default with no key) would let a missing-encrypt
+    regression slip through, so these crypto-invariant tests need a real key.
+    Generates a fresh Fernet key, points ``CREDENTIAL_ENCRYPTION_KEY`` at it and
+    rebuilds the process cipher singleton, then drops the singleton in teardown
+    so the next test rebuilds from the (monkeypatch-restored) env.
+    """
+    from cryptography.fernet import Fernet
+
+    from app.core import credential_crypto
+
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    credential_crypto._reset_for_tests()
+    credential_crypto.init_cipher()  # build the Fernet cipher now; emits 'fernet:' prefixes
+    yield
+    credential_crypto._reset_for_tests()  # drop cached cipher so later tests rebuild cleanly
+
+
+def test_upsert_encrypts_sensitive_before_delegating(monkeypatch, real_cipher):
+    # REAL encryption: prove the value actually became ciphertext before delegation,
+    # not merely that the key survived the no-op cipher.
     tasks = _RecordingTasks()
     _install(monkeypatch, tasks)
     TaskStore().upsert_task("signin", {"task_id": "t1", "user_id": "u1", "password": "hunter2"})
     kind, kwarg = tasks.calls[0][1], tasks.calls[0][2]
     assert kind == "signin"
-    # password must be transformed before it reaches storage (fernet: prefix in prod;
-    # in the dev no-op cipher it passes through — assert delegation + that storage saw the key).
-    assert "password" in kwarg
     assert kwarg["task_id"] == "t1"
+    # password must be ACTUALLY encrypted before it reaches storage.
+    assert kwarg["password"].startswith("fernet:")
+    assert kwarg["password"] != "hunter2"
+
+
+def test_append_history_encrypts_before_delegating(monkeypatch, real_cipher):
+    # The OTHER write path must also encrypt before delegating.
+    tasks = _RecordingTasks()
+    _install(monkeypatch, tasks)
+    TaskStore().append_history("signin", "u1", {"message": "m", "password": "hunter2"})
+    call = tasks.calls[0]
+    assert call[0] == "append_history"
+    assert call[1] == "signin"
+    assert call[2] == "u1"
+    record = call[3]
+    assert record["password"].startswith("fernet:")
+    assert record["password"] != "hunter2"
+
+
+def test_encrypt_handles_non_string_sensitive_value(monkeypatch, real_cipher):
+    # The old code ran _normalize_json before encrypt; the new code encrypts the raw
+    # dict. A non-string sensitive value must pass through untouched (encrypt_dict_fields
+    # only transforms truthy str values) without raising.
+    tasks = _RecordingTasks()
+    _install(monkeypatch, tasks)
+    TaskStore().upsert_task("signin", {"task_id": "t1", "user_id": "u1", "password": 12345})
+    kwarg = tasks.calls[0][2]
+    assert kwarg["password"] == 12345  # non-string left untouched, no exception
 
 
 def test_get_decrypts_storage_result(monkeypatch):
