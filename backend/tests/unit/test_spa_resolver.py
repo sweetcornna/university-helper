@@ -1,5 +1,4 @@
 import sys
-from pathlib import Path
 
 import app.main as main_mod
 
@@ -27,11 +26,19 @@ def test_resolver_meipass_bundle(tmp_path, monkeypatch):
     assert main_mod.resolve_frontend_dist() == bundle
 
 
-def test_resolver_repo_dev_path(monkeypatch):
-    # Empty override, not frozen -> <repo-root>/frontend/dist, which exists in the checkout.
+def test_resolver_repo_dev_path(monkeypatch, tmp_path):
+    # Empty override, not frozen -> <repo-root>/frontend/dist when it exists.
+    # frontend/dist is a gitignored build artifact (absent in a fresh CI checkout),
+    # so point the resolver at a synthetic repo root with a real dist dir to make
+    # this deterministic regardless of whether the SPA has been built.
     monkeypatch.setattr(main_mod.settings, "FRONTEND_DIST", "")
     monkeypatch.delattr(sys, "_MEIPASS", raising=False)
-    expected = Path(main_mod.__file__).resolve().parents[2] / "frontend" / "dist"
+    dist = tmp_path / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    fake_main = tmp_path / "backend" / "app" / "main.py"
+    fake_main.parent.mkdir(parents=True)
+    fake_main.touch()
+    monkeypatch.setattr(main_mod, "__file__", str(fake_main))
     result = main_mod.resolve_frontend_dist()
-    assert result == expected
+    assert result == dist
     assert result.is_dir()
