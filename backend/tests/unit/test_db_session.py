@@ -14,7 +14,7 @@ def test_get_main_db_connection(mock_pool):
     mock_pool.return_value.getconn.assert_called_once()
 
 
-@patch('app.db.session.ThreadedConnectionPool')
+@patch('psycopg2.pool.ThreadedConnectionPool')
 @patch('app.db.session.settings')
 def test_get_tenant_db_connection(mock_settings, mock_pool_class):
     mock_settings.MAIN_DB_HOST = "localhost"

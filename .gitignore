@@ -79,3 +79,8 @@ frontend/coverage/
 
 # SDD / brainstorm scratch (controller workspace)
 .superpowers/
+
+# PyInstaller build artifacts (uh-backend sidecar)
+/dist/
+/build/
+/uh-backend.spec

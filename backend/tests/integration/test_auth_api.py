@@ -27,7 +27,7 @@ def mock_db():
 
 @pytest.fixture
 def mock_tenant_db():
-    with patch('app.services.auth_service.psycopg2.connect') as mock:
+    with patch('psycopg2.connect') as mock:
         yield mock
 
 

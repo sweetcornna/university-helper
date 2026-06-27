@@ -145,10 +145,16 @@ def main() -> None:
 
     import uvicorn
 
-    # Import string is resolved lazily inside run() — i.e. AFTER configure_env, so
-    # app.config sees the local env. asyncio + h11 only (uvloop absent on Windows).
+    # Import the ASGI app OBJECT, not uvicorn's "app.main:app" import string: the
+    # frozen PyInstaller importer does not resolve that lazy string import (it
+    # raises ModuleNotFoundError: app at runtime). Importing it directly here —
+    # AFTER configure_env, so app.config reads the local env — bundles it as a
+    # real dependency and hands uvicorn the object (workers=1 needs no string).
+    # asyncio + h11 only (uvloop absent on Windows).
+    from app.main import app as fastapi_app
+
     uvicorn.run(
-        "app.main:app",
+        fastapi_app,
         host="127.0.0.1",
         port=port,
         workers=1,
