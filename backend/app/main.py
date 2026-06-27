@@ -104,7 +104,13 @@ def _build_allowed_hosts(origins: list[str]) -> list[str]:
 
 # Innermost middleware: registered first so its short-circuit responses still
 # travel back out through request_metrics (counted) and CORS (CORS headers added).
-app.middleware("http")(tenant_isolation_middleware)
+#
+# PROFILE=local (single-user desktop build) SKIPS this JWT gate: the desktop app
+# never logs in and sends no token; the implicit "local" identity is injected via
+# dependency_overrides further below. Server mode (the default) registers it
+# exactly as before — runtime byte-for-byte unchanged.
+if settings.PROFILE != "local":
+    app.middleware("http")(tenant_isolation_middleware)
 
 
 @app.middleware("http")
