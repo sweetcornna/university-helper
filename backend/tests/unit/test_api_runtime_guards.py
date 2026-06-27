@@ -1,78 +1,12 @@
-from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request as StarletteRequest
 
 import app.api.v1.chaoxing as chaoxing_api
 import app.api.v1.course as course_api
-import app.main as main_mod
-
-
-class _FakeCursor:
-    def __init__(self, execute_error=None):
-        self._execute_error = execute_error
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def execute(self, *a, **kw):
-        if self._execute_error is not None:
-            raise self._execute_error
-
-    def fetchone(self):
-        return (1,)
-
-
-class _FakeConn:
-    def __init__(self, execute_error=None):
-        self.autocommit = False
-        self._execute_error = execute_error
-
-    def cursor(self):
-        return _FakeCursor(self._execute_error)
-
-
-def test_health_resets_autocommit_when_select_raises(monkeypatch):
-    """If SELECT 1 raises mid-health-check, the pooled connection must NOT be
-    left in autocommit=True — otherwise the next user of that pooled connection
-    silently loses transactional rollback semantics."""
-    fake_conn = _FakeConn(execute_error=RuntimeError("transient db blip"))
-
-    @contextmanager
-    def fake_session(db_name=None):
-        yield fake_conn
-
-    monkeypatch.setattr(main_mod, "get_db_session", fake_session)
-
-    with pytest.raises(HTTPException) as exc_info:
-        main_mod.health()
-
-    assert exc_info.value.status_code == 503
-    assert fake_conn.autocommit is False, "autocommit leaked True after SELECT 1 raised"
-
-
-def test_health_resets_autocommit_on_success(monkeypatch):
-    """Happy path: autocommit is restored to False after the probe."""
-    fake_conn = _FakeConn()
-
-    @contextmanager
-    def fake_session(db_name=None):
-        yield fake_conn
-
-    monkeypatch.setattr(main_mod, "get_db_session", fake_session)
-
-    result = main_mod.health()
-
-    assert result["db"] == "ok"
-    assert fake_conn.autocommit is False
-
-
 import app.api.v1.metrics as metrics_mod
-from starlette.requests import Request as StarletteRequest
 
 
 def _metrics_request(authorization=None):

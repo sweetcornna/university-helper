@@ -17,8 +17,8 @@ from app.core.credential_crypto import init_cipher
 from app.core.exceptions import AppException
 from app.core.logging_setup import configure_logging
 from app.core.tracing import configure_tracing
-from app.db.session import get_db_session
 from app.middleware.tenant_isolation import tenant_isolation_middleware
+from app.storage.factory import get_storage
 
 logger = logging.getLogger(__name__)
 _CLEANUP_INTERVAL_SECONDS = 60
@@ -206,21 +206,7 @@ async def root():
 def health():
     cleanup_task = getattr(app.state, "cleanup_task", None)
     cleanup_alive = bool(cleanup_task and not cleanup_task.done())
-    try:
-        with get_db_session() as conn:
-            conn.autocommit = True  # avoid an unnecessary COMMIT round-trip
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                    cur.fetchone()
-            finally:
-                # Always reset autocommit before the connection is returned to
-                # the pool. If SELECT 1 raised, skipping this reset would leave
-                # the pooled connection in autocommit=True, silently breaking
-                # the transactional contract (commit/rollback become no-ops)
-                # for the next caller that reuses it.
-                conn.autocommit = False
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"db unavailable: {type(e).__name__}")
+    if not get_storage().probe.ping():
+        raise HTTPException(status_code=503, detail="db unavailable")
     status = "ok" if cleanup_alive else "degraded"
     return {"status": status, "db": "ok", "cleanup_task": "alive" if cleanup_alive else "dead"}
