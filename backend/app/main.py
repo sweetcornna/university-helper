@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import auth, chaoxing
 from app.api.v1.course import cleanup_expired_entries
@@ -268,3 +269,29 @@ def health():
         raise HTTPException(status_code=503, detail="db unavailable")
     status = "ok" if cleanup_alive else "degraded"
     return {"status": status, "db": "ok", "cleanup_task": "alive" if cleanup_alive else "dead"}
+
+
+def _mount_spa(application: FastAPI, dist: Path) -> None:
+    """Mount hashed assets + a history-fallback catch-all for the SPA.
+
+    Registered AFTER all API routers so /api/*, /health, /metrics, /docs, and the
+    explicit GET / win; the catch-all only answers paths no real route claimed.
+    """
+    assets_dir = dist / "assets"
+    if assets_dir.is_dir():
+        application.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @application.get("/{full_path:path}", include_in_schema=False, name="spa")
+    async def spa(full_path: str):
+        candidate = (dist / full_path).resolve()
+        # Serve a real in-tree static file (favicon.svg, sw.js, robots.txt, ...).
+        # `dist.resolve() in candidate.parents` blocks traversal escapes such as
+        # '../../etc/passwd' (candidate would resolve outside dist).
+        if full_path and candidate.is_file() and dist.resolve() in candidate.parents:
+            return FileResponse(candidate)
+        # Anything else is a client-side route -> hand back the SPA shell.
+        return FileResponse(dist / "index.html")
+
+
+if _SPA_DIST is not None:
+    _mount_spa(app, _SPA_DIST)
