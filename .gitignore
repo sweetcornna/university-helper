@@ -76,3 +76,6 @@ backend/cache.json
 .claude/
 
 frontend/coverage/
+
+# SDD / brainstorm scratch (controller workspace)
+.superpowers/
