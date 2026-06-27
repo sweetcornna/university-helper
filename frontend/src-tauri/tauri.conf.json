@@ -25,8 +25,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis", "dmg", "app", "appimage", "deb"],
-    "externalBin": ["binaries/uh-backend"],
+    "targets": [
+      "msi",
+      "nsis",
+      "dmg",
+      "app",
+      "appimage",
+      "deb"
+    ],
+    "externalBin": [
+      "binaries/uh-backend"
+    ],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",

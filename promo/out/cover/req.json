@@ -1,0 +1,7 @@
+{
+  "model": "gpt-image-2",
+  "prompt": "Cinematic minimalist hero key art for a premium tech product, 16:9 landscape, ultra high quality. Scene: a quiet Chinese university campus at the exact moment night turns to dawn. A dark dormitory tower silhouette stands against a deep navy-blue night sky (hex 050A14) scattered with faint stars and a soft pale moon high in the upper right; along the bottom horizon the sky warms into a glowing golden-amber sunrise (hex FFD58E and FFB454). Most dorm windows are dark, but a single window glows with a cool electric blue light (hex 5B9DFF), suggesting something quietly working through the night while everyone sleeps. Mood: calm, hopeful, premium, expensive, restrained, cinematic. Style: modern SaaS key art, soft atmospheric haze, gentle film grain, subtle depth of field, generous clean negative space in the upper third reserved for a title. Absolutely no text, no letters, no numbers, no logos, no watermarks, no UI elements.",
+  "size": "1536x1024",
+  "quality": "high",
+  "n": 1
+}

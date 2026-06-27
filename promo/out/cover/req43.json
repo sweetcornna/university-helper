@@ -1,0 +1,7 @@
+{
+  "model": "gpt-image-2",
+  "prompt": "Minimalist flat-design vector illustration, clean modern premium aesthetic, composed for a roughly square / 4:3 cover. A simple stylized night-to-dawn campus scene built only from solid flat color shapes. A flat geometric dormitory building (stacked rectangles) with a neat grid of small flat square windows — most dark, exactly one glowing flat blue square (hex 5B9DFF) — sits in the lower-right third, NOT touching any edge, with clear margin around it. A flat deep navy sky (hex 050A14 to 0D1A33) fills the upper two-thirds, with a few tiny simple star dots and one clean flat pale-cream circle moon in the upper-right area (kept away from the corners). Along the bottom, a flat horizontal band of dawn colors (amber hex FFB454 fading to soft gold hex FFD58E), with a little flat ground/hills. Generous clean empty navy negative space across the entire upper-left and left half, reserved for a title. Keep a comfortable margin of sky at the very top and ground at the very bottom that is safe to crop. Strictly flat design: solid color shapes, minimal detail, no photorealism, no textures, only the single dawn gradient band, no outline noise. Calm, geometric, elegant tech illustration. Absolutely no text, no letters, no numbers, no logos, no watermarks, no UI.",
+  "size": "1024x1024",
+  "quality": "high",
+  "n": 1
+}
