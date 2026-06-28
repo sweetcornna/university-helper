@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-06-28
+
+### Fixed
+- Fixed a blank desktop window after launch by using a SPA-compatible Content
+  Security Policy for the local desktop frontend while keeping API/JSON
+  responses on the stricter `default-src 'none'` policy.
+
+### Tests
+- Added a regression test that verifies the bundled desktop SPA can load its own
+  JavaScript/CSS assets and that API responses keep the strict CSP.
+
 ## [1.4.2] - 2026-06-28
 
 ### Fixed

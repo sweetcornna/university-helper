@@ -73,6 +73,25 @@ def test_root_serves_index_when_dist_present(spa_client):
     assert resp.text == (spa_client._uh_dist / "index.html").read_text(encoding="utf-8")
 
 
+def test_spa_html_csp_allows_bundled_assets(spa_client):
+    resp = spa_client.get("/")
+    assert resp.status_code == 200
+    csp = resp.headers["content-security-policy"]
+    assert "default-src 'self'" in csp
+    assert "script-src 'self'" in csp
+    assert "style-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "default-src 'none'" not in csp
+
+
+def test_api_json_keeps_strict_csp(spa_client):
+    resp = spa_client.get("/health")
+    assert resp.status_code in (200, 503)
+    assert resp.headers["content-security-policy"] == (
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+    )
+
+
 def test_root_returns_json_when_no_dist(no_dist_client):
     # Server behavior preserved: no dist -> the original JSON body.
     resp = no_dist_client.get("/")

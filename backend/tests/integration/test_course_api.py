@@ -474,7 +474,7 @@ async def test_notify_test_actually_sends_via_provider():
 
     fake = FakeProvider()
 
-    with patch(
+    with patch("app.api.v1.course.validate_notification_url", return_value=True), patch(
         "app.api.v1.course.NotificationFactory.create_service", return_value=fake
     ) as mock_create:
         response = await course_api.test_notification(
@@ -497,7 +497,7 @@ async def test_notify_test_reports_failure_when_send_raises():
         def send(self, message):
             raise RuntimeError("connection refused")
 
-    with patch(
+    with patch("app.api.v1.course.validate_notification_url", return_value=True), patch(
         "app.api.v1.course.NotificationFactory.create_service",
         return_value=FailingProvider(),
     ):

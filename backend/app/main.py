@@ -26,6 +26,31 @@ from app.storage.factory import get_storage
 
 logger = logging.getLogger(__name__)
 _CLEANUP_INTERVAL_SECONDS = 60
+_STRICT_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+_LOCAL_SPA_CSP = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' data: https://fonts.gstatic.com",
+        "img-src 'self' data: blob: https:",
+        "connect-src 'self'",
+        "manifest-src 'self'",
+        "worker-src 'self' blob:",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+    ]
+)
+_API_OR_SYSTEM_PATHS = (
+    "/api/",
+    "/health",
+    "/metrics",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+)
 
 
 def _validate_runtime_settings() -> None:
@@ -74,7 +99,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="University Helper API",
     description="Multi-tenant campus helper platform with database-per-tenant isolation",
-    version="1.4.2",
+    version="1.4.3",
     docs_url="/docs" if settings.DOCS_ENABLED else None,
     redoc_url="/redoc" if settings.DOCS_ENABLED else None,
     openapi_url="/openapi.json" if settings.DOCS_ENABLED else None,
@@ -93,6 +118,14 @@ def _build_allowed_hosts(origins: list[str]) -> list[str]:
         if host:
             hosts.add(host)
     return sorted(hosts)
+
+
+def _content_security_policy_for(request: Request) -> str:
+    path = request.url.path
+    is_local_spa_request = (
+        settings.PROFILE == "local" and _SPA_DIST is not None and not path.startswith(_API_OR_SYSTEM_PATHS)
+    )
+    return _LOCAL_SPA_CSP if is_local_spa_request else _STRICT_CSP
 
 
 # NOTE on middleware ordering:
@@ -147,10 +180,7 @@ async def security_headers_middleware(request: Request, call_next):
         "Permissions-Policy",
         "geolocation=(), microphone=(), camera=(), payment=()",
     )
-    response.headers.setdefault(
-        "Content-Security-Policy",
-        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
-    )
+    response.headers.setdefault("Content-Security-Policy", _content_security_policy_for(request))
     if settings.ENFORCE_HTTPS:
         response.headers.setdefault(
             "Strict-Transport-Security",
