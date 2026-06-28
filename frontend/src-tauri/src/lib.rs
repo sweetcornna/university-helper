@@ -1,7 +1,10 @@
 mod port;
 pub use port::parse_listening_port;
 
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
@@ -75,6 +78,31 @@ fn show_startup_error(app: &AppHandle, message: impl AsRef<str>) {
     }
 }
 
+fn http_response_is_ok(response: &[u8]) -> bool {
+    response.starts_with(b"HTTP/1.1 200 ") || response.starts_with(b"HTTP/1.0 200 ")
+}
+
+fn loopback_http_ok(addr: SocketAddr, path: &str) -> bool {
+    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
+        Ok(stream) => stream,
+        Err(_) => return false,
+    };
+
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(750)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(750)));
+
+    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = [0_u8; 32];
+    match stream.read(&mut response) {
+        Ok(n) => http_response_is_ok(&response[..n]),
+        Err(_) => false,
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = match tauri::Builder::default()
@@ -116,24 +144,20 @@ pub fn run() {
                         CommandEvent::Stdout(bytes) => {
                             let line = String::from_utf8_lossy(&bytes);
                             if let Some(p) = parse_listening_port(&line) {
-                                // The sidecar prints the token BEFORE uvicorn finishes
-                                // binding, so wait until the loopback socket actually
-                                // accepts a connection — otherwise the webview lands on
-                                // a connection-refused page and the splash is already
-                                // gone. Poll TCP connect (no HTTP dep) for up to ~20s.
-                                let addr = std::net::SocketAddr::from(([127, 0, 0, 1], p));
+                                // The sidecar prints the token after importing the ASGI
+                                // app, but before uvicorn finishes binding and serving
+                                // routes. Wait for real HTTP 200 responses so the
+                                // webview never lands on a half-ready blank page.
+                                let addr = SocketAddr::from(([127, 0, 0, 1], p));
                                 let mut ready = false;
-                                for _ in 0..200 {
-                                    if std::net::TcpStream::connect_timeout(
-                                        &addr,
-                                        std::time::Duration::from_millis(200),
-                                    )
-                                    .is_ok()
+                                for _ in 0..600 {
+                                    if loopback_http_ok(addr, "/health")
+                                        && loopback_http_ok(addr, "/")
                                     {
                                         ready = true;
                                         break;
                                     }
-                                    std::thread::sleep(std::time::Duration::from_millis(100));
+                                    std::thread::sleep(Duration::from_millis(100));
                                 }
                                 if !ready {
                                     eprintln!("[uh-backend] 127.0.0.1:{p} never became reachable");
@@ -249,5 +273,28 @@ async fn check_for_updates(app: AppHandle) {
         }
         Ok(None) => { /* already up to date */ }
         Err(e) => eprintln!("update check failed: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::http_response_is_ok;
+
+    #[test]
+    fn recognizes_successful_http_response_status_lines() {
+        assert!(http_response_is_ok(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n"
+        ));
+        assert!(http_response_is_ok(b"HTTP/1.0 200 OK\r\n\r\n"));
+    }
+
+    #[test]
+    fn rejects_non_successful_or_malformed_http_response_status_lines() {
+        assert!(!http_response_is_ok(
+            b"HTTP/1.1 503 Service Unavailable\r\n"
+        ));
+        assert!(!http_response_is_ok(b"HTTP/1.1 404 Not Found\r\n"));
+        assert!(!http_response_is_ok(b""));
+        assert!(!http_response_is_ok(b"not http"));
     }
 }

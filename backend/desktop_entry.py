@@ -3,8 +3,8 @@
 Resolves an OS app-data dir, persists the local single-user secrets, points all
 writable paths under app-data, sets PROFILE=local / STORAGE_BACKEND=sqlite (and
 the rest) in os.environ BEFORE app.config is imported, picks a free loopback
-port, prints the port token Tauri parses, then boots uvicorn with the asyncio
-loop + h11 (NEVER uvloop — absent on Windows).
+port, imports the ASGI app, prints the port token Tauri parses, then boots
+uvicorn with the asyncio loop + h11 (NEVER uvloop — absent on Windows).
 
 Helpers are kept side-effect-light and importable so the env/path wiring can be
 unit-tested without starting uvicorn.
@@ -137,12 +137,6 @@ def main() -> None:
     port = free_port()
     configure_env(port, dist)
 
-    # The ONE line Tauri (workstream E) parses for the port. Printed BEFORE
-    # uvicorn.run; the Tauri shell then waits for the loopback socket to accept a
-    # connection before navigating (so it never lands on a refused page).
-    # flush=True is mandatory — frozen stdout is block-buffered.
-    print(f"{TOKEN_PREFIX} {port}", flush=True)
-
     import uvicorn
 
     # Import the ASGI app OBJECT, not uvicorn's "app.main:app" import string: the
@@ -152,6 +146,13 @@ def main() -> None:
     # real dependency and hands uvicorn the object (workers=1 needs no string).
     # asyncio + h11 only (uvloop absent on Windows).
     from app.main import app as fastapi_app
+
+    # The ONE line Tauri (workstream E) parses for the port. Emit it only after
+    # the heavy app import above has completed; frozen onefile imports can take
+    # tens of seconds on a cold start, and Tauri's post-token socket wait should
+    # cover uvicorn binding rather than Python module import time.
+    # flush=True is mandatory — frozen stdout is block-buffered.
+    print(f"{TOKEN_PREFIX} {port}", flush=True)
 
     uvicorn.run(
         fastapi_app,

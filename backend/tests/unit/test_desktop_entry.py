@@ -130,3 +130,12 @@ def test_app_config_imports_after_configure_env(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert "OK" in proc.stdout
+
+
+def test_readiness_token_is_emitted_after_heavy_app_import():
+    source = Path(desktop_entry.__file__).read_text(encoding="utf-8")
+
+    app_import = source.index("from app.main import app as fastapi_app")
+    readiness_print = source.index('print(f"{TOKEN_PREFIX} {port}"')
+
+    assert app_import < readiness_print

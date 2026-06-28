@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-06-28
+
+### Fixed
+- Fixed packaged macOS desktop startup staying on the splash screen by emitting
+  the sidecar readiness token only after the heavy FastAPI app import completes,
+  so Tauri waits for uvicorn binding rather than Python onefile cold-start work.
+- Increased the desktop shell's post-token loopback wait budget to tolerate
+  slower macOS cold starts without navigating before the local backend is ready.
+
+### Tests
+- Tightened the packaged sidecar smoke test so `/health` must become reachable
+  shortly after `UH_BACKEND_LISTENING`, matching the desktop shell contract.
+- Added a guardrail that prevents the readiness token from being emitted before
+  the ASGI app import completes.
+
 ## [1.4.3] - 2026-06-28
 
 ### Fixed

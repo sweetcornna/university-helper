@@ -68,9 +68,11 @@ def test_sidecar_boots_and_health_ok():
                 break
         assert port, "never saw UH_BACKEND_LISTENING token"
 
-        # 2) poll /health for 200 (60s budget)
+        # 2) After the readiness token, /health should become reachable quickly.
+        # The desktop shell starts its real webview from this token, so the token
+        # must describe uvicorn binding readiness, not slow Python import time.
         ok = False
-        deadline = time.time() + 60
+        deadline = time.time() + 15
         while time.time() < deadline:
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as r:
