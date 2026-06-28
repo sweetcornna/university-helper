@@ -48,6 +48,14 @@ def should_stop(config: dict[str, Any] | None = None) -> bool:
     return bool(callable(callback) and callback())
 
 
+def _is_thread_start_failure(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if "can't start new thread" in text or "cannot start new thread" in text:
+        return True
+    cause = getattr(exc, "__cause__", None)
+    return isinstance(cause, Exception) and _is_thread_start_failure(cause)
+
+
 def log_error(func):
     def wrapper(*args, **kwargs):
         try:
@@ -299,6 +307,36 @@ def process_job(
     return StudyResult.ERROR
 
 
+def _process_jobs_inline(
+    chaoxing: Chaoxing,
+    course: dict,
+    jobs: list[dict],
+    job_info: dict,
+    speed: float,
+    config: dict[str, Any] | None,
+) -> ChapterResult | None:
+    video_progress_callback = config.get("video_progress_callback") if config else None
+    stop_callback = config.get("should_stop") if config else None
+
+    for job in jobs:
+        if should_stop(config):
+            return ChapterResult.CANCELLED
+        result = process_job(
+            chaoxing,
+            course,
+            job,
+            job_info,
+            speed,
+            progress_callback=video_progress_callback,
+            should_stop_callback=stop_callback,
+        )
+        if result == StudyResult.CANCELLED:
+            return ChapterResult.CANCELLED
+        if result.is_failure():
+            return ChapterResult.ERROR
+    return None
+
+
 @dataclass(order=True)
 class ChapterTask:
     index: int
@@ -350,14 +388,38 @@ class JobProcessor:
         for task in self.tasks:
             self.task_queue.put(task)
 
+        started_workers = 0
         for i in range(self.worker_num):
             thread = threading.Thread(target=self.worker_thread, daemon=True)
             self.threads.append(thread)
-            thread.start()
+            try:
+                thread.start()
+            except RuntimeError as exc:
+                if not _is_thread_start_failure(exc):
+                    raise
+                self.threads.pop()
+                if started_workers == 0:
+                    logger.warning("Cannot start Chaoxing worker thread; processing chapters inline")
+                    self._drain_pending_tasks()
+                    self._run_inline()
+                    return
+                logger.warning(
+                    "Cannot start all Chaoxing worker threads; continuing with {} worker(s)",
+                    started_workers,
+                )
+                break
+            else:
+                started_workers += 1
 
-        threading.Thread(target=self.retry_thread, daemon=True).start()
+        try:
+            threading.Thread(target=self.retry_thread, daemon=True).start()
+        except RuntimeError as exc:
+            if not _is_thread_start_failure(exc):
+                raise
+            logger.warning("Cannot start Chaoxing retry thread; retry queue will be promoted by controller loop")
 
         while True:
+            self._promote_retry_once()
             if should_stop(self.config):
                 self._drain_pending_tasks()
                 if not self._has_outstanding_work():
@@ -366,6 +428,75 @@ class JobProcessor:
                 break
             time.sleep(0.2)
         time.sleep(0.5)
+
+    def _promote_retry_once(self) -> None:
+        try:
+            task = self.retry_queue.get_nowait()
+        except Empty:
+            return
+        except ShutDown:
+            return
+
+        self.task_queue.put(task)
+        with self._retry_lock:
+            if self._pending_retries > 0:
+                self._pending_retries -= 1
+
+    def _run_inline(self) -> None:
+        for task in sorted(self.tasks, key=lambda item: item.index):
+            while True:
+                if should_stop(self.config):
+                    self._drain_pending_tasks()
+                    return
+
+                try:
+                    task.result = process_chapter(self.chaoxing, self.course, task.point, self.speed, self.config)
+                except Exception:
+                    logger.exception("Chapter processing crashed: {}", task.point.get("title", "unknown"))
+                    task.result = ChapterResult.ERROR
+
+                match task.result:
+                    case ChapterResult.SUCCESS:
+                        logger.debug("Task success: {}", task.point["title"])
+                        break
+
+                    case ChapterResult.NOT_OPEN:
+                        if self.config["notopen_action"] == "continue":
+                            logger.warning("章节未开启: {}, 正在跳过", task.point["title"])
+                            break
+
+                        if task.tries >= self.max_tries:
+                            logger.error(
+                                "章节未开启: {} 可能由于上一章节的章节检测未完成, 也可能由于该章节因为时效已关闭，"
+                                "请手动检查完成并提交再重试。或者在配置中配置(自动跳过关闭章节/开启题库并启用提交)",
+                                task.point["title"],
+                            )
+                            break
+                        time.sleep(1)
+
+                    case ChapterResult.ERROR:
+                        task.tries += 1
+                        logger.warning(
+                            "Retrying task {} ({}/{} attempts)",
+                            task.point["title"],
+                            task.tries,
+                            self.max_tries,
+                        )
+                        if task.tries >= self.max_tries:
+                            logger.error("Max retries reached for task: {}", task.point["title"])
+                            self.failed_tasks.append(task)
+                            break
+                        time.sleep(1)
+
+                    case ChapterResult.CANCELLED:
+                        logger.info("Task cancelled: {}", task.point["title"])
+                        self._drain_pending_tasks()
+                        return
+
+                    case _:
+                        logger.error("Invalid task state {} for task {}", task.result, task.point["title"])
+                        self.failed_tasks.append(task)
+                        break
 
     def _drain_pending_tasks(self):
         with self._drain_lock:
@@ -567,19 +698,32 @@ def process_chapter(
     executor = ThreadPoolExecutor(max_workers=5)
     fast_shutdown = False
     try:
-        pending = {
-            executor.submit(
-                process_job,
-                chaoxing,
-                course,
-                job,
-                job_info,
-                speed,
-                progress_callback=video_progress_callback,
-                should_stop_callback=stop_callback,
-            )
-            for job in jobs
-        }
+        pending = set()
+        try:
+            for job in jobs:
+                pending.add(
+                    executor.submit(
+                        process_job,
+                        chaoxing,
+                        course,
+                        job,
+                        job_info,
+                        speed,
+                        progress_callback=video_progress_callback,
+                        should_stop_callback=stop_callback,
+                    )
+                )
+        except RuntimeError as exc:
+            if not _is_thread_start_failure(exc):
+                raise
+            fast_shutdown = True
+            for future in pending:
+                future.cancel()
+            logger.warning("Cannot start Chaoxing job worker thread; processing task points inline")
+            inline_result = _process_jobs_inline(chaoxing, course, jobs, job_info, speed, config)
+            if inline_result is not None:
+                return inline_result
+            pending = set()
         while pending:
             if should_stop(config):
                 fast_shutdown = True
