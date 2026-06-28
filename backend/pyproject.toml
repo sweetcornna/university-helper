@@ -1,6 +1,6 @@
 [project]
 name = "university-helper-backend"
-version = "1.4.4"
+version = "1.4.5"
 description = "Multi-tenant campus helper backend (Chaoxing + Zhihuishu)"
 # Runtime is uniformly 3.11 (Docker python:3.11-slim, ruff target-version py311,
 # mypy 3.11) and the code uses 3.11-only stdlib (datetime.UTC) plus 3.10 `match`.

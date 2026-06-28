@@ -50,15 +50,15 @@ git clone https://github.com/sweetcornna/university-helper.git
 cd university-helper
 
 # Linux / macOS / WSL2
-bash scripts/deploy_server.sh --tag 1.4.1 -y                 # 本机：http://localhost:8080
-bash scripts/deploy_server.sh --tag 1.4.1 --host 203.0.113.10 -y
-bash scripts/deploy_server.sh --tag 1.4.1 --domain your.domain -y
+bash scripts/deploy_server.sh --tag 1.4.5 -y                 # 本机：http://localhost:8080
+bash scripts/deploy_server.sh --tag 1.4.5 --host 203.0.113.10 -y
+bash scripts/deploy_server.sh --tag 1.4.5 --domain your.domain -y
 
 # Windows（PowerShell + Docker Desktop）
-pwsh scripts/deploy_server.ps1 -Tag 1.4.1 -Port 8080 -Yes
+pwsh scripts/deploy_server.ps1 -Tag 1.4.5 -Port 8080 -Yes
 ```
 
-脚本也接受 `v1.4.1`，会自动规范化为 GHCR 镜像 tag `1.4.1`。加 `--build`
+脚本也接受 `v1.4.5`，会自动规范化为 GHCR 镜像 tag `1.4.5`。加 `--build`
 （Windows 为 `-Build`）则改为从源码本地构建。
 
 ### 本地开发
@@ -185,7 +185,7 @@ npm run dev                  # http://localhost:3000，/api 代理到 :8000
 - `ghcr.io/sweetcornna/university-helper-app` —— FastAPI 后端
 - `ghcr.io/sweetcornna/university-helper-web` —— nginx + 已构建的前端
 
-Release 镜像 tag 不带前缀 `v`（例如 `1.4.1`，不是 `v1.4.1`）。部署脚本两种
+Release 镜像 tag 不带前缀 `v`（例如 `1.4.5`，不是 `v1.4.5`）。部署脚本两种
 写法都接受。
 
 ### 手动部署（从源码构建）

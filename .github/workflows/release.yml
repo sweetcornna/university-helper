@@ -2,7 +2,8 @@ name: release
 
 # Fan-out from one v* tag (the single source of truth for the version):
 #   create-release  → makes a DRAFT GitHub Release, stamps version, extracts notes
-#   images          → multi-arch app+web images to GHCR (:version + :latest)
+#   app-image       → multi-arch server image to GHCR (:version + :latest)
+#   web-image       → multi-arch web image to GHCR (:version + :latest)
 #   desktop         → Win/macOS(x2)/Linux installers + updater artifacts (Tauri)
 #   publish         → flips the draft to published once images + every desktop leg pass
 #
@@ -20,8 +21,7 @@ on:
         required: true
 
 permissions:
-  contents: write   # create the GitHub Release / tag and upload assets
-  packages: write   # push images to GHCR
+  contents: read
 
 env:
   REGISTRY: ghcr.io
@@ -33,12 +33,16 @@ jobs:
   # ───────────────────────── 1. create the draft release ─────────────────────
   create-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
       release_id: ${{ steps.release.outputs.id }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve version from tag
         id: meta
@@ -98,12 +102,18 @@ jobs:
             scripts/deploy_server.sh
             scripts/deploy_server.ps1
 
-  # ───────────────────────── 2. server images (logic unchanged) ──────────────
-  images:
+  # ───────────────────────── 2a. server API image ───────────────────────────
+  app-image:
     runs-on: ubuntu-latest
     needs: create-release
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve version
         id: meta
@@ -142,8 +152,41 @@ jobs:
           tags: |
             ${{ env.APP_IMAGE }}:${{ steps.meta.outputs.version }}
             ${{ env.APP_IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+
+  # ───────────────────────── 2b. web image ──────────────────────────────────
+  web-image:
+    runs-on: ubuntu-latest
+    needs: create-release
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version
+        id: meta
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=${REF}" >> "$GITHUB_OUTPUT"
+          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+
+      # Re-stamp this fresh checkout so the image bakes the tag's version even if
+      # the tagged commit was not pre-stamped (robust to the human runbook step).
+      - name: Stamp version into all manifests
+        run: bash scripts/set_version.sh "${{ steps.meta.outputs.version }}"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push web image
         uses: docker/build-push-action@v6
@@ -155,12 +198,12 @@ jobs:
           tags: |
             ${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.version }}
             ${{ env.WEB_IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   # ───────────────────────── 3. desktop installers + updater ─────────────────
   desktop:
     needs: create-release
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -178,6 +221,8 @@ jobs:
       VERSION: ${{ needs.create-release.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Stamp version into all manifests
         shell: bash
@@ -290,9 +335,10 @@ jobs:
   # ───────────────────────── 4. publish (gate on everything) ─────────────────
   publish:
     runs-on: ubuntu-latest
-    needs: [create-release, images, desktop]
+    needs: [create-release, app-image, web-image, desktop]
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
       - name: Flip draft → published
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

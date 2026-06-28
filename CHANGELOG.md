@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-06-28
+
+### Fixed
+- Hardened the GitHub Release pipeline by splitting server and web image builds
+  into independent timeout-bounded jobs, so a stuck web image build can no
+  longer block the entire release indefinitely.
+- Reduced release workflow token scope so GHCR package write permission is
+  granted only to image build jobs.
+- Ensured manual `workflow_dispatch` release runs check out the requested tag
+  instead of accidentally building the dispatcher branch.
+- Updated one-command deploy examples to the current release tag.
+
+### Tests
+- Added release workflow guardrails for independent image jobs, publish
+  dependencies, timeout coverage, GitHub Actions cache export avoidance, job
+  permissions, and manual-dispatch checkout refs.
+
 ## [1.4.4] - 2026-06-28
 
 ### Fixed

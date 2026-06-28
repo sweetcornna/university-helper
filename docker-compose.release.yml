@@ -1,11 +1,11 @@
 # Released stack — pull prebuilt images and run, no local build required.
 #
-#   UH_TAG=1.4.1 docker compose -f docker-compose.release.yml -p university-helper up -d
+#   UH_TAG=1.4.5 docker compose -f docker-compose.release.yml -p university-helper up -d
 #
 # The `app` and `web` images are published to GHCR by .github/workflows/release.yml
-# on every `v*` Git tag, with image tags like `1.4.1` (no leading `v`).
+# on every `v*` Git tag, with image tags like `1.4.5` (no leading `v`).
 # `scripts/deploy_server.sh` wraps this file (generates .env, normalizes a
-# `v1.4.1` input tag, pulls, waits for health). Use docker-compose.server.yml
+# `v1.4.5` input tag, pulls, waits for health). Use docker-compose.server.yml
 # instead when you want to build from source. The web service is the only one
 # published on a public interface; app/postgres stay internal.
 services:
