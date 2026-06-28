@@ -118,6 +118,13 @@ def test_release_workflow_does_not_pass_empty_apple_certificate_env_to_unsigned_
     assert _tauri_action_env_keys().isdisjoint(disallowed_env_keys)
 
 
+def test_release_notes_include_macos_quarantine_bypass_for_unsigned_builds():
+    workflow = RELEASE_WORKFLOW.read_text()
+
+    assert "xattr -dr com.apple.quarantine" in workflow
+    assert '"/Applications/学道.app"' in workflow
+
+
 def test_release_workflow_pairs_intel_target_with_supported_intel_macos_runner_label():
     entries = _desktop_matrix_entries()
 

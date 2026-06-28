@@ -48,6 +48,17 @@ It bundles the backend and runs locally without Docker, Postgres, or Python.
 
 The app auto-updates from GitHub Releases. Builds are signed for the updater but
 are not yet OS code-signed, so first launch may show Windows/macOS warnings.
+On macOS, try **right-click → Open** first. If Gatekeeper says the app is
+damaged or should be moved to the Trash, drag it to `/Applications`, then remove
+the download quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/学道.app"
+open "/Applications/学道.app"
+```
+
+Only use this command for builds downloaded from this repository's official
+GitHub Releases.
 
 ### One-command server deploy
 

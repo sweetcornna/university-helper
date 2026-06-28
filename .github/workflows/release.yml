@@ -70,6 +70,13 @@ jobs:
             echo "(\`.msi\`/\`.exe\` Windows · \`.dmg\` macOS · \`.AppImage\`/\`.deb\` Linux)."
             echo "Unsigned builds: macOS → right-click the app → **Open**; Windows → **More info → Run anyway**."
             echo ""
+            echo "macOS fallback: if Gatekeeper says the app is damaged or should be moved to the Trash,"
+            echo "drag it to \`/Applications\`, then run:"
+            echo '```bash'
+            echo 'xattr -dr com.apple.quarantine "/Applications/学道.app"'
+            echo 'open "/Applications/学道.app"'
+            echo '```'
+            echo ""
             echo "## Server (Docker)"
             echo '```bash'
             echo "git clone https://github.com/sweetcornna/university-helper.git"
