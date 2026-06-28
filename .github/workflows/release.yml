@@ -279,6 +279,14 @@ jobs:
             --target ${{ matrix.rust_target }}
             ${{ steps.signing.outputs.updater == 'false' && '--config {"bundle":{"createUpdaterArtifacts":false}}' || '' }}
 
+      - name: Smoke-test signed macOS sidecar
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          BIN="frontend/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/学道.app/Contents/MacOS/uh-backend"
+          [ -x "$BIN" ] || { echo "missing signed sidecar: $BIN" >&2; exit 1; }
+          bash scripts/smoke_sidecar.sh "$BIN"
+
   # ───────────────────────── 4. publish (gate on everything) ─────────────────
   publish:
     runs-on: ubuntu-latest

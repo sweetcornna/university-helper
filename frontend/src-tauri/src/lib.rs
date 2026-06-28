@@ -15,27 +15,95 @@ struct SidecarProcess(Mutex<Option<CommandChild>>);
 /// loopback port is free again (Tauri does NOT auto-reap sidecars).
 fn kill_sidecar(app: &AppHandle) {
     if let Some(state) = app.try_state::<SidecarProcess>() {
-        if let Some(child) = state.0.lock().unwrap().take() {
-            let _ = child.kill();
+        match state.0.lock() {
+            Ok(mut guard) => {
+                if let Some(child) = guard.take() {
+                    let _ = child.kill();
+                }
+            }
+            Err(err) => eprintln!("[uh-desktop] sidecar state lock poisoned: {err}"),
         }
+    }
+}
+
+fn json_string(value: &str) -> String {
+    match serde_json::to_string(value) {
+        Ok(encoded) => encoded,
+        Err(_) => "\"Startup error\"".to_string(),
+    }
+}
+
+fn show_startup_error(app: &AppHandle, message: impl AsRef<str>) {
+    let message = message.as_ref();
+    eprintln!("[uh-desktop] startup error: {message}");
+
+    let Some(splash) = app.get_webview_window("splash") else {
+        return;
+    };
+
+    let message = json_string(message);
+    let script = format!(
+        r##"
+(() => {{
+  document.body.innerHTML = "";
+  document.body.style.background = "#0b1020";
+  document.body.style.color = "#e6e8ef";
+  document.body.style.fontFamily = "system-ui, sans-serif";
+  document.body.style.display = "grid";
+  document.body.style.placeItems = "center";
+  const root = document.createElement("main");
+  root.style.maxWidth = "380px";
+  root.style.padding = "28px";
+  root.style.textAlign = "center";
+  const title = document.createElement("h1");
+  title.textContent = "学道启动失败";
+  title.style.fontSize = "22px";
+  title.style.margin = "0 0 12px";
+  const body = document.createElement("p");
+  body.textContent = {message};
+  body.style.opacity = "0.78";
+  body.style.lineHeight = "1.55";
+  body.style.margin = "0";
+  root.append(title, body);
+  document.body.append(root);
+}})();
+"##
+    );
+
+    if let Err(err) = splash.eval(&script) {
+        eprintln!("[uh-desktop] failed to render startup error: {err}");
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = match tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // 1. Spawn the workstream-D sidecar. Name matches `externalBin`/the triple base.
-            let sidecar = app
-                .shell()
-                .sidecar("binaries/uh-backend")
-                .expect("failed to create `uh-backend` sidecar command");
-            let (mut rx, child) = sidecar
-                .spawn()
-                .expect("failed to spawn `uh-backend` sidecar");
+            let app_handle = app.handle().clone();
+            let sidecar = match app.shell().sidecar("uh-backend") {
+                Ok(command) => command,
+                Err(err) => {
+                    show_startup_error(
+                        &app_handle,
+                        format!("无法定位本地后端组件 uh-backend：{err}"),
+                    );
+                    return Ok(());
+                }
+            };
+            let (mut rx, child) = match sidecar.spawn() {
+                Ok(spawned) => spawned,
+                Err(err) => {
+                    show_startup_error(
+                        &app_handle,
+                        format!("无法启动本地后端组件 uh-backend：{err}"),
+                    );
+                    return Ok(());
+                }
+            };
 
             // 2. Keep the child so we can kill it on exit.
             app.manage(SidecarProcess(Mutex::new(Some(child))));
@@ -72,28 +140,43 @@ pub fn run() {
                                 }
                                 let url = format!("http://127.0.0.1:{p}");
                                 let h = handle.clone();
-                                // Window creation must run on the main thread.
-                                handle
-                                    .run_on_main_thread(move || {
-                                        WebviewWindowBuilder::new(
+                                let parsed_url = match url.parse() {
+                                    Ok(url) => url,
+                                    Err(err) => {
+                                        show_startup_error(
                                             &h,
-                                            "main",
-                                            WebviewUrl::External(
-                                                url.parse().expect("valid loopback url"),
-                                            ),
-                                        )
-                                        .title("学道")
-                                        .inner_size(1280.0, 832.0)
-                                        .min_inner_size(960.0, 640.0)
-                                        .center()
-                                        .build()
-                                        .expect("failed to build main window");
+                                            format!("本地后端地址无效 {url}：{err}"),
+                                        );
+                                        break;
+                                    }
+                                };
+                                // Window creation must run on the main thread.
+                                let h_for_error = h.clone();
+                                if let Err(err) = handle.run_on_main_thread(move || {
+                                    let build_result = WebviewWindowBuilder::new(
+                                        &h,
+                                        "main",
+                                        WebviewUrl::External(parsed_url),
+                                    )
+                                    .title("学道")
+                                    .inner_size(1280.0, 832.0)
+                                    .min_inner_size(960.0, 640.0)
+                                    .center()
+                                    .build();
+                                    if let Err(err) = build_result {
+                                        show_startup_error(&h, format!("无法创建主窗口：{err}"));
+                                        return;
+                                    }
 
-                                        if let Some(splash) = h.get_webview_window("splash") {
-                                            let _ = splash.close();
-                                        }
-                                    })
-                                    .expect("failed to schedule window creation");
+                                    if let Some(splash) = h.get_webview_window("splash") {
+                                        let _ = splash.close();
+                                    }
+                                }) {
+                                    show_startup_error(
+                                        &h_for_error,
+                                        format!("无法调度主窗口创建：{err}"),
+                                    );
+                                }
                                 break; // got the port; stop scanning stdout
                             }
                         }
@@ -102,10 +185,15 @@ pub fn run() {
                         }
                         CommandEvent::Error(err) => {
                             eprintln!("[uh-backend] error: {err}");
+                            show_startup_error(&handle, format!("本地后端启动输出错误：{err}"));
                             break;
                         }
                         CommandEvent::Terminated(payload) => {
                             eprintln!("[uh-backend] terminated before readiness: {payload:?}");
+                            show_startup_error(
+                                &handle,
+                                format!("本地后端在启动完成前退出：{payload:?}"),
+                            );
                             break;
                         }
                         _ => {}
@@ -120,13 +208,20 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building 学道 desktop app")
-        .run(|app_handle, event| {
-            if let RunEvent::ExitRequested { .. } = event {
-                // THE FOOTGUN: sidecars are not auto-reaped — kill it ourselves.
-                kill_sidecar(app_handle);
-            }
-        });
+    {
+        Ok(app) => app,
+        Err(err) => {
+            eprintln!("[uh-desktop] error while building 学道 desktop app: {err}");
+            return;
+        }
+    };
+
+    app.run(|app_handle, event| {
+        if let RunEvent::ExitRequested { .. } = event {
+            // THE FOOTGUN: sidecars are not auto-reaped — kill it ourselves.
+            kill_sidecar(app_handle);
+        }
+    });
 }
 
 /// Check GitHub Releases for an update; on install, kill the sidecar then relaunch.

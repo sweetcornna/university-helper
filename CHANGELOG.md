@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-06-28
+
+### Fixed
+- Fixed macOS desktop startup crashes caused by the Tauri shell looking up the
+  sidecar with the `externalBin` path instead of the Tauri v2 Rust-side filename.
+- Added macOS entitlements so the ad-hoc signed PyInstaller sidecar can load its
+  embedded Python framework under hardened runtime.
+- Replaced startup-path Rust panics with visible splash-screen errors and stderr
+  logs, preventing recoverable desktop startup failures from becoming `abort()`
+  crashes.
+
+### Tests
+- Added desktop runtime guardrails for sidecar lookup, macOS entitlements, and
+  panic-free startup paths.
+- The release workflow now smoke-tests the signed macOS sidecar after bundling,
+  catching PyInstaller/library-validation failures before publishing.
+
 ## [1.4.1] - 2026-06-28
 
 ### Fixed
