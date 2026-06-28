@@ -106,3 +106,58 @@ async def test_zhihuishu_get_courses_hides_internal_error_details(monkeypatch):
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.detail == "Failed to load Zhihuishu courses"
+
+
+@pytest.mark.asyncio
+async def test_course_start_reports_thread_exhaustion_as_service_unavailable(monkeypatch):
+    class FakeLearningManager:
+        def start_task(self, **kwargs):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(course_api, "_get_learning_manager", lambda: FakeLearningManager())
+
+    request = course_api.CourseStartRequest(platform="chaoxing", username="demo", password="secret")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await course_api.start_course_learning(request=request, current_user={"user_id": "7"})
+
+    assert exc_info.value.status_code == 503
+    assert "cannot start a new background thread" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_zhihuishu_qr_login_reports_thread_exhaustion_as_service_unavailable(monkeypatch):
+    class FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(course_api.threading, "Thread", FailingThread)
+    with course_api._qr_sessions_lock:
+        course_api._qr_sessions.clear()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await course_api.start_zhihuishu_qr_login(current_user={"user_id": "7"})
+
+    assert exc_info.value.status_code == 503
+    assert "cannot start a new background thread" in exc_info.value.detail
+    with course_api._qr_sessions_lock:
+        assert course_api._qr_sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_zhihuishu_start_reports_thread_exhaustion_as_service_unavailable(monkeypatch):
+    fake_adapter = SimpleNamespace(
+        start_course=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("can't start new thread"))
+    )
+    monkeypatch.setattr(course_api, "_get_zhihuishu_adapter", lambda user_id: fake_adapter)
+
+    request = course_api.ZhihuishuCourseRequest(course_id="course-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await course_api.zhihuishu_start_course(request=request, current_user={"user_id": "7"})
+
+    assert exc_info.value.status_code == 503
+    assert "cannot start a new background thread" in exc_info.value.detail

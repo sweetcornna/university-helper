@@ -14,7 +14,7 @@
 #                     a host-nginx vhost template under deploy/nginx/<fqdn>.conf.
 #   --host <ip>       Public IP for plain-http access when you have no domain.
 #   --port <port>     Host port the web container listens on (default: 8080).
-#   --tag <tag>       Image tag to pull (default: latest; e.g. v1.3.0).
+#   --tag <tag>       Image tag to pull (default: latest; e.g. 1.4.0 or v1.4.0).
 #   --build           Build images from source instead of pulling from GHCR.
 #   --no-tls          With --domain, skip the nginx/TLS scaffolding step.
 #   -y, --yes         Assume "yes" for prompts (non-interactive).
@@ -77,6 +77,21 @@ while [[ $# -gt 0 ]]; do
     *) die "Unknown option: $1 (try --help)" ;;
   esac
 done
+
+normalize_image_tag() {
+  local raw="${1:-latest}"
+  if [[ "$raw" =~ ^v[0-9] ]]; then
+    printf '%s' "${raw#v}"
+  else
+    printf '%s' "$raw"
+  fi
+}
+
+RAW_TAG="$TAG"
+TAG="$(normalize_image_tag "$TAG")"
+if [[ "$TAG" != "$RAW_TAG" ]]; then
+  warn "Normalizing release tag ${RAW_TAG} -> ${TAG} for GHCR image tags."
+fi
 
 # ---- platform detection ---------------------------------------------------
 PLATFORM="other"

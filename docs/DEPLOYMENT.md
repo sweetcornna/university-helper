@@ -26,7 +26,8 @@ bash scripts/deploy_server.sh --domain <your-domain>     # production with TLS
 
 This wraps [`docker-compose.release.yml`](../docker-compose.release.yml). The
 prebuilt images are published by [`.github/workflows/release.yml`](../.github/workflows/release.yml)
-on every `v*` tag. Windows hosts can use `scripts/deploy_server.ps1`. The
+on every `v*` Git tag, with image tags like `1.4.1` (no leading `v`). The deploy
+scripts accept either `1.4.1` or `v1.4.1`. Windows hosts can use `scripts/deploy_server.ps1`. The
 sections below document the **existing** `shuake.cornna.xyz` production box,
 where ongoing changes ship via `scripts/hotfix_publish.sh`.
 

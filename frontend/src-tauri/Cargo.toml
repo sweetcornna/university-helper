@@ -1,6 +1,6 @@
 [package]
 name = "uh-desktop"
-version = "1.4.0"                      # stamped from the git tag by scripts/set_version.sh (workstream F)
+version = "1.4.1"                      # stamped from the git tag by scripts/set_version.sh (workstream F)
 description = "学道 — University Helper desktop shell"
 authors = ["sweetcornna"]
 edition = "2021"

@@ -38,6 +38,11 @@ function Info($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Ok($m)   { Write-Host "[ok] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "[!] $m"  -ForegroundColor Yellow }
 function Die($m)  { Write-Host "[x] $m"  -ForegroundColor Red; exit 1 }
+function Normalize-ImageTag([string]$RawTag) {
+  if ([string]::IsNullOrWhiteSpace($RawTag)) { return "latest" }
+  if ($RawTag -match '^v(?=\d)') { return $RawTag.Substring(1) }
+  return $RawTag
+}
 
 function New-HexSecret([int]$Bytes = 32) {
   $b = New-Object byte[] $Bytes
@@ -51,7 +56,13 @@ function New-FernetKey {
   ([Convert]::ToBase64String($b)).Replace('+', '-').Replace('/', '_')
 }
 
-Info "University Helper guided deploy (Windows) — mode: $(if ($Build) {'build'} else {'pull'}), tag: $Tag"
+$RawTag = $Tag
+$ImageTag = Normalize-ImageTag $Tag
+if ($ImageTag -ne $RawTag) {
+  Warn "Normalizing release tag $RawTag -> $ImageTag for GHCR image tags."
+}
+
+Info "University Helper guided deploy (Windows) — mode: $(if ($Build) {'build'} else {'pull'}), tag: $ImageTag"
 
 # ---- docker + compose -----------------------------------------------------
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -103,8 +114,8 @@ if ($Build) {
   docker build -f Dockerfile.web --build-arg "NPM_REGISTRY=$BuildNpmReg" -t "$ImageNs/university-helper-web:local" .
   $env:UH_TAG = "local"
 } else {
-  $env:UH_TAG = $Tag
-  Info "Pulling images $ImageNs/university-helper-{app,web}:$Tag…"
+  $env:UH_TAG = $ImageTag
+  Info "Pulling images $ImageNs/university-helper-{app,web}:$ImageTag…"
   Compose pull
 }
 Info "Starting stack…"

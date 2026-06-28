@@ -11,7 +11,7 @@ _TEST_SECRET = "x" * 32
 
 def test_settings_defaults():
     with patch.dict("os.environ", {"SECRET_KEY": _TEST_SECRET, "CORS_ORIGINS": '["*"]'}):
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.MAIN_DB_HOST == "localhost"
         assert settings.MAIN_DB_PORT == 5432
         assert settings.ALGORITHM == "HS256"
@@ -29,7 +29,7 @@ def test_settings_missing_secret_key():
         clear=True,
     ):
         with pytest.raises(ValidationError):
-            Settings()
+            Settings(_env_file=None)
 
 
 def test_settings_short_secret_key_rejected():
@@ -46,7 +46,7 @@ def test_settings_short_secret_key_rejected():
         clear=True,
     ):
         with pytest.raises(ValidationError):
-            Settings()
+            Settings(_env_file=None)
 
 
 def test_settings_missing_cors():
@@ -60,7 +60,7 @@ def test_settings_missing_cors():
         clear=True,
     ):
         with pytest.raises(ValueError, match="CORS_ORIGINS must be set"):
-            Settings()
+            Settings(_env_file=None)
 
 
 def test_settings_custom_values():
@@ -68,14 +68,14 @@ def test_settings_custom_values():
         "os.environ",
         {"SECRET_KEY": _TEST_SECRET, "CORS_ORIGINS": '["*"]', "MAIN_DB_HOST": "custom", "MAIN_DB_PORT": "3306"},
     ):
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.MAIN_DB_HOST == "custom"
         assert settings.MAIN_DB_PORT == 3306
 
 
 def test_frontend_dist_defaults_empty():
     with patch.dict("os.environ", {"SECRET_KEY": _TEST_SECRET, "CORS_ORIGINS": '["*"]'}):
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.FRONTEND_DIST == ""
 
 
@@ -88,5 +88,5 @@ def test_frontend_dist_from_env():
             "FRONTEND_DIST": "/opt/uh/frontend/dist",
         },
     ):
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.FRONTEND_DIST == "/opt/uh/frontend/dist"

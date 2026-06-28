@@ -18,6 +18,10 @@ INTERRUPTED_STATUSES = {"running", "pending", "paused", "cancelling"}
 RESTART_INTERRUPTED_MESSAGE = "Task interrupted due to service restart"
 UNEXPECTED_WORKER_ERROR_PREFIX = "Unexpected task failure"
 USER_TASK_LOAD_LIMIT = 2000
+THREAD_START_FAILURE_MESSAGE = (
+    "Server cannot start a new background thread. Stop existing tasks and retry, "
+    "or restart the service if the problem persists."
+)
 # Minimum seconds between throttled (high-frequency progress) main-DB upserts of
 # a single task's payload. Video progress callbacks fire ~1/sec per task and
 # each upsert re-serializes the whole growing logs+progress payload as JSONB, so
@@ -113,11 +117,15 @@ class ChaoxingLearningManager:
             self._tasks[task_id] = task_state
         self._persist_task_state(self._task_public_payload(task_state))
 
-        threading.Thread(
-            target=self._run_task_worker_guarded,
-            args=(task_id, user_id, dict(payload or {})),
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=self._run_task_worker_guarded,
+                args=(task_id, user_id, dict(payload or {})),
+                daemon=True,
+            ).start()
+        except RuntimeError as exc:
+            self._fail_task(task_id, THREAD_START_FAILURE_MESSAGE)
+            raise RuntimeError(THREAD_START_FAILURE_MESSAGE) from exc
         return task_id
 
     def get_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:

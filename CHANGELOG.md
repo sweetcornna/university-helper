@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-06-28
+
+### Fixed
+- One-command server deploy now accepts either `1.4.1` or `v1.4.1` and normalizes
+  the input to GHCR's no-`v` image tags, so users following release tags no
+  longer fall back to a local source build accidentally.
+- The released web image healthcheck now probes `127.0.0.1` instead of
+  `localhost`, avoiding false `unhealthy` status when BusyBox resolves
+  `localhost` to IPv6 first.
+- Background task startup failures caused by thread exhaustion now return a
+  clear 503 response and mark Chaoxing/Zhihuishu tasks as terminal failed/error
+  states instead of leaving them stuck pending or running.
+- Zhihuishu QR-login startup errors now show the backend's actionable error
+  message in the web UI.
+
+### Changed
+- README and README.zh-CN now put Quick Start first: desktop app download,
+  one-command server deploy, and local development are at the top; architecture
+  and technical reference sections follow below.
+- Deployment docs and release-compose comments now document publishable GHCR
+  image tags without a leading `v`.
+
+### Tests
+- Added clean-deploy guardrails for tag normalization, release-compose examples,
+  and web image healthchecks.
+- Made config and notification-provider unit tests independent of generated
+  local `.env` files and machine-specific DNS/proxy behavior.
+
 ## [1.3.0] - 2026-06-24
 
 ### Added

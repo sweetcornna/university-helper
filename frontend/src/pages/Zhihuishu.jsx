@@ -904,10 +904,11 @@ export default function Zhihuishu() {
       setQrMessage(resp?.message || '请使用智慧树 App 扫码。')
       setNoticeMessage('success', '二维码已生成，请尽快扫码。')
     } catch (err) {
+      const message = err.message || '创建二维码会话失败。'
       setQrStatus('failed')
-      setQrError(err.message || '创建二维码会话失败。')
-      setQrMessage('无法启动二维码登录。')
-      setNoticeMessage('error', err.message || '创建二维码会话失败。')
+      setQrError(message)
+      setQrMessage(message)
+      setNoticeMessage('error', message)
     } finally {
       setQrLoading(false)
     }

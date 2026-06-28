@@ -20,6 +20,7 @@ import time
 
 import pytest
 
+import app.services.course.zhihuishu.adapter as adapter_module
 from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
 from app.services.course.zhihuishu.crypto import HOME_KEY, VIDEO_KEY, Cipher
 from app.services.course.zhihuishu.learning import ZhihuishuLearning
@@ -135,6 +136,26 @@ def test_loop_calls_watch_video_for_every_video():
     assert progress["completed"] == 2
     assert progress["total"] == 2
     assert progress["percentage"] == 100.0
+
+
+def test_start_course_marks_task_error_when_worker_thread_cannot_start(monkeypatch):
+    adapter = _make_adapter(_chapters(("v1", "Intro", 10)), ai_enabled=False)
+
+    class FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(adapter_module.threading, "Thread", FailingThread)
+
+    with pytest.raises(RuntimeError, match="cannot start a new background thread"):
+        adapter.start_course("c-thread", speed=1.0, auto_answer=False)
+
+    progress = adapter.get_progress("c-thread")
+    assert progress["status"] == "error"
+    assert "cannot start a new background thread" in progress["message"]
 
 
 def test_progress_reflects_failed_watch_response():

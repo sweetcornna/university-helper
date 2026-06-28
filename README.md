@@ -32,6 +32,57 @@ repository name is `university-helper`; parts of the source tree still use the
 historical internal name `easy_learning` (container names, env-var prefixes)
 and we are gradually unifying these.
 
+## Quick Start
+
+### Desktop app
+
+Download the native installer for your OS from the [latest release](../../releases/latest).
+It bundles the backend and runs locally without Docker, Postgres, or Python.
+
+| OS | Download | Notes |
+|---|---|---|
+| Windows 10/11 | `University.Helper_<ver>_x64-setup.exe` / `.msi` | unsigned: SmartScreen → **More info → Run anyway** |
+| macOS (Apple Silicon) | `University.Helper_<ver>_aarch64.dmg` | unsigned: right-click the app → **Open** on first launch |
+| macOS (Intel) | `University.Helper_<ver>_x64.dmg` | same right-click → **Open** |
+| Linux | `university-helper_<ver>_amd64.AppImage` / `.deb` | `chmod +x *.AppImage && ./*.AppImage` |
+
+The app auto-updates from GitHub Releases. Builds are signed for the updater but
+are not yet OS code-signed, so first launch may show Windows/macOS warnings.
+
+### One-command server deploy
+
+For a clean server, install Docker first, then run the guided deploy script. It
+generates `.env`, pulls the prebuilt GHCR images, starts Postgres/backend/web,
+and waits for `/health`.
+
+```bash
+git clone https://github.com/sweetcornna/university-helper.git
+cd university-helper
+
+# Linux / macOS / WSL2
+bash scripts/deploy_server.sh --tag 1.4.1 -y                 # local: http://localhost:8080
+bash scripts/deploy_server.sh --tag 1.4.1 --host 203.0.113.10 -y
+bash scripts/deploy_server.sh --tag 1.4.1 --domain your.domain -y
+
+# Windows (PowerShell + Docker Desktop)
+pwsh scripts/deploy_server.ps1 -Tag 1.4.1 -Port 8080 -Yes
+```
+
+The scripts also accept `v1.4.1` and normalize it to the GHCR image tag
+`1.4.1`. Add `--build` (`-Build` on Windows) to build from source instead of
+pulling release images.
+
+### Local development
+
+```bash
+bash scripts/setup.sh        # creates .env, installs python/node deps
+make start                   # docker-compose stack (app + postgres)
+make test                    # pytest + vitest
+```
+
+Windows users: run these commands inside WSL2, with Docker Desktop WSL
+integration enabled.
+
 ## Highlights
 
 - Multi-tenant via **one Postgres DB per user** (`tenant_<username>`) — cross-tenant data leaks are physically impossible.
@@ -80,42 +131,7 @@ included) reaches it through the browser or installed PWA.
 
 See [Platform Support](./docs/PLATFORMS.md) for platform-specific steps.
 
-## Desktop app (download & run)
-
-Prefer a double-click app over Docker? Grab the native installer for your OS from the
-[**latest release**](../../releases/latest) — it bundles the backend and runs entirely on your
-machine (no Docker, no Postgres, no Python). Tasks run while the app window is open.
-
-| OS | Download | Notes |
-|---|---|---|
-| Windows 10/11 | `University.Helper_<ver>_x64-setup.exe` / `.msi` | unsigned → SmartScreen: **More info → Run anyway** |
-| macOS (Apple Silicon) | `University.Helper_<ver>_aarch64.dmg` | unsigned → **right-click the app → Open** (first launch only) |
-| macOS (Intel) | `University.Helper_<ver>_x64.dmg` | same right-click → Open |
-| Linux | `university-helper_<ver>_amd64.AppImage` / `.deb` | `chmod +x *.AppImage && ./*.AppImage` |
-
-The app **auto-updates** from GitHub Releases (signed updater payloads).
-
-> **Why the unsigned-build warning?** Builds are signed with a free updater key but are not yet OS
-> code-signed (paid). On macOS, right-click → **Open** once to add a Gatekeeper exception; on Windows,
-> click **More info → Run anyway** on the SmartScreen prompt. We are applying to the
-> [**SignPath Foundation**](https://signpath.org/) free OSS code-signing program for Windows; an
-> optional Apple Developer ID ($99/yr) for macOS notarization is planned. Once approved, these warnings
-> go away with no change to how you download.
-
-## Local development
-
-Use the quick bootstrap on Linux, macOS, or Windows via WSL2. The script expects
-Bash, Python 3.11, Node 20/npm, Docker, and Docker Compose.
-
-### Quick bootstrap
-
-```bash
-bash scripts/setup.sh        # creates .env, installs python/node deps
-make start                   # docker-compose stack (app + postgres)
-make test                    # pytest + vitest
-```
-
-Windows users: run these commands inside WSL2, with Docker Desktop WSL integration enabled.
+## Development Details
 
 ### Backend only
 
@@ -183,29 +199,9 @@ automatically, so a mixed chain stays usable as long as one link works.
 > The shared answer cache is always consulted before any provider, so the
 > `LocalCache` source only adds value when selected on its own (cache-only mode).
 
-## Deployment
+## Deployment Details
 
 > **Single source of truth: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).**
-
-### One-command deploy (recommended)
-
-The guided installer needs only Docker. It generates a hardened `.env` (random
-`SECRET_KEY` / `POSTGRES_PASSWORD` / Fernet `CREDENTIAL_ENCRYPTION_KEY`), pulls
-the prebuilt images, starts the stack, waits for health, and (with `--domain`)
-scaffolds a host-nginx + Let's Encrypt vhost.
-
-```bash
-git clone https://github.com/sweetcornna/university-helper.git
-cd university-helper
-
-# Linux / macOS / WSL2
-bash scripts/deploy_server.sh --domain your.domain          # production w/ TLS
-bash scripts/deploy_server.sh --host 203.0.113.10           # plain-http on an IP
-bash scripts/deploy_server.sh                               # local: http://localhost:8080
-
-# Windows (PowerShell + Docker Desktop)
-pwsh scripts/deploy_server.ps1 -Port 8080
-```
 
 Pre-built **multi-arch (amd64 + arm64)** images are published to GHCR on every
 release, so there is nothing to compile:
@@ -213,7 +209,8 @@ release, so there is nothing to compile:
 - `ghcr.io/sweetcornna/university-helper-app` — FastAPI backend
 - `ghcr.io/sweetcornna/university-helper-web` — nginx + the built SPA
 
-Add `--build` (`-Build` on Windows) to build from source instead of pulling.
+Release image tags omit the leading `v` (`1.4.1`, not `v1.4.1`). The deploy
+scripts accept either form.
 
 ### Manual (build from source)
 

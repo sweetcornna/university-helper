@@ -45,6 +45,6 @@ EXPOSE 80
 # Lightweight liveness probe: busybox wget ships in the alpine base. Hitting "/"
 # exercises the SPA fallback without depending on the app/db being up.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -q -O /dev/null http://localhost/ || exit 1
+    CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
 
 # nginx:alpine's default CMD already runs `nginx -g 'daemon off;'`.

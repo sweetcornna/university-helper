@@ -7,10 +7,11 @@
 #
 # Files stamped (locked interface — keep in sync with the CI and the spec §10):
 #   1. frontend/package.json                  (top-level "version")
-#   2. backend/pyproject.toml                 ([project] version = "…")
-#   3. backend/app/main.py                    (FastAPI(version="…"))
-#   4. frontend/src-tauri/tauri.conf.json     (top-level "version")
-#   5. frontend/src-tauri/Cargo.toml          ([package] version = "…")
+#   2. frontend/package-lock.json             (top-level + root package version)
+#   3. backend/pyproject.toml                 ([project] version = "…")
+#   4. backend/app/main.py                    (FastAPI(version="…"))
+#   5. frontend/src-tauri/tauri.conf.json     (top-level "version")
+#   6. frontend/src-tauri/Cargo.toml          ([package] version = "…")
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -47,19 +48,27 @@ edit_json_version() {  # edit_json_version <file>  — set top-level .version
 # 1) frontend/package.json
 edit_json_version "$ROOT/frontend/package.json"
 
-# 2) backend/pyproject.toml — only the line that starts with `version = ` (so
+# 2) frontend/package-lock.json
+if [[ -f "$ROOT/frontend/package-lock.json" ]]; then
+  pkg_lock_tmp="$(mktemp)"
+  jq --arg v "$VERSION" '.version = $v | .packages[""].version = $v' \
+    "$ROOT/frontend/package-lock.json" > "$pkg_lock_tmp"
+  mv "$pkg_lock_tmp" "$ROOT/frontend/package-lock.json"
+fi
+
+# 3) backend/pyproject.toml — only the line that starts with `version = ` (so
 #    requires-python / target-version / python_version are never matched).
 edit_sed "$ROOT/backend/pyproject.toml" \
   's/^version = "[^"]*"/version = "'"$VERSION"'"/'
 
-# 3) backend/app/main.py — the FastAPI(version="…") line (leading indentation).
+# 4) backend/app/main.py — the FastAPI(version="…") line (leading indentation).
 edit_sed "$ROOT/backend/app/main.py" \
   's/^( *version=")[^"]*(",)/\1'"$VERSION"'\2/'
 
-# 4) frontend/src-tauri/tauri.conf.json
+# 5) frontend/src-tauri/tauri.conf.json
 edit_json_version "$ROOT/frontend/src-tauri/tauri.conf.json"
 
-# 5) frontend/src-tauri/Cargo.toml — version under [package] ONLY (a dependency
+# 6) frontend/src-tauri/Cargo.toml — version under [package] ONLY (a dependency
 #    table's `version = "…"` must be left alone). Section-scoped with awk.
 cargo_tmp="$(mktemp)"
 awk -v v="$VERSION" '
@@ -69,4 +78,4 @@ awk -v v="$VERSION" '
 ' "$ROOT/frontend/src-tauri/Cargo.toml" > "$cargo_tmp"
 mv "$cargo_tmp" "$ROOT/frontend/src-tauri/Cargo.toml"
 
-echo "set_version: stamped ${VERSION} into 5 manifests"
+echo "set_version: stamped ${VERSION} into release manifests"

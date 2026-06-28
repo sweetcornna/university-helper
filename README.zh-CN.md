@@ -15,6 +15,53 @@
 
 University Helper 是一个基于 FastAPI 和 React 的全栈校园辅助项目。仓库名使用 `university-helper`，但部分源码目录仍保留历史内部名称 `easy_learning`。
 
+## 快速开始
+
+### 桌面端
+
+从 [最新 Release](../../releases/latest) 下载你的系统对应安装包。桌面端内置后端，
+本机运行，不需要 Docker、Postgres 或 Python。
+
+| 系统 | 下载文件 | 说明 |
+|---|---|---|
+| Windows 10/11 | `University.Helper_<ver>_x64-setup.exe` / `.msi` | 未签名：SmartScreen 中点 **更多信息 → 仍要运行** |
+| macOS Apple Silicon | `University.Helper_<ver>_aarch64.dmg` | 未签名：首次启动右键 App → **打开** |
+| macOS Intel | `University.Helper_<ver>_x64.dmg` | 同样右键 → **打开** |
+| Linux | `university-helper_<ver>_amd64.AppImage` / `.deb` | `chmod +x *.AppImage && ./*.AppImage` |
+
+### 一键部署服务端
+
+全新服务器只需要先安装 Docker，然后运行引导式部署脚本。脚本会自动生成 `.env`、
+拉取预构建镜像、启动 Postgres/backend/web，并等待 `/health` 通过。
+
+```bash
+git clone https://github.com/sweetcornna/university-helper.git
+cd university-helper
+
+# Linux / macOS / WSL2
+bash scripts/deploy_server.sh --tag 1.4.1 -y                 # 本机：http://localhost:8080
+bash scripts/deploy_server.sh --tag 1.4.1 --host 203.0.113.10 -y
+bash scripts/deploy_server.sh --tag 1.4.1 --domain your.domain -y
+
+# Windows（PowerShell + Docker Desktop）
+pwsh scripts/deploy_server.ps1 -Tag 1.4.1 -Port 8080 -Yes
+```
+
+脚本也接受 `v1.4.1`，会自动规范化为 GHCR 镜像 tag `1.4.1`。加 `--build`
+（Windows 为 `-Build`）则改为从源码本地构建。
+
+### 本地开发
+
+```bash
+bash scripts/setup.sh        # 创建 .env，安装 Python/Node 依赖
+make start                   # 启动 docker-compose 栈（app + postgres）
+make test                    # 运行后端 + 前端测试
+```
+
+Windows 用户请在 WSL2 中运行以上命令，并开启 Docker Desktop 的 WSL 集成。
+
+## 功能概览
+
 当前代码库包含：
 
 - 基于 JWT 的用户注册与登录
@@ -98,17 +145,7 @@ University Helper 是 Web 应用。Linux 是生产服务器目标；macOS、Linu
 
 > 答案缓存总会在所有题库之前先查一次，因此 `LocalCache` 仅在单独选用（纯缓存模式）时才有意义，放进回退链里是冗余的。
 
-## 本地开发
-
-### 快速启动
-
-```bash
-bash scripts/setup.sh        # 创建 .env，安装 Python/Node 依赖
-make start                   # 启动 docker-compose 栈（app + postgres）
-make test                    # 运行后端 + 前端测试
-```
-
-Windows 用户请在 WSL2 中运行以上命令，并开启 Docker Desktop 的 WSL 集成。
+## 开发细节
 
 ### 后端单独启动
 
@@ -128,36 +165,17 @@ npm install
 npm run dev                  # http://localhost:3000，/api 代理到 :8000
 ```
 
-## 推荐部署方式
+## 部署细节
 
 > **唯一权威文档：[`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)。**
-
-### 一键部署（推荐）
-
-引导式安装脚本只依赖 Docker：自动生成带随机密钥的 `.env`
-（`SECRET_KEY` / `POSTGRES_PASSWORD` / Fernet `CREDENTIAL_ENCRYPTION_KEY`）、
-拉取预构建镜像、启动整套服务、等待健康检查，并在传入 `--domain` 时为宿主机
-nginx + Let's Encrypt 生成可启用的反代模板。
-
-```bash
-git clone https://github.com/sweetcornna/university-helper.git
-cd university-helper
-
-# Linux / macOS / WSL2
-bash scripts/deploy_server.sh --domain your.domain          # 带 TLS 的生产部署
-bash scripts/deploy_server.sh --host 203.0.113.10           # 仅用 IP 的 http 部署
-bash scripts/deploy_server.sh                               # 本机：http://localhost:8080
-
-# Windows（PowerShell + Docker Desktop）
-pwsh scripts/deploy_server.ps1 -Port 8080
-```
 
 每次发版都会向 GHCR 推送 **多架构（amd64 + arm64）** 镜像，无需本地编译：
 
 - `ghcr.io/sweetcornna/university-helper-app` —— FastAPI 后端
 - `ghcr.io/sweetcornna/university-helper-web` —— nginx + 已构建的前端
 
-加 `--build`（Windows 为 `-Build`）则改为从源码本地构建。
+Release 镜像 tag 不带前缀 `v`（例如 `1.4.1`，不是 `v1.4.1`）。部署脚本两种
+写法都接受。
 
 ### 手动部署（从源码构建）
 

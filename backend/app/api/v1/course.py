@@ -27,6 +27,10 @@ _user_adapters: Dict[str, Dict[str, Any]] = {}  # {"adapter": ..., "last_access"
 _course_tasks: Dict[str, Dict[str, Any]] = {}
 _course_tasks_lock = threading.Lock()
 _learning_manager_instance: Any = None
+THREAD_START_FAILURE_DETAIL = (
+    "Server cannot start a new background thread. Stop existing tasks and retry, "
+    "or restart the service if the problem persists."
+)
 
 
 class CourseStartRequest(BaseModel):
@@ -95,6 +99,19 @@ def _internal_error(message: str, exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=message)
 
 
+def _is_thread_start_failure(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if "can't start new thread" in text or "cannot start new thread" in text:
+        return True
+    cause = getattr(exc, "__cause__", None)
+    return isinstance(cause, Exception) and _is_thread_start_failure(cause)
+
+
+def _thread_start_unavailable(message: str, exc: Exception) -> HTTPException:
+    logger.exception("%s: %s", message, exc)
+    return HTTPException(status_code=503, detail=THREAD_START_FAILURE_DETAIL)
+
+
 async def _run_blocking(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
@@ -139,6 +156,8 @@ async def start_course_learning(
             current_task="preparing",
         )
     except Exception as exc:
+        if _is_thread_start_failure(exc):
+            raise _thread_start_unavailable("Failed to start course learning task", exc) from exc
         raise _internal_error("Failed to start course learning task", exc) from exc
 
 
@@ -442,7 +461,14 @@ async def start_zhihuishu_qr_login(current_user: dict = Depends(get_current_user
                 current_state["message"] = str(exc)
                 current_state["updated_at"] = time.time()
 
-    threading.Thread(target=login_worker, daemon=True).start()
+    try:
+        threading.Thread(target=login_worker, daemon=True).start()
+    except Exception as exc:
+        with _qr_sessions_lock:
+            _qr_sessions.pop(session_id, None)
+        if _is_thread_start_failure(exc):
+            raise _thread_start_unavailable("Failed to start Zhihuishu QR login worker", exc) from exc
+        raise _internal_error("Failed to start Zhihuishu QR login worker", exc) from exc
 
     if not await asyncio.to_thread(qr_ready_event.wait, 12):
         with _qr_sessions_lock:
@@ -639,6 +665,8 @@ async def zhihuishu_start_course(
                 auto_answer=request.auto_answer,
             )
     except Exception as exc:
+        if _is_thread_start_failure(exc):
+            raise _thread_start_unavailable("Failed to start Zhihuishu task", exc) from exc
         raise _internal_error("Failed to start Zhihuishu task", exc) from exc
 
     task_id = str(result.get("task_id") or uuid4().hex)
@@ -682,6 +710,8 @@ async def zhihuishu_start_course_task(
                 auto_answer=auto_answer,
             )
     except Exception as exc:
+        if _is_thread_start_failure(exc):
+            raise _thread_start_unavailable("Failed to start Zhihuishu course task", exc) from exc
         raise _internal_error("Failed to start Zhihuishu course task", exc) from exc
 
     task_id = str(result.get("task_id") or uuid4().hex)
@@ -711,6 +741,8 @@ async def zhihuishu_start_ai_course_task(
                 auto_answer=True,
             )
     except Exception as exc:
+        if _is_thread_start_failure(exc):
+            raise _thread_start_unavailable("Failed to start Zhihuishu AI course task", exc) from exc
         raise _internal_error("Failed to start Zhihuishu AI course task", exc) from exc
 
     task_id = str(result.get("task_id") or uuid4().hex)

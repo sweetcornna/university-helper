@@ -1,5 +1,6 @@
 """Tests for notification provider SSRF guarding (F55) and public interface stability."""
 
+import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +14,24 @@ from app.services.notification.providers import (
     Telegram,
     validate_notification_url,
 )
+
+
+_PUBLIC_NOTIFICATION_HOSTS = {
+    "api.day.app",
+    "sctapi.ftqq.com",
+    "qmsg.zendee.cn",
+    "api.telegram.org",
+}
+
+
+@pytest.fixture
+def public_notification_dns(monkeypatch):
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        if host in _PUBLIC_NOTIFICATION_HOSTS:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+        raise socket.gaierror(f"unexpected DNS lookup in unit test: {host}")
+
+    monkeypatch.setattr("app.services.notification.providers.socket.getaddrinfo", fake_getaddrinfo)
 
 
 @pytest.mark.parametrize(
@@ -45,7 +64,7 @@ def test_validate_rejects_internal_or_bad_urls(url):
         "https://api.telegram.org/bot123/sendMessage",
     ],
 )
-def test_validate_accepts_public_https_urls(url):
+def test_validate_accepts_public_https_urls(public_notification_dns, url):
     assert validate_notification_url(url) is True
 
 
@@ -66,7 +85,7 @@ def test_providers_do_not_post_to_internal_url(provider_cls):
 
 
 @pytest.mark.parametrize("provider_cls", [ServerChan, Qmsg, Bark, Telegram])
-def test_providers_post_to_public_url(provider_cls):
+def test_providers_post_to_public_url(public_notification_dns, provider_cls):
     """A valid public URL must still be delivered (interface unchanged)."""
     svc = _build(provider_cls, "https://api.day.app/token")
     response = MagicMock()

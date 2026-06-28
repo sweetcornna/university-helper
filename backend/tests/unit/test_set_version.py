@@ -1,6 +1,6 @@
-"""scripts/set_version.sh stamps ONE version into all five manifests, idempotently.
+"""scripts/set_version.sh stamps ONE version into all release manifests, idempotently.
 
-Self-contained: synthesizes minimal fixtures for all five files (including the
+Self-contained: synthesizes minimal fixtures for all release files (including the
 Tauri files that workstream E owns) so this test is green regardless of E's state.
 """
 
@@ -20,6 +20,22 @@ PKG_JSON = (
     '  "private": true,\n'
     '  "version": "0.0.0",\n'
     '  "dependencies": { "react": "^18.2.0", "jsqr": "^1.4.0" }\n'
+    "}\n"
+)
+PKG_LOCK = (
+    "{\n"
+    '  "name": "university-helper-frontend",\n'
+    '  "version": "0.0.0",\n'
+    '  "lockfileVersion": 3,\n'
+    '  "requires": true,\n'
+    '  "packages": {\n'
+    '    "": {\n'
+    '      "name": "university-helper-frontend",\n'
+    '      "version": "0.0.0",\n'
+    '      "dependencies": { "react": "^18.2.0", "jsqr": "^1.4.0" }\n'
+    "    },\n"
+    '    "node_modules/jsqr": { "version": "1.4.0" }\n'
+    "  }\n"
     "}\n"
 )
 PYPROJECT = (
@@ -56,6 +72,7 @@ CARGO_TOML = (
 
 FILES = [
     "frontend/package.json",
+    "frontend/package-lock.json",
     "backend/pyproject.toml",
     "backend/app/main.py",
     "frontend/src-tauri/tauri.conf.json",
@@ -69,6 +86,7 @@ def _make_tree(tmp: Path) -> None:
     (tmp / "frontend" / "src-tauri").mkdir(parents=True)
     (tmp / "backend" / "app").mkdir(parents=True)
     (tmp / "frontend" / "package.json").write_text(PKG_JSON)
+    (tmp / "frontend" / "package-lock.json").write_text(PKG_LOCK)
     (tmp / "backend" / "pyproject.toml").write_text(PYPROJECT)
     (tmp / "backend" / "app" / "main.py").write_text(MAIN_PY)
     (tmp / "frontend" / "src-tauri" / "tauri.conf.json").write_text(TAURI_JSON)
@@ -84,10 +102,13 @@ def _run(tmp: Path, version: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_stamps_all_five_manifests(tmp_path):
+def test_stamps_all_release_manifests(tmp_path):
     _make_tree(tmp_path)
     _run(tmp_path, "9.9.9")
     assert json.loads((tmp_path / "frontend/package.json").read_text())["version"] == "9.9.9"
+    package_lock = json.loads((tmp_path / "frontend/package-lock.json").read_text())
+    assert package_lock["version"] == "9.9.9"
+    assert package_lock["packages"][""]["version"] == "9.9.9"
     assert 'version = "9.9.9"' in (tmp_path / "backend/pyproject.toml").read_text()
     assert 'version="9.9.9"' in (tmp_path / "backend/app/main.py").read_text()
     assert json.loads((tmp_path / "frontend/src-tauri/tauri.conf.json").read_text())["version"] == "9.9.9"
@@ -101,6 +122,8 @@ def test_does_not_touch_dependency_versions(tmp_path):
     assert 'tauri = { version = "2"' in cargo  # dep spec untouched
     pkg = json.loads((tmp_path / "frontend/package.json").read_text())
     assert pkg["dependencies"]["react"] == "^18.2.0"  # dep spec untouched
+    package_lock = json.loads((tmp_path / "frontend/package-lock.json").read_text())
+    assert package_lock["packages"]["node_modules/jsqr"]["version"] == "1.4.0"
 
 
 def test_strips_leading_v(tmp_path):

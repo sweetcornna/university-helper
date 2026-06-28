@@ -13,6 +13,10 @@ from .learning import ZhihuishuLearning
 
 logger = logging.getLogger(__name__)
 UNEXPECTED_TASK_ERROR_PREFIX = "Unexpected task failure"
+THREAD_START_FAILURE_MESSAGE = (
+    "Server cannot start a new background thread. Stop existing tasks and retry, "
+    "or restart the service if the problem persists."
+)
 
 
 class ZhihuishuAdapter:
@@ -179,7 +183,11 @@ class ZhihuishuAdapter:
             self._config["auto_answer"] = bool(task_state["auto_answer"])
 
         if total > 0:
-            threading.Thread(target=self._run_task_loop_guarded, args=(task_id,), daemon=True).start()
+            try:
+                threading.Thread(target=self._run_task_loop_guarded, args=(task_id,), daemon=True).start()
+            except RuntimeError as exc:
+                self._mark_task_error(task_id, THREAD_START_FAILURE_MESSAGE)
+                raise RuntimeError(THREAD_START_FAILURE_MESSAGE) from exc
 
         return {
             "task_id": task_id,
