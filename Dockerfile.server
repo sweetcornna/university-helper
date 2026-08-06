@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # ---------- builder ----------
-FROM python:3.11-slim AS builder
+FROM python:3.14-slim AS builder
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
@@ -25,7 +25,7 @@ RUN pip wheel --wheel-dir=/wheels --default-timeout=1000 \
         -r /build/requirements.txt email-validator
 
 # ---------- runtime ----------
-FROM python:3.11-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
