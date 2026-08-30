@@ -25,7 +25,16 @@ git push --follow-tags
 # 3. Verify: gh release view v1.4.0  → installers (.msi/.dmg/.AppImage) + latest.json attached
 ```
 
-macOS caveat: the `x86_64-apple-darwin` desktop leg runs on a native Intel `macos-13`
+### Desktop runners
+
+The desktop matrix currently uses these runner labels:
+
+- Linux: `ubuntu-22.04`
+- Windows: `windows-latest`
+- macOS Apple Silicon: `macos-latest`
+- macOS Intel: `macos-15-intel`
+
+macOS caveat: the `x86_64-apple-darwin` desktop leg runs on a native Intel `macos-15-intel`
 runner because PyInstaller cannot cross-compile the sidecar; `aarch64-apple-darwin` runs
 on the Apple-Silicon `macos-latest`.
 
