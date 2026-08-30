@@ -72,8 +72,8 @@ npm run preview
 
 前端通过 `/api` 代理访问后端 API（默认 localhost:8000）：
 
-- `POST /api/auth/login` - 登录
-- `POST /api/auth/register` - 注册
+- `POST /api/v1/auth/login` - 登录
+- `POST /api/v1/auth/register` - 注册
 
 ## 设计系统
 
