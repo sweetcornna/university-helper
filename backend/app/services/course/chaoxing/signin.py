@@ -1491,11 +1491,20 @@ class ChaoxingSigninManager:
             self._tasks[task_id] = task_state
         self._persist_task_state(self._task_public_payload(task_state))
 
-        threading.Thread(
-            target=self._run_task_worker_guarded,
-            args=(task_id, user_id, payload),
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=self._run_task_worker_guarded,
+                args=(task_id, user_id, payload),
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            # The task has already been persisted as running above.  If the
+            # process cannot create/start its worker, publish a terminal state
+            # before re-raising so it cannot remain stuck in the active feed.
+            message = f"{UNEXPECTED_WORKER_ERROR_PREFIX}: {exc}"
+            self._update_task(task_id, status="error", message=message)
+            self._append_task_log(task_id, message, "error")
+            raise
         return task_id
 
     def start_class_task(self, user_id: str, payload: dict[str, Any]) -> str:
