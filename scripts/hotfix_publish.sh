@@ -80,6 +80,24 @@ fi
 
 remote_sh() { "${SSH_BASE[@]}" "$@"; }
 
+# Quote one value for use as one argument in a POSIX shell command sent over
+# SSH.  ssh concatenates its command arguments and the remote shell parses the
+# resulting string, so merely passing a string as an SSH argument is not
+# sufficient for paths containing shell-significant characters.
+shell_quote() {
+  local value=$1 quoted='' char
+  while [[ -n "$value" ]]; do
+    char=${value%"${value#?}"}
+    if [[ "$char" == "'" ]]; then
+      quoted="${quoted}'\\''"
+    else
+      quoted="${quoted}${char}"
+    fi
+    value=${value#?}
+  done
+  printf "'%s'" "$quoted"
+}
+
 # Expand COMPOSE_FILES into "-f a -f b".
 compose_f_args() { local f; for f in $COMPOSE_FILES; do printf -- "-f %s " "$f"; done; }
 compose_cmd="$COMPOSE_BIN -p $COMPOSE_PROJECT $(compose_f_args)"
@@ -102,11 +120,73 @@ needs_app_hotcopy=false
 needs_web_reload=false
 backend_files=()
 
+# Resolve and validate every input before starting any remote operation.  Keep
+# the canonical source path so a symlink cannot be swapped after validation to
+# make scp read a file outside the repository.
+require_cmd realpath
+repo_root_canonical="$(realpath "$ROOT_DIR")" || {
+  echo "Unable to resolve repository root: $ROOT_DIR" >&2
+  exit 1
+}
+validated_rel_paths=()
+validated_abs_paths=()
+shell_meta_chars=(
+  $'\x27' $'\x22' $'\x60' $'\x24' $'\x5c'
+  $'\x3b' $'\x26' $'\x7c' $'\x3c' $'\x3e'
+  $'\x28' $'\x29' $'\x5b' $'\x5d' $'\x7b' $'\x7d'
+  $'\x21' $'\x2a' $'\x3f'
+)
+
 for rel_path in "$@"; do
+  case "$rel_path" in
+    ""|/*)
+      echo "Invalid repository-relative path: $rel_path" >&2
+      exit 1
+      ;;
+    *[$'\001'-$'\037'$'\177']*)
+      echo "Path contains control characters: $rel_path" >&2
+      exit 1
+      ;;
+  esac
+
+  for meta_char in "${shell_meta_chars[@]}"; do
+    if [[ "$rel_path" == *"$meta_char"* ]]; then
+      echo "Path contains shell-significant characters: $rel_path" >&2
+      exit 1
+    fi
+  done
+
   abs_path="$ROOT_DIR/$rel_path"
-  [[ -f "$abs_path" ]] || { echo "File not found: $rel_path" >&2; exit 1; }
-  remote_sh "mkdir -p '$(dirname "$REMOTE_DIR/$rel_path")'"
-  "${SCP_BASE[@]}" "$abs_path" "${SERVER_USER}@${SERVER_IP}:$REMOTE_DIR/$rel_path"
+  if ! canonical_path="$(realpath "$abs_path" 2>/dev/null)"; then
+    echo "File not found: $rel_path" >&2
+    exit 1
+  fi
+  if [[ "$canonical_path" == *[$'\001'-$'\037'$'\177']* ]]; then
+    echo "Resolved path contains control characters: $rel_path" >&2
+    exit 1
+  fi
+  case "$canonical_path" in
+    "$repo_root_canonical"/*) ;;
+    *)
+      echo "Path escapes repository root: $rel_path" >&2
+      exit 1
+      ;;
+  esac
+  [[ -f "$canonical_path" ]] || { echo "Not a regular file: $rel_path" >&2; exit 1; }
+
+  validated_rel_paths+=("$rel_path")
+  validated_abs_paths+=("$canonical_path")
+done
+
+for index in "${!validated_rel_paths[@]}"; do
+  rel_path="${validated_rel_paths[$index]}"
+  abs_path="${validated_abs_paths[$index]}"
+  remote_path="$REMOTE_DIR/$rel_path"
+  remote_dir="$(dirname "$remote_path")"
+  remote_path_quoted="$(shell_quote "$remote_path")"
+  remote_dir_quoted="$(shell_quote "$remote_dir")"
+  remote_sh "mkdir -p $remote_dir_quoted"
+  "${SCP_BASE[@]}" "$abs_path" "${SERVER_USER}@${SERVER_IP}:$remote_path"
 
   case "$rel_path" in
     backend/*) backend_files+=("$rel_path"); needs_app_hotcopy=true ;;
@@ -125,7 +205,11 @@ if [[ "$needs_app_rebuild" == true ]]; then
 elif [[ "$needs_app_hotcopy" == true ]]; then
   echo "Hot-copying backend files into $APP_CONTAINER"
   for rel_path in "${backend_files[@]}"; do
-    remote_sh "docker cp '$REMOTE_DIR/$rel_path' '$APP_CONTAINER:$APP_BACKEND_DIR/${rel_path#backend/}'"
+    remote_path="$REMOTE_DIR/$rel_path"
+    backend_target="$APP_CONTAINER:$APP_BACKEND_DIR/${rel_path#backend/}"
+    remote_path_quoted="$(shell_quote "$remote_path")"
+    backend_target_quoted="$(shell_quote "$backend_target")"
+    remote_sh "docker cp $remote_path_quoted $backend_target_quoted"
   done
   remote_sh "docker restart '$APP_CONTAINER' >/dev/null"
 fi
