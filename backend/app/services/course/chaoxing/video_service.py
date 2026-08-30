@@ -18,6 +18,7 @@ from .constants import (
     VIDEO_SLEEP_THRESHOLD,
     VIDEO_WAIT_TIME_MAX,
     VIDEO_WAIT_TIME_MIN,
+    StudyResult,
 )
 from .course_service import get_timestamp
 from .rate_limiter import RateLimiter
@@ -227,8 +228,6 @@ class ChaoxingVideoService:
         Returns:
             StudyResult indicating success, forbidden, error, or timeout
         """
-        from .client import StudyResult
-
         _session = self.session_manager.get_session()
 
         headers = gc.VIDEO_HEADERS if _type == "Video" else gc.AUDIO_HEADERS

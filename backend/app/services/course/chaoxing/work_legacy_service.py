@@ -10,6 +10,7 @@ from loguru import logger
 
 from .answer import Tiku
 from .answer_check import cut
+from .constants import StudyResult
 from .decode import decode_questions_info
 from .exceptions import MaxRetryExceeded
 
@@ -304,8 +305,6 @@ class ChaoxingWorkLegacyService:
         Returns:
             StudyResult enum value
         """
-        from .client import StudyResult
-
         if not self.tiku or self.tiku.DISABLE:
             return StudyResult.SUCCESS
         _ORIGIN_HTML_CONTENT = ""
