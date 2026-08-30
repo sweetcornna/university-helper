@@ -39,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote
 
@@ -127,7 +128,31 @@ def _db_exists(name: str) -> bool:
         conn.close()
 
 
+def _alembic_workdir() -> Path | None:
+    """Find the backend directory containing this script's Alembic config.
+
+    Locally the script lives in ``repo/scripts`` and the config is in
+    ``repo/backend``. In the app container it is mounted below
+    ``/srv/backend/scripts`` beside ``/srv/backend/alembic.ini``. Resolving
+    from ``__file__`` keeps the migration independent of the caller's CWD.
+    """
+    script_root = Path(__file__).resolve().parent.parent
+    repo_backend = script_root / "backend"
+    if (repo_backend / "alembic.ini").is_file():
+        return repo_backend
+    if (script_root / "alembic.ini").is_file():
+        return script_root
+    logger.error(
+        "Alembic config not found relative to %s; expected backend/alembic.ini",
+        Path(__file__).resolve(),
+    )
+    return None
+
+
 def _migrate_one(name: str, dry_run: bool) -> bool:
+    workdir = _alembic_workdir()
+    if workdir is None:
+        return False
     url = _build_alembic_url(name)
     env = {**os.environ, "ALEMBIC_DB_URL": url}
     # Target ONLY the tenant_db branch head — never the main-DB migrations
@@ -136,7 +161,7 @@ def _migrate_one(name: str, dry_run: bool) -> bool:
     if dry_run:
         cmd = ["alembic", "current"]
     logger.info("[%s] %s", name, " ".join(cmd))
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=workdir, env=env, capture_output=True, text=True)
     if result.returncode != 0:
         logger.error("[%s] failed: %s", name, result.stderr.strip())
         return False
