@@ -4,12 +4,10 @@
 FROM python:3.11-slim AS builder
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
-    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && echo "${PIP_INDEX_URL}" | grep -q tsinghua; then \
@@ -28,12 +26,10 @@ RUN pip wheel --wheel-dir=/wheels --default-timeout=1000 \
 FROM python:3.11-slim AS runtime
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
-    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_INDEX=1
 

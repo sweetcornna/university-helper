@@ -2,12 +2,18 @@
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TAURI_CONFIG = REPO_ROOT / "frontend" / "src-tauri" / "tauri.conf.json"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
+ACTIVE_PIP_BUILD_CONFIGS = (
+    REPO_ROOT / "Dockerfile.server",
+    REPO_ROOT / ".github" / "workflows" / "test.yml",
+    RELEASE_WORKFLOW,
+)
 
 
 def _tauri_config() -> dict:
@@ -20,6 +26,20 @@ def _clean_yaml_value(value: str) -> str:
 
 def _workflow_text() -> str:
     return RELEASE_WORKFLOW.read_text()
+
+
+def test_active_pip_build_configs_keep_tls_verification_enabled():
+    forbidden_tokens = ("PIP_TRUSTED_HOST", "trusted-host", "--trusted-host")
+    index_url_pattern = re.compile(r"\bPIP_INDEX_URL\s*[:=]\s*(https?://[^\s\\|'\"]+)")
+
+    for config_path in ACTIVE_PIP_BUILD_CONFIGS:
+        config_text = config_path.read_text()
+        for token in forbidden_tokens:
+            assert token not in config_text, f"{token} present in {config_path}"
+
+        index_urls = index_url_pattern.findall(config_text)
+        assert index_urls, f"no static PIP_INDEX_URL found in {config_path}"
+        assert all(url.startswith("https://") for url in index_urls), config_path
 
 
 def _workflow_lines() -> list[str]:

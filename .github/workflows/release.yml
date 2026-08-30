@@ -170,7 +170,6 @@ jobs:
           # default when building on GitHub-hosted runners.
           build-args: |
             PIP_INDEX_URL=https://pypi.org/simple
-            PIP_TRUSTED_HOST=pypi.org
           tags: |
             ${{ env.APP_IMAGE }}:${{ steps.meta.outputs.version }}
             ${{ env.APP_IMAGE }}:latest
