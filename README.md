@@ -237,10 +237,19 @@ scripts accept either form.
 
 ### Manual (build from source)
 
+For this host-nginx/source-Compose path, install Docker Compose and Node.js 20
+(matching `.nvmrc`) first. `Dockerfile.server` builds the backend only, so the
+SPA must be built on the host before nginx serves it.
+
 ```bash
 cp .env.example .env       # fill SECRET_KEY, POSTGRES_PASSWORD, CREDENTIAL_ENCRYPTION_KEY, CORS_ORIGINS
+node --version              # must report 20.x
+cd frontend && npm ci && npm run build
+cd ..                       # return to the repository root
 docker compose -f docker-compose.server.yml -p university-helper up -d --build
 ```
+
+Confirm that `frontend/dist/` exists before configuring host nginx to serve it.
 
 Hotfix individual files to a running prod box (SSH-key auth preferred):
 ```bash

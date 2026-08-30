@@ -119,9 +119,16 @@ If you are setting up a brand new server (rare):
 2. `mkdir -p /opt/university-helper && cd /opt/university-helper`
 3. `git clone <repo>` or `rsync` the source (excluding `.env`, `node_modules`, `dist`, `__pycache__`).
 4. Create `/opt/university-helper/.env` manually with real secrets (see above).
-5. `docker compose -f docker-compose.server.yml up -d --build`
-6. Configure host nginx with TLS termination at `shuake.cornna.xyz`, `root frontend/dist;`, and `proxy_pass http://127.0.0.1:8000` for `/api/`.
-7. Verify: `curl -fsS http://127.0.0.1:8000/health` and `curl -fsS https://shuake.cornna.xyz/`.
+5. Install Node.js 20 (matching `.nvmrc`). From the repository root, build the SPA before configuring nginx:
+   ```bash
+   node --version  # must report 20.x
+   cd frontend && npm ci && npm run build
+   cd ..           # return to the repository root
+   ```
+6. Confirm that `frontend/dist/` exists; `Dockerfile.server` builds only the backend, so this must happen before nginx is configured to serve the SPA.
+7. `docker compose -f docker-compose.server.yml up -d --build`
+8. Configure host nginx with TLS termination at `shuake.cornna.xyz`, `root frontend/dist;`, and `proxy_pass http://127.0.0.1:8000` for `/api/`.
+9. Verify: `curl -fsS http://127.0.0.1:8000/health` and `curl -fsS https://shuake.cornna.xyz/`.
 
 ---
 
@@ -258,9 +265,16 @@ export EASY_LEARNING_SERVER_PASSWORD=<从密钥管理获取>
 2. `mkdir -p /opt/university-helper && cd /opt/university-helper`
 3. `git clone <repo>` 或用 `rsync` 上传源码（排除 `.env`、`node_modules`、`dist`、`__pycache__`）。
 4. 在 `/opt/university-helper/.env` 中**手动**写入真实密钥（参见上文）。
-5. `docker compose -f docker-compose.server.yml up -d --build`
-6. 配置宿主机 nginx：在 `shuake.cornna.xyz` 上做 TLS 终结，`root frontend/dist;`，并将 `/api/` 反代到 `http://127.0.0.1:8000`。
-7. 验证：`curl -fsS http://127.0.0.1:8000/health` 与 `curl -fsS https://shuake.cornna.xyz/`。
+5. 安装 Node.js 20（以 `.nvmrc` 为准）。在仓库根目录先构建前端，再配置 nginx：
+   ```bash
+   node --version  # 必须是 20.x
+   cd frontend && npm ci && npm run build
+   cd ..           # 回到仓库根目录
+   ```
+6. 确认 `frontend/dist/` 已生成；`Dockerfile.server` 只构建后端，因此必须在配置 nginx 提供前端静态文件之前完成这一步。
+7. `docker compose -f docker-compose.server.yml up -d --build`
+8. 配置宿主机 nginx：在 `shuake.cornna.xyz` 上做 TLS 终结，`root frontend/dist;`，并将 `/api/` 反代到 `http://127.0.0.1:8000`。
+9. 验证：`curl -fsS http://127.0.0.1:8000/health` 与 `curl -fsS https://shuake.cornna.xyz/`。
 
 ---
 

@@ -190,10 +190,19 @@ Release 镜像 tag 不带前缀 `v`（例如 `1.4.5`，不是 `v1.4.5`）。部�
 
 ### 手动部署（从源码构建）
 
+这条“宿主机 nginx + 源码 Compose”路径需要先准备 Docker Compose 和 Node.js 20
+（以 `.nvmrc` 为准）。`Dockerfile.server` 只构建后端，因此必须先在宿主机生成前端
+静态文件，再让 nginx 提供服务。
+
 ```bash
 cp .env.example .env
+node --version              # 必须是 20.x
+cd frontend && npm ci && npm run build
+cd ..                       # 回到仓库根目录
 docker compose -f docker-compose.server.yml up -d --build
 ```
+
+必须确认 `frontend/dist/` 已生成，再配置宿主机 nginx 来 serve 该目录。
 
 仓库根目录下的 `.env.example` 已按 `docker-compose.server.yml` 准备好。原根目录下的 `deploy.*` 脚本已经移动到 [`scripts/_legacy/`](./scripts/_legacy/)，禁止运行。增量更新生产环境请用 `scripts/hotfix_publish.sh`。
 

@@ -163,6 +163,8 @@ npm run dev">复制</button></div>
       <p>
         生产部署使用 <code>docker-compose.server.yml</code> + <code>Dockerfile.server</code>，
         由宿主机 nginx 负责 TLS 终止与前端静态文件（栈内<strong>没有</strong> nginx 容器）。
+        源码部署前请准备 Node.js 20（以仓库 <code>.nvmrc</code> 为准）；
+        <code>Dockerfile.server</code> 不构建前端，必须先生成 <code>frontend/dist/</code>，再配置 nginx。
         权威文档见仓库内 <a href="https://github.com/sweetcornna/university-helper/blob/main/docs/DEPLOYMENT.md" target="_blank" rel="noopener">docs/DEPLOYMENT.md</a>。
       </p>
 
@@ -170,18 +172,25 @@ npm run dev">复制</button></div>
         <div class="wiki-code-head"><span>terminal</span><button class="copy-btn mono" type="button" data-copy="git clone https://github.com/sweetcornna/university-helper.git
 cd university-helper
 cp .env.example .env
+node --version
+cd frontend &amp;&amp; npm ci &amp;&amp; npm run build
+cd ..
 docker compose -f docker-compose.server.yml -p university-helper up -d --build">复制</button></div>
         <pre><code><span class="c-prompt">$</span> git clone https://github.com/sweetcornna/university-helper.git
 <span class="c-prompt">$</span> cd university-helper
 <span class="c-prompt">$</span> cp .env.example .env   <span class="c-comment"># 填 SECRET_KEY · POSTGRES_PASSWORD · CREDENTIAL_ENCRYPTION_KEY · CORS_ORIGINS</span>
+<span class="c-prompt">$</span> node --version          <span class="c-comment"># Node.js 20.x</span>
+<span class="c-prompt">$</span> cd frontend &amp;&amp; npm ci &amp;&amp; npm run build
+<span class="c-prompt">$</span> cd ..                    <span class="c-comment"># 回到仓库根目录</span>
 <span class="c-prompt">$</span> docker compose -f docker-compose.server.yml -p university-helper up -d --build</code></pre>
       </div>
 
       <p>首次部署的检查顺序：</p>
       <ol>
         <li>手动创建并填好 <code>.env</code>（见上节，密钥不进仓库）。</li>
+        <li>确认上方 Node.js 20 构建已完成，并且 <code>frontend/dist/</code> 已生成。</li>
         <li><code>docker compose … up -d --build</code> 起栈。</li>
-        <li>配置宿主机 nginx：TLS 终止、<code>root frontend/dist;</code>、<code>/api/</code> 反代到 <code>http://127.0.0.1:8000</code>。</li>
+        <li>确认 <code>frontend/dist/</code> 已生成后，再配置宿主机 nginx：TLS 终止、<code>root frontend/dist;</code>、<code>/api/</code> 反代到 <code>http://127.0.0.1:8000</code>。</li>
         <li>验证：<code>curl -fsS http://127.0.0.1:8000/health</code>。</li>
       </ol>
 
