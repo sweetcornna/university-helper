@@ -7,7 +7,7 @@ services:
     container_name: shuake-easy-learning-app
     restart: on-failure:5
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
     environment:
       MAIN_DB_HOST: postgres
       MAIN_DB_NAME: main_db
