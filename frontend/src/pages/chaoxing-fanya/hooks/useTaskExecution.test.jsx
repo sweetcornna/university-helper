@@ -407,4 +407,171 @@ describe('useTaskExecution task generations', () => {
       rendered.cleanup()
     }
   })
+
+
+  test('deduplicates a control action while pending and allows the state-gated next action after success', async () => {
+    const pauseRequest = deferred()
+    let statusCalls = 0
+    const callApi = vi.fn((path) => {
+      if (path === '/course/tasks') return Promise.resolve([])
+      if (path === '/course/status/A') {
+        statusCalls += 1
+        return Promise.resolve(status('A', statusCalls === 1 ? 'running' : 'paused'))
+      }
+      if (path.startsWith('/course/logs/A?cursor=')) return Promise.resolve(logs('A', statusCalls))
+      if (path === '/course/task/A/pause') return pauseRequest.promise
+      if (path === '/course/task/A/resume') return Promise.resolve({ message: 'Task resumed' })
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const rendered = renderTaskExecution(callApi)
+
+
+    try {
+      act(() => rendered.current.setTaskId('A'))
+      await flush()
+
+
+      let firstPause
+      let secondPause
+      act(() => {
+        firstPause = rendered.current.controlTask('pause')
+        secondPause = rendered.current.controlTask('pause')
+      })
+      expect(callApi.mock.calls.filter(([path]) => path === '/course/task/A/pause')).toHaveLength(1)
+      expect(rendered.current.controlLoading).toEqual({ pause: true })
+
+
+      await act(async () => {
+        pauseRequest.resolve({ message: 'Task paused' })
+        await firstPause
+      })
+      await secondPause
+      await flush()
+
+
+      expect(rendered.current.controlLoading).toEqual({})
+      expect(rendered.current.taskStatus.status).toBe('paused')
+
+
+      await act(async () => {
+        await rendered.current.controlTask('resume')
+      })
+      expect(callApi.mock.calls.filter(([path]) => path === '/course/task/A/resume')).toHaveLength(1)
+      expect(rendered.current.controlLoading).toEqual({})
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+
+  test('releases a failed control request so the same action can be retried', async () => {
+    const firstPause = deferred()
+    const secondPause = deferred()
+    const pauseRequests = [firstPause, secondPause]
+    const callApi = vi.fn((path) => {
+      if (path === '/course/tasks') return Promise.resolve([])
+      if (path === '/course/status/A') return Promise.resolve(status('A', 'running'))
+      if (path.startsWith('/course/logs/A?cursor=')) return Promise.resolve(logs('A'))
+      if (path === '/course/task/A/pause') return pauseRequests.shift().promise
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const rendered = renderTaskExecution(callApi)
+
+
+    try {
+      act(() => rendered.current.setTaskId('A'))
+      await flush()
+
+
+      let firstAttempt
+      act(() => {
+        firstAttempt = rendered.current.controlTask('pause')
+      })
+      expect(rendered.current.controlLoading).toEqual({ pause: true })
+      await act(async () => {
+        firstPause.reject(new Error('pause failed'))
+        await firstAttempt
+      })
+      await flush()
+
+
+      expect(rendered.current.controlLoading).toEqual({})
+      let secondAttempt
+      act(() => {
+        secondAttempt = rendered.current.controlTask('pause')
+      })
+      expect(callApi.mock.calls.filter(([path]) => path === '/course/task/A/pause')).toHaveLength(2)
+      await act(async () => {
+        secondPause.resolve({ message: 'Task paused' })
+        await secondAttempt
+      })
+      expect(rendered.current.controlLoading).toEqual({})
+      expect(rendered.setError).toHaveBeenCalledWith('pause failed')
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+
+  test('keeps a new task control lock when the previous task request settles', async () => {
+    const aPause = deferred()
+    const bPause = deferred()
+    const callApi = vi.fn((path) => {
+      if (path === '/course/tasks') return Promise.resolve([])
+      if (path === '/course/status/A') return Promise.resolve(status('A', 'running'))
+      if (path === '/course/status/B') return Promise.resolve(status('B', 'running'))
+      if (path.startsWith('/course/logs/A?cursor=')) return Promise.resolve(logs('A'))
+      if (path.startsWith('/course/logs/B?cursor=')) return Promise.resolve(logs('B'))
+      if (path === '/course/task/A/pause') return aPause.promise
+      if (path === '/course/task/B/pause') return bPause.promise
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const rendered = renderTaskExecution(callApi)
+
+
+    try {
+      act(() => rendered.current.setTaskId('A'))
+      await flush()
+      act(() => {
+        void rendered.current.controlTask('pause')
+      })
+      expect(rendered.current.controlLoading).toEqual({ pause: true })
+
+
+      act(() => rendered.current.setTaskId('B'))
+      await flush()
+      act(() => {
+        void rendered.current.controlTask('pause')
+      })
+      expect(callApi.mock.calls.filter(([path]) => path === '/course/task/B/pause')).toHaveLength(1)
+      expect(rendered.current.controlLoading).toEqual({ pause: true })
+
+
+      await act(async () => {
+        aPause.resolve({ message: 'Task paused' })
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      await flush()
+
+
+      expect(rendered.current.taskId).toBe('B')
+      expect(rendered.current.controlLoading).toEqual({ pause: true })
+      act(() => {
+        void rendered.current.controlTask('pause')
+      })
+      expect(callApi.mock.calls.filter(([path]) => path === '/course/task/B/pause')).toHaveLength(1)
+
+
+      await act(async () => {
+        bPause.resolve({ message: 'Task paused' })
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      await flush()
+      expect(rendered.current.controlLoading).toEqual({})
+    } finally {
+      rendered.cleanup()
+    }
+  })
 })

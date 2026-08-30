@@ -3,7 +3,7 @@ import { CARD, DONE_STATUSES, toNum, normalizeCourseText } from '../utils'
 
 export default function TaskControlSection({
   taskId, taskStatus, loading, isRunning, statusText,
-  startTask, controlTask,
+  startTask, controlTask, controlLoading = {},
 }) {
 
 
@@ -69,7 +69,7 @@ export default function TaskControlSection({
           }}
 
 
-          disabled={statusText !== 'running'}
+          disabled={statusText !== 'running' || Boolean(controlLoading?.pause)}
 
 
           className="min-h-[44px] cursor-pointer rounded-xl border border-amber-300 px-4 py-2 disabled:cursor-not-allowed disabled:border-border"
@@ -99,7 +99,7 @@ export default function TaskControlSection({
           }}
 
 
-          disabled={statusText !== 'paused'}
+          disabled={statusText !== 'paused' || Boolean(controlLoading?.resume)}
 
 
           className="min-h-[44px] cursor-pointer rounded-xl border border-success px-4 py-2 disabled:cursor-not-allowed disabled:border-border"
@@ -127,7 +127,7 @@ export default function TaskControlSection({
           }}
 
 
-          disabled={!taskId || statusText === 'cancelling' || DONE_STATUSES.has(statusText)}
+          disabled={!taskId || statusText === 'cancelling' || DONE_STATUSES.has(statusText) || Boolean(controlLoading?.stop)}
 
 
           className="min-h-[44px] cursor-pointer rounded-xl border border-danger/30 px-4 py-2 disabled:cursor-not-allowed disabled:border-border"

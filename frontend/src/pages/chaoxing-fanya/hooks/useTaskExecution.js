@@ -20,6 +20,13 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
   const pollInFlightRef = useRef(null)
 
 
+  // Keep control requests keyed by task/action so a repeated click cannot
+  // issue another non-idempotent request. A task switch must not release a
+  // different task's loading state, so entries are retained until their own
+  // request settles.
+  const controlInFlightRef = useRef(new Map())
+
+
   const [taskId, setTaskIdState] = useState('')
 
 
@@ -36,6 +43,9 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
 
 
   const [loading, setLoading] = useState(false)
+
+
+  const [controlLoading, setControlLoading] = useState({})
 
 
   const isCurrentGeneration = useCallback((generation) => generation === taskGenerationRef.current, [])
@@ -58,6 +68,13 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       setLogs([])
       setLogCursor(0)
       logCursorRef.current = 0
+
+      const taskControls = controlInFlightRef.current.get(normalizedId)
+      const nextControlLoading = {}
+      taskControls?.forEach((_request, action) => {
+        nextControlLoading[action] = true
+      })
+      setControlLoading(nextControlLoading)
     }
 
 
@@ -468,6 +485,22 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
 
       const generation = taskGenerationRef.current
       const targetId = taskId
+      if (!isCurrentTask(generation, targetId)) return
+
+      const taskControls = controlInFlightRef.current.get(targetId) || new Map()
+      if (taskControls.has(action)) {
+        // The ref is the authoritative guard; state updates are only for the
+        // current task's button feedback and may not have rendered yet.
+        if (isCurrentTask(generation, targetId)) {
+          setControlLoading((prev) => (prev[action] ? prev : { ...prev, [action]: true }))
+        }
+        return
+      }
+
+      const inFlight = { generation, taskId: targetId, action }
+      taskControls.set(action, inFlight)
+      controlInFlightRef.current.set(targetId, taskControls)
+      setControlLoading((prev) => ({ ...prev, [action]: true }))
 
 
       try {
@@ -493,6 +526,25 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
         }
 
 
+      } finally {
+        const currentTaskControls = controlInFlightRef.current.get(targetId)
+        if (currentTaskControls?.get(action) === inFlight) {
+          currentTaskControls.delete(action)
+          if (currentTaskControls.size === 0) {
+            controlInFlightRef.current.delete(targetId)
+          }
+
+          // A stale request may settle after the user opened another task. It
+          // can release only its own ref entry, never the new task's UI lock.
+          if (taskIdRef.current === targetId) {
+            setControlLoading((prev) => {
+              if (!prev[action]) return prev
+              const next = { ...prev }
+              delete next[action]
+              return next
+            })
+          }
+        }
       }
 
 
@@ -513,6 +565,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     logCursorRef,
     taskHistory, setTaskHistory,
     loading, setLoading,
+    controlLoading,
     appendLogs,
     loadTaskSnapshot,
     selectTaskFromHistory,

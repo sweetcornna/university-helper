@@ -260,6 +260,7 @@ export default function ChaoxingFanya() {
               taskId={taskExec.taskId}
               taskStatus={taskExec.taskStatus}
               loading={taskExec.loading}
+              controlLoading={taskExec.controlLoading}
               isRunning={isRunning}
               statusText={statusText}
               startTask={startTask}
