@@ -6,9 +6,14 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TAURI_CONFIG = REPO_ROOT / "frontend" / "src-tauri" / "tauri.conf.json"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
+WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
+ACTIVE_WORKFLOW_SUFFIXES = {".yml", ".yaml"}
+FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ACTIVE_PIP_BUILD_CONFIGS = (
     REPO_ROOT / "Dockerfile.server",
     REPO_ROOT / ".github" / "workflows" / "test.yml",
@@ -224,7 +229,11 @@ def _desktop_matrix_entries() -> list[dict[str, str]]:
 
 def _tauri_action_env_keys() -> set[str]:
     lines = RELEASE_WORKFLOW.read_text().splitlines()
-    action_index = next(i for i, line in enumerate(lines) if line.strip() == "uses: tauri-apps/tauri-action@v0")
+    action_index = next(
+        i
+        for i, line in enumerate(lines)
+        if re.match(r"^\s*uses: tauri-apps/tauri-action@[0-9a-f]{40}\s+# v0$", line)
+    )
     step_lines: list[str] = []
 
     for line in lines[action_index + 1 :]:
@@ -248,6 +257,37 @@ def _tauri_action_env_keys() -> set[str]:
                 env_keys.add(key)
 
     return env_keys
+
+
+def _workflow_external_uses() -> list[tuple[Path, int, str]]:
+    """Return active workflow action references, excluding local ``./`` uses."""
+    use_pattern = re.compile(r"^(?:-\s+)?uses:\s*(?P<action>[^#\s]+)")
+    references: list[tuple[Path, int, str]] = []
+
+    for workflow_path in sorted(WORKFLOWS_DIR.iterdir()):
+        if not workflow_path.is_file() or workflow_path.suffix not in ACTIVE_WORKFLOW_SUFFIXES:
+            continue
+        for line_number, line in enumerate(workflow_path.read_text().splitlines(), start=1):
+            if line.lstrip().startswith("#"):
+                continue
+            match = use_pattern.match(line.strip())
+            if match is None:
+                continue
+            action = match.group("action")
+            if action.startswith("./"):
+                continue
+            references.append((workflow_path, line_number, action))
+
+    return references
+
+
+def _assert_pinned_external_use(action: str, source: str) -> None:
+    """Require an external workflow action to use a lowercase, full commit SHA."""
+    owner_repo, separator, ref = action.rpartition("@")
+    assert separator and owner_repo and ref, f"{source}: malformed external action reference {action!r}"
+    assert FULL_SHA_RE.fullmatch(ref), (
+        f"{source}: external action {action!r} must be pinned to a 40-character lowercase commit SHA"
+    )
 
 
 def test_windows_msi_uses_chinese_wix_language_for_chinese_product_name():
@@ -346,6 +386,20 @@ def test_release_workflow_run_blocks_do_not_interpolate_github_expressions():
     assert len(blocks) == 16
     for job_name, step_name, script in blocks:
         assert "${{" not in script, f"direct GitHub expression in {job_name}/{step_name}"
+
+
+def test_active_workflow_actions_are_pinned_to_full_lowercase_shas():
+    references = _workflow_external_uses()
+
+    assert references, "no external workflow actions found"
+    for workflow_path, line_number, action in references:
+        _assert_pinned_external_use(action, f"{workflow_path}:{line_number}")
+
+
+@pytest.mark.parametrize("mutable_ref", ["master", "v4"])
+def test_mutable_workflow_action_refs_are_rejected(mutable_ref):
+    with pytest.raises(AssertionError, match="40-character lowercase commit SHA"):
+        _assert_pinned_external_use(f"actions/checkout@{mutable_ref}", "fixture")
 
 
 def test_release_tag_is_env_mapped_and_shell_metacharacters_are_rejected(tmp_path):
