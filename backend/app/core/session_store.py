@@ -31,8 +31,37 @@ import os
 import threading
 import time
 from typing import Protocol
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_redis_url_target(url: str) -> str:
+    """Return a diagnostic Redis endpoint without credentials or URL metadata."""
+    try:
+        parsed = urlsplit(url)
+        scheme = parsed.scheme or "unknown"
+        hostname = parsed.hostname
+    except (TypeError, UnicodeError, ValueError):
+        return "unparseable URL"
+
+    if not hostname:
+        hostname = "unknown"
+    elif ":" in hostname:
+        hostname = f"[{hostname}]"
+
+    endpoint = f"{scheme}://{hostname}"
+    try:
+        port = parsed.port
+    except (TypeError, UnicodeError, ValueError):
+        port = None
+    if port is not None:
+        endpoint += f":{port}"
+
+    path = parsed.path
+    if path.startswith("/") and path[1:].isdigit():
+        endpoint += path
+    return endpoint
 
 
 class SessionStore(Protocol):
@@ -109,8 +138,15 @@ def get_session_store() -> SessionStore:
         if _store is None:
             url = (os.getenv("REDIS_URL") or "").strip()
             if url:
-                logger.info("Session store backend: redis (%s)", url)
-                _store = RedisSessionStore(url)
+                target = _safe_redis_url_target(url)
+                logger.info("Session store backend: redis (%s)", target)
+                try:
+                    _store = RedisSessionStore(url)
+                except Exception:
+                    # Do not include the exception: Redis errors can echo the
+                    # complete URL, including credentials and query tokens.
+                    logger.error("Session store backend: redis initialization failed (%s)", target)
+                    raise
             else:
                 logger.info("Session store backend: in-memory (fallback)")
                 _store = InMemorySessionStore()
