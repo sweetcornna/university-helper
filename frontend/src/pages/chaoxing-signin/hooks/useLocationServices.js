@@ -112,7 +112,9 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
       setGeocodeStatus('error')
       setGeocodeMessage(err.message || '地点解析失败，请稍后重试')
     } finally {
-      setGeocodeLoading(false)
+      if (geocodeRequestIdRef.current === requestId) {
+        setGeocodeLoading(false)
+      }
     }
   }, [applyResolvedLocation, requestChaoxingApi])
 
@@ -153,7 +155,9 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
       setPlaceSearchResults([])
       setPlaceSearchMessage(err.message || '地点搜索失败，请稍后重试')
     } finally {
-      setPlaceSearchLoading(false)
+      if (placeSearchRequestIdRef.current === requestId) {
+        setPlaceSearchLoading(false)
+      }
     }
   }, [requestChaoxingApi])
 
