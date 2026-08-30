@@ -38,6 +38,7 @@ import {
 import useBackgroundTasks from './chaoxing-signin/hooks/useBackgroundTasks'
 import useAutoSignin from './chaoxing-signin/hooks/useAutoSignin'
 import useLocationServices from './chaoxing-signin/hooks/useLocationServices'
+import { fetchWithTimeout } from './chaoxing-signin/request'
 
 import StatsCards from './chaoxing-signin/components/StatsCards'
 import TasksTab from './chaoxing-signin/components/TasksTab'
@@ -171,7 +172,7 @@ export default function ChaoxingSignin() {
         headers['Content-Type'] = 'application/json'
       }
 
-      const response = await fetch(`${CHAOXING_API_BASE}${path}`, {
+      const response = await fetchWithTimeout(`${CHAOXING_API_BASE}${path}`, {
         ...options,
 
         method,
