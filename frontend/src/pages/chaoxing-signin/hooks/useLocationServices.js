@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { normalizeBaiduLocationResult, normalizeBaiduPlaceCandidates } from '../../../services/baiduLocation'
 import { wgs84ToBd09 } from '../../../utils/coordTransform'
@@ -7,6 +7,8 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
   const latestAddressRef = useRef('')
   const geocodeRequestIdRef = useRef(0)
   const placeSearchRequestIdRef = useRef(0)
+  const geolocationGenerationRef = useRef(0)
+  const mountedRef = useRef(false)
 
   const [geocodeLoading, setGeocodeLoading] = useState(false)
   const [geocodeMessage, setGeocodeMessage] = useState('')
@@ -16,6 +18,15 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
   const [placeSearchMessage, setPlaceSearchMessage] = useState('')
   const [isMapPickerOpen, setIsMapPickerOpen] = useState(false)
 
+  useEffect(() => {
+    mountedRef.current = true
+
+    return () => {
+      mountedRef.current = false
+      geolocationGenerationRef.current += 1
+    }
+  }, [])
+
   const handleAddressChange = useCallback((value) => {
     const nextAddress = String(value ?? '')
 
@@ -24,6 +35,7 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
     // back to the original text before an older request resolves.
     geocodeRequestIdRef.current += 1
     placeSearchRequestIdRef.current += 1
+    geolocationGenerationRef.current += 1
     setGeocodeLoading(false)
     setPlaceSearchLoading(false)
     setGeocodeStatus('info')
@@ -67,33 +79,66 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
   // Browser geolocation returns WGS-84, which applyResolvedLocation converts to
   // BD-09 for us — so this is the lowest-friction way to fill in coordinates.
   const useCurrentLocation = useCallback(() => {
+    const owner = geolocationGenerationRef.current + 1
+    geolocationGenerationRef.current = owner
+    const isCurrentOwner = () => mountedRef.current && geolocationGenerationRef.current === owner
+
+    if (!isCurrentOwner()) return
+
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGeocodeLoading(false)
       setGeocodeStatus('error')
       setGeocodeMessage('当前环境不支持定位，请改用地图选点或地址解析。')
       return
     }
+    setGeocodeLoading(true)
     setGeocodeStatus('info')
     setGeocodeMessage('正在获取当前位置…')
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        // Clear any previously-typed address so it can't be paired with the
-        // new GPS coordinates (location signin only needs lat/lng).
-        applyResolvedLocation({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          address: '',
-        })
-        setGeocodeStatus('success')
-        setGeocodeMessage('已使用当前位置填入坐标。')
-      },
-      (error) => {
+
+    const finish = () => {
+      if (isCurrentOwner()) setGeocodeLoading(false)
+    }
+
+    const handleGeolocationError = (error) => {
+      if (!isCurrentOwner()) return
+
+      try {
         setGeocodeStatus('error')
         setGeocodeMessage(
           error?.code === 1 ? '定位权限被拒绝，请在浏览器允许定位后重试。' : '获取当前位置失败，请稍后重试。'
         )
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    )
+      } finally {
+        finish()
+      }
+    }
+
+    try {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          if (!isCurrentOwner()) return
+
+          try {
+            // Clear any previously-typed address so it can't be paired with the
+            // new GPS coordinates (location signin only needs lat/lng).
+            applyResolvedLocation({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              address: '',
+            })
+            if (!isCurrentOwner()) return
+            setGeocodeStatus('success')
+            setGeocodeMessage('已使用当前位置填入坐标。')
+          } finally {
+            finish()
+          }
+        },
+        handleGeolocationError,
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      )
+    } catch (error) {
+      if (!isCurrentOwner()) return
+      handleGeolocationError(error)
+    }
   }, [applyResolvedLocation])
 
   const resolveLocationCoordinates = useCallback(async () => {
