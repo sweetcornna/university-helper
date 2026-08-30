@@ -9,6 +9,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFENSE_DOC = REPO_ROOT / "docs" / "答辩稿.md"
 PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
 DEPLOYMENT_SCRIPTS = REPO_ROOT / "scripts"
+BACKEND_TESTS = REPO_ROOT / "backend" / "tests"
+E2E_TESTS_DIR = BACKEND_TESTS / "e2e"
 LANGUAGE_BY_SUFFIX = {".ps1": "PowerShell", ".py": "Python", ".sh": "Bash"}
 
 
@@ -18,6 +20,17 @@ def _document() -> str:
 
 def _active_deployment_scripts() -> list[Path]:
     return sorted(path for path in DEPLOYMENT_SCRIPTS.glob("deploy_server.*") if path.is_file())
+
+
+def _pytest_test_files(directory: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in directory.rglob("*")
+        if path.is_file()
+        and path.suffix == ".py"
+        and path.name != "__init__.py"
+        and (path.name.startswith("test_") or path.name.endswith("_test.py"))
+    )
 
 
 def test_backend_runtime_version_matches_python_version_file():
@@ -63,3 +76,15 @@ def test_deployment_script_claim_matches_active_script_extensions():
         assert language in deployment_line
     for suffix, language in LANGUAGE_BY_SUFFIX.items():
         assert (language in deployment_line) == (suffix in suffixes)
+
+
+def test_backend_test_claim_lists_actual_categories_and_tracks_e2e_directory():
+    backend_line = next(line for line in _document().splitlines() if line.startswith("- **后端测试：**"))
+
+    for category in ("单元测试", "集成测试", "性能测试", "契约测试", "静态守护测试"):
+        assert category in backend_line
+
+    if _pytest_test_files(E2E_TESTS_DIR):
+        assert "端到端测试" in backend_line
+    else:
+        assert "端到端测试" not in backend_line
