@@ -18,7 +18,11 @@ from app.services.course.chaoxing.endpoint_security import (
 )
 from app.services.course.chaoxing.signin import signin_manager
 from app.services.course.chaoxing.task_admission import TaskAdmissionError
-from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
+from app.services.course.zhihuishu.adapter import (
+    TASK_CONFLICT_DETAIL,
+    ZhihuishuAdapter,
+    ZhihuishuTaskConflictError,
+)
 from app.services.notification import NotificationFactory
 from app.services.notification.providers import validate_notification_url
 
@@ -679,6 +683,8 @@ async def zhihuishu_start_course(
                 speed=request.speed,
                 auto_answer=request.auto_answer,
             )
+    except ZhihuishuTaskConflictError as exc:
+        raise HTTPException(status_code=409, detail=TASK_CONFLICT_DETAIL) from exc
     except Exception as exc:
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start Zhihuishu task", exc) from exc
@@ -724,6 +730,8 @@ async def zhihuishu_start_course_task(
                 speed=speed,
                 auto_answer=auto_answer,
             )
+    except ZhihuishuTaskConflictError as exc:
+        raise HTTPException(status_code=409, detail=TASK_CONFLICT_DETAIL) from exc
     except Exception as exc:
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start Zhihuishu course task", exc) from exc
@@ -755,6 +763,8 @@ async def zhihuishu_start_ai_course_task(
                 speed=speed,
                 auto_answer=True,
             )
+    except ZhihuishuTaskConflictError as exc:
+        raise HTTPException(status_code=409, detail=TASK_CONFLICT_DETAIL) from exc
     except Exception as exc:
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start Zhihuishu AI course task", exc) from exc
