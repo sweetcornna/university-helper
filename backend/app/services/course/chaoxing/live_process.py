@@ -43,7 +43,13 @@ class LiveProcessor:
                     interval = min(0.5, retry_sleep)
                     await asyncio.sleep(interval)
                     retry_sleep -= interval
-                live.do_finish()
+                if callable(should_stop) and should_stop():
+                    logger.info("Live task cancelled: {}", live.name)
+                    return False
+                retry_success = live.do_finish()
+                if not retry_success:
+                    logger.error("Live minute {} submit failed after retry", index + 1)
+                    return False
 
             sleep_time = 59 / speed
             while sleep_time > 0:
