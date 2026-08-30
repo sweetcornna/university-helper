@@ -9,8 +9,8 @@ A release is cut by pushing a `v*` git tag. The `release` workflow
 - **publish** — flips the draft to published only when images **and every** desktop leg succeed.
 
 The git tag is the single source of truth for the version; `scripts/set_version.sh`
-stamps it into all five manifests (`frontend/package.json`, `backend/pyproject.toml`,
-`backend/app/main.py`, `frontend/src-tauri/{tauri.conf.json,Cargo.toml}`).
+stamps it into all six manifests (`frontend/package.json`, `frontend/package-lock.json`,
+`backend/pyproject.toml`, `backend/app/main.py`, `frontend/src-tauri/{tauri.conf.json,Cargo.toml}`).
 
 ## Cutting a release
 

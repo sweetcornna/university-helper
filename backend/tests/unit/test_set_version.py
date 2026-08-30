@@ -5,6 +5,7 @@ Tauri files that workstream E owns) so this test is green regardless of E's stat
 """
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -78,6 +79,7 @@ FILES = [
     "frontend/src-tauri/tauri.conf.json",
     "frontend/src-tauri/Cargo.toml",
 ]
+NUMBER_WORDS = "zero one two three four five six seven eight nine ten".split()
 
 
 def _make_tree(tmp: Path) -> None:
@@ -113,6 +115,30 @@ def test_stamps_all_release_manifests(tmp_path):
     assert 'version="9.9.9"' in (tmp_path / "backend/app/main.py").read_text()
     assert json.loads((tmp_path / "frontend/src-tauri/tauri.conf.json").read_text())["version"] == "9.9.9"
     assert 'version = "9.9.9"' in (tmp_path / "frontend/src-tauri/Cargo.toml").read_text()
+
+
+def test_releasing_docs_match_set_version_manifest_contract():
+    document = (REPO_ROOT / "docs" / "RELEASING.md").read_text(encoding="utf-8")
+    match = re.search(
+        r"stamps it into all (?P<count>\d+|[A-Za-z]+) manifests \(`(?P<specs>[^)]+)`\)",
+        document,
+    )
+    assert match, "RELEASING.md must list the set_version manifest contract"
+
+    count_text = match.group("count").lower()
+    manifest_count = int(count_text) if count_text.isdigit() else NUMBER_WORDS.index(count_text)
+    documented = set()
+    specs = re.findall(r"[^,{}]+/\{[^{}]+\}|[^,{}]+", match.group("specs"))
+    for raw_spec in specs:
+        spec = raw_spec.strip().strip("`")
+        grouped = re.fullmatch(r"(?P<prefix>[^{}]+?)/\{(?P<names>[^{}]+)\}", spec)
+        if grouped:
+            documented.update(f"{grouped.group('prefix')}/{name}" for name in grouped.group("names").split(","))
+        else:
+            documented.add(spec)
+
+    assert manifest_count == len(FILES)
+    assert documented == set(FILES)
 
 
 def test_does_not_touch_dependency_versions(tmp_path):
