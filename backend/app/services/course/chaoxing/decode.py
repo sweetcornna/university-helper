@@ -12,6 +12,8 @@ import re
 import sys
 import tempfile
 import threading
+import warnings
+from contextlib import contextmanager
 from typing import Any
 
 import requests
@@ -31,6 +33,15 @@ except ImportError:
     PIL_AVAILABLE = False
 
 ENABLE_LOCAL_OCR = os.environ.get("CHAOXING_ENABLE_OCR", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+# OCR input is attacker-controlled course content.  Keep the limits generous
+# enough for normal question screenshots/QR codes while bounding both network
+# buffering and Pillow's decompression work.
+_OCR_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_OCR_MAX_IMAGE_PIXELS = 25_000_000
+_OCR_MAX_IMAGE_DIMENSION = 8_192
+_OCR_STREAM_CHUNK_SIZE = 64 * 1024
+_PIL_IMAGE_LOCK = threading.RLock()
 
 # SSRF guard for question-image OCR. The <img src> in quiz/work HTML is
 # attacker-influenceable content (a malicious course author can embed
@@ -150,7 +161,7 @@ def _init_paddle_ocr(preferred_device: str | None = None):
         return _PADDLE_OCR_ENGINE
 
 
-def _preprocess_image_for_ocr(image_bytes: bytes, enhance_mode: int = 0) -> bytes:
+def _preprocess_image_for_ocr(image_bytes: bytes, enhance_mode: int = 0) -> bytes | None:
     """预处理图片以提高 OCR 识别率。
 
     enhance_mode:
@@ -163,66 +174,91 @@ def _preprocess_image_for_ocr(image_bytes: bytes, enhance_mode: int = 0) -> byte
     if not PIL_AVAILABLE:
         return image_bytes
 
+    image_stream = io.BytesIO(image_bytes)
+    source_img = None
+    img = None
     try:
-        img = Image.open(io.BytesIO(image_bytes))
+        with _ocr_pillow_limits():
+            source_img = Image.open(image_stream)
+            img = source_img
+            _check_ocr_image_dimensions(img)
+            img.load()
 
-        # 转换为 RGB（处理 RGBA 或其他模式）
-        if img.mode in ("RGBA", "LA", "P"):
-            background = Image.new("RGB", img.size, (255, 255, 255))
-            if img.mode == "P":
-                img = img.convert("RGBA")
-            background.paste(img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None)
-            img = background
-        elif img.mode != "RGB":
-            img = img.convert("RGB")
+            # 转换为 RGB（处理 RGBA 或其他模式）
+            if img.mode in ("RGBA", "LA", "P"):
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                background.paste(img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None)
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
 
-        # 如果图片太小，放大以提高识别率
-        min_dimension = 100
-        width, height = img.size
-        if width < min_dimension or height < min_dimension:
-            scale = max(min_dimension / width, min_dimension / height, 2.0)
-            new_size = (int(width * scale), int(height * scale))
-            img = img.resize(new_size, Image.Resampling.LANCZOS)
+            # 如果图片太小，放大以提高识别率
+            min_dimension = 100
+            width, height = img.size
+            if width < min_dimension or height < min_dimension:
+                scale = max(min_dimension / width, min_dimension / height, 2.0)
+                new_size = (int(width * scale), int(height * scale))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-        # 如果图片太大，缩小以加快处理速度
-        max_dimension = 2000
-        width, height = img.size
-        if width > max_dimension or height > max_dimension:
-            scale = min(max_dimension / width, max_dimension / height)
-            new_size = (int(width * scale), int(height * scale))
-            img = img.resize(new_size, Image.Resampling.LANCZOS)
+            # 如果图片太大，缩小以加快处理速度
+            max_dimension = 2000
+            width, height = img.size
+            if width > max_dimension or height > max_dimension:
+                scale = min(max_dimension / width, max_dimension / height)
+                new_size = (int(width * scale), int(height * scale))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-        if enhance_mode == 0:
-            # 标准模式：轻微增强对比度和锐度
-            enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(1.3)
-            enhancer = ImageEnhance.Sharpness(img)
-            img = enhancer.enhance(1.2)
-        elif enhance_mode == 1:
-            # 高对比度模式
-            enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(1.8)
-            enhancer = ImageEnhance.Sharpness(img)
-            img = enhancer.enhance(1.5)
-            # 轻微去噪
-            img = img.filter(ImageFilter.MedianFilter(size=3))
-        elif enhance_mode == 2:
-            # 二值化模式：转灰度，增强对比度，然后用阈值处理
-            img = img.convert("L")
-            enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(2.0)
-            # 简单阈值二值化
-            threshold = 180
-            img = img.point(lambda p: 255 if p > threshold else 0)
-            img = img.convert("RGB")
+            if enhance_mode == 0:
+                # 标准模式：轻微增强对比度和锐度
+                enhancer = ImageEnhance.Contrast(img)
+                img = enhancer.enhance(1.3)
+                enhancer = ImageEnhance.Sharpness(img)
+                img = enhancer.enhance(1.2)
+            elif enhance_mode == 1:
+                # 高对比度模式
+                enhancer = ImageEnhance.Contrast(img)
+                img = enhancer.enhance(1.8)
+                enhancer = ImageEnhance.Sharpness(img)
+                img = enhancer.enhance(1.5)
+                # 轻微去噪
+                img = img.filter(ImageFilter.MedianFilter(size=3))
+            elif enhance_mode == 2:
+                # 二值化模式：转灰度，增强对比度，然后用阈值处理
+                img = img.convert("L")
+                enhancer = ImageEnhance.Contrast(img)
+                img = enhancer.enhance(2.0)
+                # 简单阈值二值化
+                threshold = 180
+                img = img.point(lambda p: 255 if p > threshold else 0)
+                img = img.convert("RGB")
 
-        # 输出为 PNG
-        output = io.BytesIO()
-        img.save(output, format="PNG")
-        return output.getvalue()
+            # 输出为 PNG
+            with io.BytesIO() as output:
+                img.save(output, format="PNG")
+                return output.getvalue()
+    except _UnsafeOCRImageError as exc:
+        logger.debug(f"拒绝超出解码限制的题目图片: {exc}")
+        return None
     except Exception as exc:
+        if _is_pillow_decompression_bomb(exc):
+            logger.debug(f"拒绝 Pillow 解压炸弹题目图片: {exc}")
+            return None
         logger.debug(f"图片预处理失败: {exc}")
         return image_bytes
+    finally:
+        if img is not None:
+            try:
+                img.close()
+            except Exception:
+                pass
+        if source_img is not None and source_img is not img:
+            try:
+                source_img.close()
+            except Exception:
+                pass
+        image_stream.close()
 
 
 def _call_http_ocr(ocr_endpoint: str, image_bytes: bytes, img_url: str) -> str:
@@ -246,6 +282,190 @@ def _call_http_ocr(ocr_endpoint: str, image_bytes: bytes, img_url: str) -> str:
             return value.strip()
 
     return ""
+
+
+class _UnsafeOCRImageError(Exception):
+    """Raised internally when an OCR image exceeds a decode safety limit."""
+
+
+def _response_header(response, name: str) -> str:
+    """Read a response header without assuming a concrete requests type."""
+    headers = getattr(response, "headers", None)
+    if headers is None or not hasattr(headers, "get"):
+        return ""
+
+    try:
+        value = headers.get(name)
+        if value is None:
+            value = headers.get(name.lower())
+    except Exception:
+        return ""
+
+    if value is None and hasattr(headers, "items"):
+        try:
+            value = next(
+                (candidate for key, candidate in headers.items() if str(key).lower() == name.lower()),
+                None,
+            )
+        except Exception:
+            return ""
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("latin-1")
+        except UnicodeDecodeError:
+            return ""
+    elif isinstance(value, (int, float)):
+        value = str(value)
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _response_content_length_exceeds_limit(response) -> bool:
+    """Return whether a valid Content-Length header is over the hard cap."""
+    raw_length = _response_header(response, "Content-Length")
+    if not raw_length:
+        return False
+
+    try:
+        content_length = int(raw_length, 10)
+    except (TypeError, ValueError):
+        # A malformed/missing header cannot be trusted; iter_content still
+        # enforces the hard byte limit below.
+        logger.debug(f"题目图片 Content-Length 无效，将按实际流大小限制: {raw_length!r}")
+        return False
+
+    if content_length < 0:
+        logger.debug(f"题目图片 Content-Length 为负数: {raw_length!r}")
+        return True
+    return content_length > _OCR_MAX_IMAGE_BYTES
+
+
+def _read_limited_response_content(response) -> bytes | None:
+    """Read a streamed image response without buffering beyond the byte cap."""
+    if _response_content_length_exceeds_limit(response):
+        logger.debug(f"拒绝超过大小限制的题目图片 (上限 {_OCR_MAX_IMAGE_BYTES} 字节)")
+        return None
+
+    chunks: list[bytes] = []
+    total_bytes = 0
+    try:
+        for chunk in response.iter_content(chunk_size=_OCR_STREAM_CHUNK_SIZE):
+            if not chunk:
+                continue
+            if isinstance(chunk, bytearray):
+                chunk_bytes = bytes(chunk)
+            elif isinstance(chunk, memoryview):
+                chunk_bytes = chunk.tobytes()
+            elif not isinstance(chunk, bytes):
+                raise TypeError(f"unexpected response chunk type: {type(chunk).__name__}")
+            else:
+                chunk_bytes = chunk
+
+            chunk_size = len(chunk_bytes)
+            if total_bytes + chunk_size > _OCR_MAX_IMAGE_BYTES:
+                logger.debug(f"拒绝超过大小限制的题目图片 (上限 {_OCR_MAX_IMAGE_BYTES} 字节)")
+                return None
+            chunks.append(chunk_bytes)
+            total_bytes += chunk_size
+    except Exception as exc:
+        logger.debug(f"读取题目图片响应流失败: {exc}")
+        return None
+
+    if not chunks:
+        return None
+    return b"".join(chunks)
+
+
+@contextmanager
+def _ocr_pillow_limits():
+    """Apply temporary Pillow bomb limits while opening an untrusted image."""
+    if not PIL_AVAILABLE:
+        yield
+        return
+
+    # Pillow's threshold is process-global. Serialize the short decode window
+    # and restore it in finally so OCR cannot permanently alter other callers.
+    with _PIL_IMAGE_LOCK:
+        has_max_pixels = hasattr(Image, "MAX_IMAGE_PIXELS")
+        previous_max_pixels = getattr(Image, "MAX_IMAGE_PIXELS", None)
+        if has_max_pixels:
+            Image.MAX_IMAGE_PIXELS = _OCR_MAX_IMAGE_PIXELS
+        try:
+            bomb_warning = getattr(Image, "DecompressionBombWarning", Warning)
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", bomb_warning)
+                yield
+        finally:
+            if has_max_pixels:
+                Image.MAX_IMAGE_PIXELS = previous_max_pixels
+
+
+def _is_pillow_decompression_bomb(exc: BaseException) -> bool:
+    """Identify Pillow's bomb warning/error without importing Pillow eagerly."""
+    if not PIL_AVAILABLE:
+        return False
+    bomb_types = tuple(
+        candidate
+        for attr_name in ("DecompressionBombError", "DecompressionBombWarning")
+        if isinstance(candidate := getattr(Image, attr_name, None), type)
+    )
+    return bool(bomb_types) and isinstance(exc, bomb_types)
+
+
+def _check_ocr_image_dimensions(image) -> None:
+    """Raise for dimensions that are too large to safely pass to an OCR backend."""
+    size = getattr(image, "size", None)
+    if not isinstance(size, (tuple, list)) or len(size) != 2:
+        raise _UnsafeOCRImageError("image dimensions are unavailable")
+
+    width, height = size
+    if (
+        not isinstance(width, int)
+        or not isinstance(height, int)
+        or isinstance(width, bool)
+        or isinstance(height, bool)
+        or width <= 0
+        or height <= 0
+        or width > _OCR_MAX_IMAGE_DIMENSION
+        or height > _OCR_MAX_IMAGE_DIMENSION
+        or width * height > _OCR_MAX_IMAGE_PIXELS
+    ):
+        raise _UnsafeOCRImageError(f"image dimensions exceed OCR limits: {width!r}x{height!r}")
+
+
+def _validate_ocr_image(image_bytes: bytes) -> bool:
+    """Fully decode and validate image dimensions before handing bytes to OCR."""
+    if not PIL_AVAILABLE:
+        # Pillow is optional in this project. Network and MIME/byte limits are
+        # still enforced; when installed, this check adds decoder hardening.
+        return True
+
+    image_stream = io.BytesIO(image_bytes)
+    image = None
+    try:
+        with _ocr_pillow_limits():
+            image = Image.open(image_stream)
+            _check_ocr_image_dimensions(image)
+            image.load()
+    except _UnsafeOCRImageError as exc:
+        logger.debug(f"拒绝超出解码限制的题目图片: {exc}")
+        return False
+    except Exception as exc:
+        if _is_pillow_decompression_bomb(exc):
+            logger.debug(f"拒绝 Pillow 解压炸弹题目图片: {exc}")
+        else:
+            logger.debug(f"题目图片解码失败: {exc}")
+        return False
+    finally:
+        if image is not None:
+            try:
+                image.close()
+            except Exception:
+                pass
+        image_stream.close()
+
+    return True
 
 
 def _ocr_image_to_text(img_url: str) -> str:
@@ -275,7 +495,10 @@ def _ocr_image_to_text(img_url: str) -> str:
     if not has_any_ocr:
         return ""
 
-    # 下载图片
+    # 下载图片。响应始终以流方式读取并在离开下载路径时关闭，避免
+    # requests 的完整响应体属性在恶意 Content-Length/分块响应下无界增长。
+    session = None
+    resp = None
     try:
         # 使用带登录 Cookie 的会话下载图片，避免 403
         session = requests.Session()
@@ -294,13 +517,39 @@ def _ocr_image_to_text(img_url: str) -> str:
             headers=extra_headers or None,
             timeout=8,
             allow_redirects=False,
+            stream=True,
         )
-        if resp.status_code != 200:
-            logger.debug(f"下载题目图片失败: {img_url} -> {resp.status_code}")
+        status_code = getattr(resp, "status_code", None)
+        if not isinstance(status_code, int) or not 200 <= status_code < 300:
+            logger.debug(f"下载题目图片失败: {img_url} -> {status_code}")
             return ""
-        image_bytes = resp.content
+
+        content_type = _response_header(resp, "Content-Type").lower()
+        if content_type and not content_type.startswith("image/"):
+            logger.debug(f"拒绝非图片类型的题目图片: {img_url} -> {content_type}")
+            return ""
+
+        image_bytes = _read_limited_response_content(resp)
+        if image_bytes is None:
+            return ""
     except Exception as exc:
         logger.debug(f"下载题目图片异常: {exc}")
+        return ""
+    finally:
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    # MIME/byte checks protect all configured OCR providers. If Pillow is
+    # present, fully decode once here so bomb payloads never reach them.
+    if not _validate_ocr_image(image_bytes):
         return ""
 
     # 1) 若配置了外部 AI 视觉 OCR，优先使用，跳过本地 OCR
@@ -368,6 +617,10 @@ def _ocr_image_to_text(img_url: str) -> str:
             for preprocess_mode in preprocessing_modes:
                 # 预处理图片
                 processed_bytes = _preprocess_image_for_ocr(image_bytes, enhance_mode=preprocess_mode)
+                if processed_bytes is None:
+                    # 解压炸弹/超大尺寸已在预处理边界被拒绝；不要把原始
+                    # 字节交给 PaddleOCR 作为回退输入。
+                    return ""
 
                 # 写入临时文件
                 if tmp_path:
