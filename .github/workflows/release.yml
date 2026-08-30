@@ -296,7 +296,9 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt pyinstaller
+          # Install only runtime dependencies plus the bounded sidecar builder;
+          # keep the release artifact on the reviewed PyInstaller major.
+          pip install -r backend/requirements.txt "pyinstaller>=6.6,<7"
           bash scripts/build_sidecar.sh        # from workstream D → dist/uh-backend[.exe]
 
       - name: Smoke-test the sidecar /health

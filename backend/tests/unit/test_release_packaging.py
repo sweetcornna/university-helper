@@ -7,13 +7,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TAURI_CONFIG = REPO_ROOT / "frontend" / "src-tauri" / "tauri.conf.json"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
+DEV_REQUIREMENTS = REPO_ROOT / "backend" / "requirements-dev.txt"
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 ACTIVE_WORKFLOW_SUFFIXES = {".yml", ".yaml"}
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+PYINSTALLER_REQUIREMENT_RE = re.compile(r"^pyinstaller(?P<specifier>[<>=!~].+)$", re.IGNORECASE)
 ACTIVE_PIP_BUILD_CONFIGS = (
     REPO_ROOT / "Dockerfile.server",
     REPO_ROOT / ".github" / "workflows" / "test.yml",
@@ -31,6 +34,35 @@ def _clean_yaml_value(value: str) -> str:
 
 def _workflow_text() -> str:
     return RELEASE_WORKFLOW.read_text()
+
+
+def _pyinstaller_requirement() -> str:
+    requirements = [
+        line.strip()
+        for line in DEV_REQUIREMENTS.read_text().splitlines()
+        if line.strip()
+        and not line.lstrip().startswith("#")
+        and line.strip().lower().startswith("pyinstaller")
+    ]
+    assert len(requirements) == 1, "requirements-dev.txt must declare PyInstaller exactly once"
+    requirement = requirements[0]
+    assert PYINSTALLER_REQUIREMENT_RE.fullmatch(requirement), (
+        "requirements-dev.txt must constrain PyInstaller with an explicit version specifier"
+    )
+    return requirement
+
+
+def _parsed_workflow() -> dict:
+    return yaml.safe_load(_workflow_text())
+
+
+def _desktop_sidecar_install_step() -> dict:
+    steps = _parsed_workflow()["jobs"]["desktop"]["steps"]
+    return next(
+        step
+        for step in steps
+        if step.get("name") == "Build the PyInstaller sidecar (embeds the SPA from frontend/dist)"
+    )
 
 
 def test_active_pip_build_configs_keep_tls_verification_enabled():
@@ -55,6 +87,16 @@ def test_server_runtime_does_not_persist_pip_index_url():
     assert "PIP_NO_INDEX=1" in runtime
     assert "--no-index" in runtime
     assert "apt-mirror-selection" in runtime
+
+
+def test_release_sidecar_install_uses_the_bounded_pyinstaller_dev_requirement():
+    requirement = _pyinstaller_requirement()
+    run_script = _desktop_sidecar_install_step()["run"]
+    install_lines = [line.strip() for line in run_script.splitlines() if line.strip().startswith("pip install")]
+
+    assert install_lines == [f'pip install -r backend/requirements.txt "{requirement}"']
+    assert requirement != "pyinstaller"
+    assert "requirements-dev.txt" not in run_script
 
 
 def _workflow_lines() -> list[str]:
