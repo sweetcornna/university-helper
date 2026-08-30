@@ -97,6 +97,95 @@ def test_bash_deploy_persists_and_passes_expected_http_bind_host(tmp_path, args,
     assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
 
 
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "../../nginx/nginx",
+        "example\n.com",
+        "example..com",
+        "-example.com",
+        "example-.com",
+        "a" * 64 + ".example.com",
+        ".".join(["a" * 63] * 4),
+        "example_com",
+        "",
+    ],
+    ids=[
+        "path-traversal",
+        "control-character",
+        "empty-label",
+        "leading-hyphen",
+        "trailing-hyphen",
+        "label-too-long",
+        "domain-too-long",
+        "invalid-character",
+        "empty-domain",
+    ],
+)
+def test_bash_deploy_rejects_invalid_domain_before_side_effects(tmp_path, domain):
+    root, env, docker_log = _bash_deploy_fixture(tmp_path)
+    target = root / "nginx" / "nginx.conf"
+    target.parent.mkdir()
+    original = "keep this configuration\n"
+    target.write_text(original, encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", "scripts/deploy_server.sh", "--domain", domain, "-y"],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Invalid --domain" in result.stderr
+    if domain:
+        assert domain not in result.stderr
+    assert not docker_log.exists()
+    assert not (root / "deploy").exists()
+    assert not (root / ".env").exists()
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_bash_deploy_rejects_missing_domain_value_before_side_effects(tmp_path):
+    root, env, docker_log = _bash_deploy_fixture(tmp_path)
+
+    result = subprocess.run(
+        ["bash", "scripts/deploy_server.sh", "--domain"],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Invalid --domain" in result.stderr
+    assert not docker_log.exists()
+    assert not (root / "deploy").exists()
+    assert not (root / ".env").exists()
+
+
+@pytest.mark.parametrize("domain", ["example.com", "sub.example.com", "xn--fiqs8s.com"])
+def test_bash_deploy_accepts_ascii_and_punycode_fqdns(tmp_path, domain):
+    root, env, _ = _bash_deploy_fixture(tmp_path)
+    result = subprocess.run(
+        ["bash", "scripts/deploy_server.sh", "--domain", domain, "-y", "--no-tls"],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f'CORS_ORIGINS=["https://{domain}"]' in (root / ".env").read_text(encoding="utf-8")
+
+
 def test_bash_deploy_keeps_existing_env_untouched(tmp_path):
     root, env, docker_log = _bash_deploy_fixture(tmp_path)
     env_path = root / ".env"

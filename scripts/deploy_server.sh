@@ -33,6 +33,7 @@ IMAGE_NS="ghcr.io/sweetcornna"
 BUILD_NPM_REGISTRY="${BUILD_NPM_REGISTRY:-https://registry.npmmirror.com}"
 
 DOMAIN=""
+DOMAIN_PROVIDED="0"
 HOST_IP=""
 HTTP_PORT="8080"
 APP_PORT="8000"
@@ -64,10 +65,32 @@ confirm() {
 
 usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0; }
 
+validate_domain() {
+  local domain="$1" label
+  local -a labels
+  local LC_ALL=C
+
+  # Keep the diagnostic constant: domain input may contain control characters.
+  [[ "$domain" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$ ]] || \
+    die "Invalid --domain: expected an ASCII FQDN (for example example.com)."
+  (( ${#domain} <= 253 )) || \
+    die "Invalid --domain: expected an ASCII FQDN (for example example.com)."
+
+  IFS='.' read -r -a labels <<< "$domain"
+  for label in "${labels[@]}"; do
+    (( ${#label} <= 63 )) || \
+      die "Invalid --domain: expected an ASCII FQDN (for example example.com)."
+  done
+}
+
 # ---- arg parsing ----------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --domain) DOMAIN="${2:-}"; shift 2 ;;
+    --domain)
+      DOMAIN="${2:-}"
+      DOMAIN_PROVIDED="1"
+      if [[ $# -ge 2 ]]; then shift 2; else shift; fi
+      ;;
     --host)   HOST_IP="${2:-}"; shift 2 ;;
     --port)   HTTP_PORT="${2:-}"; shift 2 ;;
     --tag)    TAG="${2:-}"; shift 2 ;;
@@ -78,6 +101,10 @@ while [[ $# -gt 0 ]]; do
     *) die "Unknown option: $1 (try --help)" ;;
   esac
 done
+
+if [[ "$DOMAIN_PROVIDED" == "1" ]]; then
+  validate_domain "$DOMAIN"
+fi
 
 if [[ -n "$HOST_IP" && -z "$DOMAIN" ]]; then
   HTTP_BIND_HOST="0.0.0.0"
