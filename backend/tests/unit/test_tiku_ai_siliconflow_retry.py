@@ -89,6 +89,39 @@ def test_string_attempt_count_is_total_and_stops_on_success(builder):
     assert request_client.post.call_count == 2
 
 
+@pytest.mark.parametrize("builder", [_build_ai, _build_siliconflow])
+def test_failed_final_attempt_does_not_sleep(builder):
+    provider, request_client = builder(max_retries=1)
+    request_client.post.return_value = _FAILURE
+
+    with (
+        patch("app.services.course.chaoxing.answer_providers.ai.time.sleep") as ai_sleep,
+        patch("app.services.course.chaoxing.answer_providers.siliconflow.time.sleep") as siliconflow_sleep,
+    ):
+        assert provider._query(_QUESTION) is None
+
+    request_client.post.assert_called_once()
+    ai_sleep.assert_not_called()
+    siliconflow_sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("builder", [_build_ai, _build_siliconflow])
+def test_only_intermediate_failures_sleep(builder):
+    provider, request_client = builder(max_retries=2)
+    request_client.post.side_effect = [_FAILURE, _FAILURE]
+
+    with (
+        patch("app.services.course.chaoxing.answer_providers.ai.time.sleep") as ai_sleep,
+        patch("app.services.course.chaoxing.answer_providers.siliconflow.time.sleep") as siliconflow_sleep,
+    ):
+        assert provider._query(_QUESTION) is None
+
+    assert request_client.post.call_count == 2
+    sleep_calls = ai_sleep.call_args_list + siliconflow_sleep.call_args_list
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0].args == (2.0,)
+
+
 @pytest.mark.parametrize("invalid", [-1, "invalid", "", None, math.nan, math.inf, -math.inf])
 @pytest.mark.parametrize("builder", [_build_ai, _build_siliconflow])
 def test_invalid_attempt_count_falls_back_to_three_attempts(builder, invalid):

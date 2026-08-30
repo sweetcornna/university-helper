@@ -119,7 +119,8 @@ class SiliconFlow(Tiku):
             except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError, RuntimeError) as exc:
                 last_error = exc
                 logger.warning(f"硅基流动API调用失败 ({attempt}/{max_attempts}): {exc}")
-                time.sleep(retry_delay * attempt)
+                if attempt < max_attempts:
+                    time.sleep(retry_delay * attempt)
 
         logger.error(f"硅基流动API连续失败，最后错误: {last_error}")
         return None

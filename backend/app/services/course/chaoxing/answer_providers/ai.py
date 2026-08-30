@@ -244,10 +244,12 @@ class AI(Tiku):
                     logger.warning(
                         f"AI大模型请求失败 ({attempt}/{max_attempts}) 且触发限流，将休眠 {cool_down:.2f} 秒: {exc}"
                     )
-                    time.sleep(cool_down)
+                    if attempt < max_attempts:
+                        time.sleep(cool_down)
                 else:
                     logger.warning(f"AI大模型请求失败 ({attempt}/{max_attempts}): {exc}")
-                    time.sleep(retry_delay * attempt)
+                    if attempt < max_attempts:
+                        time.sleep(retry_delay * attempt)
             finally:
                 if acquired and sem is not None:
                     sem.release()
