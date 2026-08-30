@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import threading
 import time
@@ -14,6 +15,43 @@ from ..answer_utils import (
     _strip_json_block,
 )
 
+_DEFAULT_MAX_RETRIES = 3
+_DEFAULT_MIN_INTERVAL_SECONDS = 3.0
+_DEFAULT_RETRY_DELAY = 2.0
+
+
+def _parse_attempt_count(value, default: int = _DEFAULT_MAX_RETRIES) -> int:
+    """Parse total attempts while keeping one request for a zero setting."""
+    try:
+        if isinstance(value, bool):
+            parsed = int(value)
+        elif isinstance(value, int):
+            parsed = value
+        elif isinstance(value, float):
+            if not math.isfinite(value) or not value.is_integer():
+                raise ValueError
+            parsed = int(value)
+        elif isinstance(value, str):
+            parsed = int(value.strip(), 10)
+        else:
+            parsed = int(value)
+        if parsed < 0:
+            raise ValueError
+        return max(1, parsed)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _parse_non_negative_finite(value, default: float) -> float:
+    """Parse a delay-like setting, falling back for invalid/non-finite values."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(parsed) or parsed < 0:
+        return default
+    return parsed
+
 
 class AI(Tiku):
     """AI大模型答题实现，带重试与更鲁棒的解析"""
@@ -28,10 +66,10 @@ class AI(Tiku):
         self.client = None
         self._httpx_client: httpx.Client | None = None
         self.http_proxy: str | None = None
-        self.min_interval_seconds: float = 3
+        self.min_interval_seconds: float = _DEFAULT_MIN_INTERVAL_SECONDS
         self.timeout: float = 30
-        self.max_retries: int = 3
-        self.retry_delay: float = 2.0
+        self.max_retries: int = _DEFAULT_MAX_RETRIES
+        self.retry_delay: float = _DEFAULT_RETRY_DELAY
         self.disable_ssl_verify: bool = False
         self._interval_lock = threading.Lock()
         # 全局并发控制：限制同一 AI 客户端同时在请求中的题目数量
@@ -72,12 +110,16 @@ class AI(Tiku):
         self._httpx_client = httpx.Client(**httpx_kwargs)
 
     def _respect_interval(self):
+        min_interval_seconds = _parse_non_negative_finite(
+            self.min_interval_seconds,
+            _DEFAULT_MIN_INTERVAL_SECONDS,
+        )
         sleep_time = 0
         with self._interval_lock:
             if self.last_request_time:
                 interval_time = time.time() - self.last_request_time
-                if interval_time < self.min_interval_seconds:
-                    sleep_time = self.min_interval_seconds - interval_time
+                if interval_time < min_interval_seconds:
+                    sleep_time = min_interval_seconds - interval_time
             self.last_request_time = time.time()
         if sleep_time > 0:
             logger.debug(f"AI请求间隔过短, 等待 {sleep_time:.2f} 秒")
@@ -97,7 +139,13 @@ class AI(Tiku):
             logger.error("AI题库 HTTP 客户端未初始化")
             return None
         last_error = None
-        for attempt in range(1, self.max_retries + 1):
+        max_attempts = _parse_attempt_count(self.max_retries)
+        retry_delay = _parse_non_negative_finite(self.retry_delay, _DEFAULT_RETRY_DELAY)
+        min_interval_seconds = _parse_non_negative_finite(
+            self.min_interval_seconds,
+            _DEFAULT_MIN_INTERVAL_SECONDS,
+        )
+        for attempt in range(1, max_attempts + 1):
             sem = self._request_semaphore
             acquired = False
             try:
@@ -192,14 +240,14 @@ class AI(Tiku):
                 last_error = exc
                 msg = str(exc)
                 if "429" in msg or "rate limit" in msg.lower():
-                    cool_down = max(self.min_interval_seconds * 2, 5)
+                    cool_down = max(min_interval_seconds * 2, 5)
                     logger.warning(
-                        f"AI大模型请求失败 ({attempt}/{self.max_retries}) 且触发限流，将休眠 {cool_down:.2f} 秒: {exc}"
+                        f"AI大模型请求失败 ({attempt}/{max_attempts}) 且触发限流，将休眠 {cool_down:.2f} 秒: {exc}"
                     )
                     time.sleep(cool_down)
                 else:
-                    logger.warning(f"AI大模型请求失败 ({attempt}/{self.max_retries}): {exc}")
-                    time.sleep(self.retry_delay * attempt)
+                    logger.warning(f"AI大模型请求失败 ({attempt}/{max_attempts}): {exc}")
+                    time.sleep(retry_delay * attempt)
             finally:
                 if acquired and sem is not None:
                     sem.release()
@@ -215,10 +263,16 @@ class AI(Tiku):
         self.key = self._conf["key"]
         self.model = self._conf["model"]
         self.http_proxy = self._conf.get("http_proxy")
-        self.min_interval_seconds = float(self._conf.get("min_interval_seconds", 3))
+        self.min_interval_seconds = _parse_non_negative_finite(
+            self._conf.get("min_interval_seconds", _DEFAULT_MIN_INTERVAL_SECONDS),
+            _DEFAULT_MIN_INTERVAL_SECONDS,
+        )
         self.timeout = float(self._conf.get("timeout", 30))
-        self.max_retries = int(self._conf.get("max_retries", 3))
-        self.retry_delay = float(self._conf.get("retry_delay", 2))
+        self.max_retries = _parse_attempt_count(self._conf.get("max_retries", _DEFAULT_MAX_RETRIES))
+        self.retry_delay = _parse_non_negative_finite(
+            self._conf.get("retry_delay", _DEFAULT_RETRY_DELAY),
+            _DEFAULT_RETRY_DELAY,
+        )
         self.disable_ssl_verify = str(self._conf.get("disable_ssl_verify", "false")).lower() in {
             "1",
             "true",
