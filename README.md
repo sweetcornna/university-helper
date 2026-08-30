@@ -121,7 +121,9 @@ scripts/        setup / test / backup / hotfix-publish helpers
 - **Data**: PostgreSQL 15 (tuned: `max_connections=300`, `work_mem=8MB`)
 - **Migrations**: Alembic (wired)
 - **Deployment**: Docker + Compose (production), host nginx fronts the app
-- **CI**: GitHub Actions (lint · type · test · build · trivy · CodeQL)
+- **CI**: GitHub Actions — blocking backend Ruff/Bandit/pytest, frontend
+  ESLint/Vitest/build, and Docker image build. CodeQL runs separately. Trivy
+  and `npm audit` are report-only; `mypy` is not currently run by CI.
 
 ## Supported platforms
 

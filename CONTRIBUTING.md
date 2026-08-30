@@ -47,7 +47,10 @@ chore(deps): bump pydantic-settings to 2.5
 
 1. Fork, branch, commit, push.
 2. Open a PR using the template in [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md).
-3. CI must be green: lint · type · test · build · CodeQL · Trivy.
+3. The blocking checks are backend Ruff lint/format, Bandit, and pytest;
+   frontend ESLint, Vitest, and build; and the Docker image build. CodeQL runs
+   in a separate workflow. Trivy is report-only (`exit-code: 0`), and
+   `npm audit` is explicitly non-blocking.
 4. At least one CODEOWNER approval is required for the affected path.
 
 PRs should be focused — one feature/fix per PR. If a refactor surfaces while fixing a bug, prefer a follow-up PR over an avalanche.
@@ -57,7 +60,8 @@ PRs should be focused — one feature/fix per PR. If a refactor surfaces while f
 ### Python
 
 - Ruff is the formatter and linter (config in `backend/pyproject.toml`).
-- Type hints encouraged on public functions and service boundaries; mypy runs in CI for `backend/app/`.
+- Type hints encouraged on public functions and service boundaries. `mypy` is
+  available for local checks but is not currently run by CI.
 - New endpoints go in `backend/app/api/v1/`; new business logic in `backend/app/services/`. Keep imports thin between them.
 - DB work runs in `asyncio.to_thread` from any `async def` route — `app/services/auth_service.py` is the canonical example.
 

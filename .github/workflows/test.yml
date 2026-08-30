@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend (lint · type · test)
+    name: Backend (Ruff · Bandit · pytest)
     runs-on: ubuntu-latest
     defaults:
       run:
