@@ -46,26 +46,38 @@ jobs:
 
       - name: Resolve version from tag
         id: meta
+        env:
+          RELEASE_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          REF="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "tag=${REF}" >> "$GITHUB_OUTPUT"
-          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          REF="$RELEASE_REF"
+          if [[ ! "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "error: release tag must match vX.Y.Z (with optional prerelease/build suffix)" >&2
+            exit 2
+          fi
+          VERSION="${REF#v}"
+          printf 'tag=%s\n' "$REF" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
 
       # Validates set_version.sh runs against the real tree on every release.
       # (The build jobs below re-stamp their own fresh checkouts.)
       - name: Stamp version into all manifests
-        run: bash scripts/set_version.sh "${{ steps.meta.outputs.version }}"
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: bash scripts/set_version.sh "$VERSION"
 
       - name: Extract release notes from CHANGELOG
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          VERSION="${{ steps.meta.outputs.version }}"
           awk -v ver="$VERSION" '
             $0 ~ "^## \\[" ver "\\]" { grab=1; print; next }
             grab && /^## \[/ { exit }
             grab { print }
           ' CHANGELOG.md > release_notes.md
           if [ ! -s release_notes.md ]; then
-            echo "Release ${{ steps.meta.outputs.tag }}" > release_notes.md
+            echo "Release $TAG" > release_notes.md
           fi
           {
             echo ""
@@ -85,7 +97,7 @@ jobs:
             echo '```bash'
             echo "git clone https://github.com/sweetcornna/university-helper.git"
             echo "cd university-helper"
-            echo "bash scripts/deploy_server.sh --tag ${{ steps.meta.outputs.tag }} --domain your.domain"
+            echo "bash scripts/deploy_server.sh --tag $TAG --domain your.domain"
             echo '```'
           } >> release_notes.md
 
@@ -117,15 +129,25 @@ jobs:
 
       - name: Resolve version
         id: meta
+        env:
+          RELEASE_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          REF="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "tag=${REF}" >> "$GITHUB_OUTPUT"
-          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          REF="$RELEASE_REF"
+          if [[ ! "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "error: release tag must match vX.Y.Z (with optional prerelease/build suffix)" >&2
+            exit 2
+          fi
+          VERSION="${REF#v}"
+          printf 'tag=%s\n' "$REF" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
 
       # Re-stamp this fresh checkout so the image bakes the tag's version even if
       # the tagged commit was not pre-stamped (robust to the human runbook step).
       - name: Stamp version into all manifests
-        run: bash scripts/set_version.sh "${{ steps.meta.outputs.version }}"
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: bash scripts/set_version.sh "$VERSION"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -168,15 +190,25 @@ jobs:
 
       - name: Resolve version
         id: meta
+        env:
+          RELEASE_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          REF="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "tag=${REF}" >> "$GITHUB_OUTPUT"
-          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          REF="$RELEASE_REF"
+          if [[ ! "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "error: release tag must match vX.Y.Z (with optional prerelease/build suffix)" >&2
+            exit 2
+          fi
+          VERSION="${REF#v}"
+          printf 'tag=%s\n' "$REF" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
 
       # Re-stamp this fresh checkout so the image bakes the tag's version even if
       # the tagged commit was not pre-stamped (robust to the human runbook step).
       - name: Stamp version into all manifests
-        run: bash scripts/set_version.sh "${{ steps.meta.outputs.version }}"
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: bash scripts/set_version.sh "$VERSION"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -283,15 +315,18 @@ jobs:
 
       - name: Stage sidecar as binaries/uh-backend-<triple>
         shell: bash
+        env:
+          HOST_OS: ${{ runner.os }}
+          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
           mkdir -p frontend/src-tauri/binaries
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ "$HOST_OS" = "Windows" ]; then
             cp dist/uh-backend.exe \
-               "frontend/src-tauri/binaries/uh-backend-${{ matrix.rust_target }}.exe"
+               "frontend/src-tauri/binaries/uh-backend-${RUST_TARGET}.exe"
           else
             cp dist/uh-backend \
-               "frontend/src-tauri/binaries/uh-backend-${{ matrix.rust_target }}"
-            chmod +x "frontend/src-tauri/binaries/uh-backend-${{ matrix.rust_target }}"
+               "frontend/src-tauri/binaries/uh-backend-${RUST_TARGET}"
+            chmod +x "frontend/src-tauri/binaries/uh-backend-${RUST_TARGET}"
           fi
 
       # Decide whether updater artifacts can be produced: createUpdaterArtifacts
@@ -327,8 +362,10 @@ jobs:
       - name: Smoke-test signed macOS sidecar
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
-          BIN="frontend/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/学道.app/Contents/MacOS/uh-backend"
+          BIN="frontend/src-tauri/target/$RUST_TARGET/release/bundle/macos/学道.app/Contents/MacOS/uh-backend"
           [ -x "$BIN" ] || { echo "missing signed sidecar: $BIN" >&2; exit 1; }
           bash scripts/smoke_sidecar.sh "$BIN"
 
@@ -342,7 +379,9 @@ jobs:
       - name: Flip draft → published
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.create-release.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          gh release edit "${{ needs.create-release.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
+          gh release edit "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
             --draft=false --latest

@@ -1,6 +1,8 @@
 """Release packaging guardrails for the desktop CI workflow."""
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -22,6 +24,73 @@ def _workflow_text() -> str:
 
 def _workflow_lines() -> list[str]:
     return _workflow_text().splitlines()
+
+
+def _workflow_run_blocks() -> list[tuple[str, str, str]]:
+    """Return every workflow run block as (job, step, shell script)."""
+    lines = _workflow_lines()
+    in_jobs = False
+    job_name = ""
+    step_name = ""
+    blocks: list[tuple[str, str, str]] = []
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+
+        if stripped == "jobs:":
+            in_jobs = True
+            index += 1
+            continue
+
+        if not in_jobs:
+            index += 1
+            continue
+
+        if line.startswith("  ") and not line.startswith("    ") and stripped.endswith(":"):
+            job_name = stripped[:-1]
+            step_name = ""
+            index += 1
+            continue
+
+        if line.startswith("      - "):
+            step_name = stripped[2:]
+            if step_name.startswith("name: "):
+                step_name = step_name[6:]
+            index += 1
+            continue
+
+        if line.startswith("        run:"):
+            raw_run = line.split(":", 1)[1].strip()
+            if raw_run in {"|", "|-", "|+", ">", ">-", ">+"}:
+                body: list[str] = []
+                index += 1
+                while index < len(lines):
+                    body_line = lines[index]
+                    if body_line.startswith("          "):
+                        body.append(body_line[10:])
+                    elif body_line == "":
+                        body.append("")
+                    else:
+                        break
+                    index += 1
+                raw_run = "\n".join(body)
+                blocks.append((job_name, step_name, raw_run))
+                continue
+
+            blocks.append((job_name, step_name, raw_run))
+
+        index += 1
+
+    return blocks
+
+
+def _workflow_run_block(job_name: str, step_name: str) -> str:
+    for job, step, script in _workflow_run_blocks():
+        if job == job_name and step == step_name:
+            return script
+    raise AssertionError(f"run block not found: {job_name}/{step_name}")
 
 
 def _job_names() -> set[str]:
@@ -249,3 +318,48 @@ def test_release_workflow_dispatch_checkouts_use_requested_release_ref():
     workflow = _workflow_text()
 
     assert workflow.count("ref: ${{ github.event.inputs.tag || github.ref }}") >= 4
+
+
+def test_release_workflow_run_blocks_do_not_interpolate_github_expressions():
+    blocks = _workflow_run_blocks()
+
+    assert len(blocks) == 16
+    for job_name, step_name, script in blocks:
+        assert "${{" not in script, f"direct GitHub expression in {job_name}/{step_name}"
+
+
+def test_release_tag_is_env_mapped_and_shell_metacharacters_are_rejected(tmp_path):
+    resolver_steps = (
+        ("create-release", "Resolve version from tag"),
+        ("app-image", "Resolve version"),
+        ("web-image", "Resolve version"),
+    )
+    expected_env = "RELEASE_REF: ${{ github.event.inputs.tag || github.ref_name }}"
+
+    for job_name, step_name in resolver_steps:
+        step = _step_block(job_name, step_name)
+        assert expected_env in step
+        script = _workflow_run_block(job_name, step_name)
+        assert 'REF="$RELEASE_REF"' in script
+        assert 'if [[ ! "$REF" =~ ' in script
+
+        valid_output = tmp_path / f"{job_name}-valid-output"
+        valid_env = os.environ.copy()
+        valid_env.update(RELEASE_REF="v1.4.5-rc.1", GITHUB_OUTPUT=str(valid_output))
+        valid = subprocess.run(
+            ["bash"], input=script, text=True, capture_output=True, env=valid_env
+        )
+        assert valid.returncode == 0, valid.stderr
+        assert valid_output.read_text() == "tag=v1.4.5-rc.1\nversion=1.4.5-rc.1\n"
+
+        marker = tmp_path / f"{job_name}-injected"
+        malicious_output = tmp_path / f"{job_name}-malicious-output"
+        malicious = f'v1.4.0"; touch {marker}; #\n'
+        malicious_env = os.environ.copy()
+        malicious_env.update(RELEASE_REF=malicious, GITHUB_OUTPUT=str(malicious_output))
+        rejected = subprocess.run(
+            ["bash"], input=script, text=True, capture_output=True, env=malicious_env
+        )
+        assert rejected.returncode == 2, rejected.stderr
+        assert not marker.exists()
+        assert not malicious_output.exists()
