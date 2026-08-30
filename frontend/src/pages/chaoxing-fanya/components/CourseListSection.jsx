@@ -14,10 +14,10 @@ export default function CourseListSection({
   const allSelected = useMemo(
 
 
-    () => courseIds.length > 0 && courseIds.length === selectedCourses.length,
+    () => courseIds.length > 0 && courseIds.every((courseId) => selectedCourses.includes(courseId)),
 
 
-    [courseIds.length, selectedCourses.length]
+    [courseIds, selectedCourses]
 
 
   )

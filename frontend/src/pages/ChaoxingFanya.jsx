@@ -46,6 +46,16 @@ export default function ChaoxingFanya() {
 
   const auth = useAuthentication({ stopPolling })
 
+  // Keep selections valid when a successful login/refresh replaces the course list.
+  // A failed refresh leaves auth.courses untouched, so it does not discard choices.
+  useEffect(() => {
+    const availableCourseIds = new Set(auth.courses.map(getCourseId).filter(Boolean))
+    setSelectedCourses((prev) => {
+      const next = prev.filter((courseId) => availableCourseIds.has(courseId))
+      return next.length === prev.length ? prev : next
+    })
+  }, [auth.courses])
+
   // Surface auth errors / notices through the shared toast and immediately
   // clear the source so the same message can be re-announced if it recurs.
   const { error: authError, notice: authNotice, setError: authSetError, setNotice: authSetNotice } =
@@ -107,12 +117,15 @@ export default function ChaoxingFanya() {
     auth.setError('')
     auth.setNotice('')
 
+    const availableCourseIds = new Set(auth.courses.map(getCourseId).filter(Boolean))
+    const validSelectedCourses = selectedCourses.filter((courseId) => availableCourseIds.has(courseId))
+
 
     if (!auth.username.trim() || !auth.password.trim()) {
       auth.setError('请先填写账号和密码。')
       return
     }
-    if (selectedCourses.length === 0) {
+    if (validSelectedCourses.length === 0) {
       auth.setError('请至少选择一门课程。')
       return
     }
@@ -131,7 +144,7 @@ export default function ChaoxingFanya() {
           platform: 'chaoxing',
           username: auth.username.trim(),
           password: auth.password,
-          course_ids: selectedCourses,
+          course_ids: validSelectedCourses,
           speed: taskConfig.speed,
           concurrency: taskConfig.concurrency,
           unopened_strategy: taskConfig.unopenedStrategy,
