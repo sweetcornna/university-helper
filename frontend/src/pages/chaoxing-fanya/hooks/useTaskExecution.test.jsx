@@ -238,6 +238,7 @@ describe('useTaskExecution task generations', () => {
       await flush()
       act(() => rendered.current.setTaskId('A'))
       await flush()
+      expect(vi.getTimerCount()).toBe(1)
       act(() => rendered.current.selectTaskFromHistory('B'))
       await flush()
 
@@ -247,6 +248,7 @@ describe('useTaskExecution task generations', () => {
       expect(callApi.mock.calls.filter(([path]) => path === '/course/logs/A?cursor=0')).toHaveLength(1)
       expect(callApi.mock.calls.filter(([path]) => path === '/course/status/B')).toHaveLength(1)
       expect(callApi.mock.calls.filter(([path]) => path === '/course/logs/B?cursor=0')).toHaveLength(1)
+      expect(vi.getTimerCount()).toBe(1)
     } finally {
       rendered.cleanup()
     }
@@ -278,6 +280,7 @@ describe('useTaskExecution task generations', () => {
       expect(statusCalls).toBe(1)
       expect(logsCalls).toBe(1)
       expect(rendered.current.logCursor).toBe(7)
+      expect(vi.getTimerCount()).toBe(1)
 
 
       act(() => rendered.current.selectTaskFromHistory('B'))
@@ -285,6 +288,7 @@ describe('useTaskExecution task generations', () => {
       expect(statusCalls).toBe(2)
       expect(logsCalls).toBe(2)
       expect(rendered.current.logCursor).toBe(0)
+      expect(vi.getTimerCount()).toBe(1)
 
 
       act(() => rendered.current.selectTaskFromHistory('B'))
@@ -303,6 +307,16 @@ describe('useTaskExecution task generations', () => {
 
       expect(rendered.current.logCursor).toBe(9)
       expect(rendered.current.logs.map((item) => item.message)).toEqual(['refreshed'])
+      expect(vi.getTimerCount()).toBe(1)
+
+
+      act(() => {
+        vi.advanceTimersByTime(2500)
+      })
+      await flush()
+      expect(statusCalls).toBe(3)
+      expect(logsCalls).toBe(3)
+      expect(vi.getTimerCount()).toBe(1)
     } finally {
       rendered.cleanup()
     }
@@ -381,6 +395,13 @@ describe('useTaskExecution task generations', () => {
       expect(rendered.current.taskStatus.status).toBe('completed')
       expect(rendered.current.logs.map((item) => item.message)).toEqual(['B first', 'B done'])
       expect(rendered.stopPolling).toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+
+
+      act(() => rendered.current.selectTaskFromHistory('B'))
+      await flush()
+      expect(statusCalls).toBe(3)
+      expect(logsCalls).toBe(3)
       expect(vi.getTimerCount()).toBe(0)
     } finally {
       rendered.cleanup()

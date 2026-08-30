@@ -404,7 +404,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       setTaskId(targetId)
 
 
-      stopPolling()
+      if (!isSameTask) stopPolling()
 
 
       if (isSameTask) {
