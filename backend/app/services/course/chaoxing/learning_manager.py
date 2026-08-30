@@ -13,10 +13,19 @@ from ..task_store import task_store
 from .endpoint_security import validate_tiku_config
 from .learning import ChapterTask, JobProcessor, init_chaoxing
 from .payload_mapper import normalize_tiku_config
+from .task_admission import (
+    MAX_ACTIVE_TASKS,
+    TaskAlreadyActiveError,
+    TaskCapacityError,
+    cleanup_task_records,
+    count_active_tasks,
+    is_active_status,
+    sort_task_records,
+)
 
 logger = logging.getLogger(__name__)
 LEARNING_TASK_KIND = "chaoxing_learning"
-INTERRUPTED_STATUSES = {"running", "pending", "paused", "cancelling"}
+INTERRUPTED_STATUSES = {"running", "pending", "paused", "cancelling", "stopping"}
 RESTART_INTERRUPTED_MESSAGE = "Task interrupted due to service restart"
 UNEXPECTED_WORKER_ERROR_PREFIX = "Unexpected task failure"
 USER_TASK_LOAD_LIMIT = 2000
@@ -24,6 +33,7 @@ THREAD_START_FAILURE_MESSAGE = (
     "Server cannot start a new background thread. Stop existing tasks and retry, "
     "or restart the service if the problem persists."
 )
+TASK_PERSIST_FAILURE_MESSAGE = "Failed to persist learning task state"
 # Minimum seconds between throttled (high-frequency progress) main-DB upserts of
 # a single task's payload. Video progress callbacks fire ~1/sec per task and
 # each upsert re-serializes the whole growing logs+progress payload as JSONB, so
@@ -120,44 +130,59 @@ class ChaoxingLearningManager:
         # fail-closed behavior.
         validate_tiku_config((payload or {}).get("tiku_config"))
 
-        task_id = uuid4().hex
-        pause_event = threading.Event()
-        pause_event.set()
-        stop_event = threading.Event()
-        now = _utc_now_iso()
-
-        task_state: dict[str, Any] = {
-            "task_id": task_id,
-            "user_id": user_id,
-            "platform": "chaoxing",
-            "status": "pending",
-            "message": "Task created",
-            "current_task": "preparing",
-            "progress": {
-                "total": 0,
-                "completed": 0,
-                "failed": 0,
-                "current": 0,
-                "total_chapters": 0,
-                "completed_chapters": 0,
-                "current_course": "",
-                "current_chapter": "",
-                "video_progress": None,
-            },
-            "created_at": now,
-            "started_at": now,
-            "updated_at": now,
-            "logs": [],
-            "_log_cursor": 0,
-            "_pause_event": pause_event,
-            "_stop_event": stop_event,
-        }
-
+        normalized_user_id = str(user_id or "").strip()
         with self._lock:
+            cleanup_task_records(self._tasks)
+            if any(
+                str(task.get("user_id") or "").strip() == normalized_user_id and is_active_status(task.get("status"))
+                for task in self._tasks.values()
+            ):
+                raise TaskAlreadyActiveError()
+            if count_active_tasks(self._tasks) >= MAX_ACTIVE_TASKS:
+                raise TaskCapacityError()
+
+            task_id = uuid4().hex
+            pause_event = threading.Event()
+            pause_event.set()
+            stop_event = threading.Event()
+            now = _utc_now_iso()
+            task_state: dict[str, Any] = {
+                "task_id": task_id,
+                "user_id": user_id,
+                "platform": "chaoxing",
+                "status": "pending",
+                "message": "Task created",
+                "current_task": "preparing",
+                "progress": {
+                    "total": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "current": 0,
+                    "total_chapters": 0,
+                    "completed_chapters": 0,
+                    "current_course": "",
+                    "current_chapter": "",
+                    "video_progress": None,
+                },
+                "created_at": now,
+                "started_at": now,
+                "updated_at": now,
+                "logs": [],
+                "_log_cursor": 0,
+                "_pause_event": pause_event,
+                "_stop_event": stop_event,
+            }
             self._tasks[task_id] = task_state
+            cleanup_task_records(self._tasks)
             persist_request = self._prepare_persist_locked(task_state)
         if persist_request:
-            self._persist_task_state(*persist_request)
+            try:
+                persisted = self._persist_task_state(*persist_request)
+                if persisted is False:
+                    raise RuntimeError(TASK_PERSIST_FAILURE_MESSAGE)
+            except Exception:
+                self._record_admission_persist_failure(task_id)
+                raise
 
         try:
             threading.Thread(
@@ -165,7 +190,7 @@ class ChaoxingLearningManager:
                 args=(task_id, user_id, dict(payload or {})),
                 daemon=True,
             ).start()
-        except RuntimeError as exc:
+        except Exception as exc:
             self._fail_task(task_id, THREAD_START_FAILURE_MESSAGE)
             raise RuntimeError(THREAD_START_FAILURE_MESSAGE) from exc
         return task_id
@@ -174,6 +199,7 @@ class ChaoxingLearningManager:
         normalized_user_id = str(user_id or "").strip()
         normalized_task_id = str(task_id or "").strip()
         with self._lock:
+            cleanup_task_records(self._tasks)
             task = self._tasks.get(normalized_task_id)
             if task and str(task.get("user_id")) == normalized_user_id:
                 return {k: v for k, v in task.items() if not k.startswith("_")}
@@ -188,6 +214,7 @@ class ChaoxingLearningManager:
     def list_tasks(self, user_id: str) -> list[dict[str, Any]]:
         self._ensure_tasks_loaded_for_user(user_id)
         with self._lock:
+            cleanup_task_records(self._tasks)
             tasks: list[dict[str, Any]] = []
             for task in self._tasks.values():
                 if str(task.get("user_id")) != str(user_id):
@@ -202,16 +229,13 @@ class ChaoxingLearningManager:
                 if not public_task.get("updated_at") and started_at:
                     public_task["updated_at"] = started_at
                 tasks.append(public_task)
-        return sorted(
-            tasks,
-            key=lambda item: str(item.get("updated_at") or item.get("start_time") or item.get("started_at") or ""),
-            reverse=True,
-        )
+        return sort_task_records(tasks)
 
     def get_task_logs(self, user_id: str, task_id: str, cursor: int | None = None) -> dict[str, Any] | None:
         normalized_user_id = str(user_id or "").strip()
         normalized_task_id = str(task_id or "").strip()
         with self._lock:
+            cleanup_task_records(self._tasks)
             task = self._tasks.get(normalized_task_id)
             if task and str(task.get("user_id")) == normalized_user_id:
                 start = int(cursor) if cursor is not None else int(task.get("_log_cursor", 0))
@@ -223,6 +247,7 @@ class ChaoxingLearningManager:
 
         self._load_task_from_store(normalized_user_id, normalized_task_id)
         with self._lock:
+            cleanup_task_records(self._tasks)
             task = self._tasks.get(normalized_task_id)
             if not task or str(task.get("user_id")) != normalized_user_id:
                 return None
@@ -653,6 +678,38 @@ class ChaoxingLearningManager:
         self._update_task(task_id, status="failed", message=message, current_task="failed")
         self._append_task_log(task_id, message, "error")
 
+    def _record_admission_persist_failure(self, task_id: str) -> None:
+        """Keep an unstarted task terminal and best-effort overwrite any active row."""
+        persist_request: tuple[dict[str, Any], _TaskPersistSequencer, int] | None = None
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            now = _utc_now_iso()
+            task.update(
+                status="failed",
+                message=TASK_PERSIST_FAILURE_MESSAGE,
+                current_task="failed",
+                updated_at=now,
+            )
+            task["logs"].append(
+                {
+                    "timestamp": now,
+                    "message": TASK_PERSIST_FAILURE_MESSAGE,
+                    "level": "error",
+                }
+            )
+            if len(task["logs"]) > 1000:
+                del task["logs"][:-1000]
+            persist_request = self._prepare_persist_locked(task)
+        if not persist_request:
+            return
+        try:
+            if self._persist_task_state(*persist_request) is False:
+                logger.warning("failed to compensate learning task admission: task_id=%s", task_id)
+        except Exception:  # pragma: no cover - defensive for patched/custom stores
+            logger.warning("failed to compensate learning task admission: task_id=%s", task_id, exc_info=True)
+
     def _append_task_log(self, task_id: str, message: str, level: str = "info") -> None:
         persist_request: tuple[dict[str, Any], _TaskPersistSequencer, int] | None = None
         with self._lock:
@@ -767,19 +824,26 @@ class ChaoxingLearningManager:
         task_state_public: dict[str, Any],
         sequencer: _TaskPersistSequencer | None = None,
         revision: int | None = None,
-    ) -> None:
+    ) -> bool:
+        persisted = True
+
         def write() -> None:
+            nonlocal persisted
             try:
-                task_store.upsert_task(LEARNING_TASK_KIND, task_state_public)
+                result = task_store.upsert_task(LEARNING_TASK_KIND, task_state_public)
+                if result is False:
+                    persisted = False
             except Exception as exc:  # pragma: no cover - defensive fallback
+                persisted = False
                 logger.warning("persist learning task failed: %s", exc)
 
         if sequencer is None or revision is None:
             # Keep direct private callers compatible; manager-generated snapshots
             # always carry a reservation and therefore use the ordered path.
             write()
-            return
+            return persisted
         sequencer.run(revision, write)
+        return persisted
 
     def _ensure_tasks_loaded_for_user(self, user_id: str) -> None:
         normalized_user_id = str(user_id or "").strip()
@@ -827,6 +891,7 @@ class ChaoxingLearningManager:
             self._merge_task_from_store(item)
 
         with self._lock:
+            cleanup_task_records(self._tasks)
             self._loaded_task_users.add(normalized_user_id)
 
     def _merge_task_from_store(self, item: dict[str, Any], now: str | None = None) -> bool:
@@ -879,6 +944,8 @@ class ChaoxingLearningManager:
         task["_log_cursor"] = 0
 
         with self._lock:
+            if task_id in self._tasks:
+                return False
             self._tasks[task_id] = task
 
         if interrupted:
@@ -898,6 +965,8 @@ class ChaoxingLearningManager:
         now = _utc_now_iso()
         for item in stored_tasks:
             self._merge_task_from_store(item, now=now)
+        with self._lock:
+            cleanup_task_records(self._tasks)
 
 
 learning_manager = ChaoxingLearningManager()

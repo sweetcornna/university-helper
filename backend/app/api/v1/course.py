@@ -17,6 +17,7 @@ from app.services.course.chaoxing.endpoint_security import (
     validate_tiku_config,
 )
 from app.services.course.chaoxing.signin import signin_manager
+from app.services.course.chaoxing.task_admission import TaskAdmissionError
 from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
 from app.services.notification import NotificationFactory
 from app.services.notification.providers import validate_notification_url
@@ -167,6 +168,8 @@ async def start_course_learning(
         )
     except UnsafeEndpointError as exc:
         raise HTTPException(status_code=422, detail=INVALID_ENDPOINT_CONFIG_DETAIL) from exc
+    except TaskAdmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except Exception as exc:
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start course learning task", exc) from exc

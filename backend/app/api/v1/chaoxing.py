@@ -12,6 +12,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from app.config import settings
 from app.dependencies import get_current_user_id
 from app.services.course.chaoxing.signin import signin_manager
+from app.services.course.chaoxing.task_admission import TaskAdmissionError
 
 logger = logging.getLogger(__name__)
 
@@ -591,9 +592,10 @@ async def chaoxing_start(
     request = _validate_payload(ChaoxingStartRequest, payload)
     _ensure_supported_sign_type(request.sign_type)
 
-    task_id = await _run_blocking(
-        signin_manager.start_task, user_id=user_id, payload=request.model_dump()
-    )
+    try:
+        task_id = await _run_blocking(signin_manager.start_task, user_id=user_id, payload=request.model_dump())
+    except TaskAdmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return {
         "status": True,
         "message": "Task started",
@@ -610,11 +612,14 @@ async def chaoxing_class_start(
     request = _validate_payload(ChaoxingClassStartRequest, payload)
     _ensure_supported_sign_type(request.sign_type)
 
-    task_id = await _run_blocking(
-        signin_manager.start_class_task,
-        user_id=user_id,
-        payload=request.model_dump(),
-    )
+    try:
+        task_id = await _run_blocking(
+            signin_manager.start_class_task,
+            user_id=user_id,
+            payload=request.model_dump(),
+        )
+    except TaskAdmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return {
         "status": True,
         "message": "Class task started",
@@ -633,11 +638,14 @@ async def chaoxing_class_start_by_path(
     request = _validate_payload(ChaoxingClassStartRequest, payload)
     _ensure_supported_sign_type(request.sign_type)
 
-    task_id = await _run_blocking(
-        signin_manager.start_class_task,
-        user_id=user_id,
-        payload=request.model_dump(),
-    )
+    try:
+        task_id = await _run_blocking(
+            signin_manager.start_class_task,
+            user_id=user_id,
+            payload=request.model_dump(),
+        )
+    except TaskAdmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return {
         "status": True,
         "message": "Class task started",
