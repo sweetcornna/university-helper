@@ -103,6 +103,25 @@ fn loopback_http_ok(addr: SocketAddr, path: &str) -> bool {
     }
 }
 
+fn wait_for_backend_ready<P, S>(
+    addr: SocketAddr,
+    attempts: usize,
+    mut probe: P,
+    mut sleep: S,
+) -> bool
+where
+    P: FnMut(SocketAddr, &str) -> bool,
+    S: FnMut(),
+{
+    for _ in 0..attempts {
+        if probe(addr, "/health") && probe(addr, "/") {
+            return true;
+        }
+        sleep();
+    }
+    false
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = match tauri::Builder::default()
@@ -149,16 +168,21 @@ pub fn run() {
                                 // routes. Wait for real HTTP 200 responses so the
                                 // webview never lands on a half-ready blank page.
                                 let addr = SocketAddr::from(([127, 0, 0, 1], p));
-                                let mut ready = false;
-                                for _ in 0..600 {
-                                    if loopback_http_ok(addr, "/health")
-                                        && loopback_http_ok(addr, "/")
-                                    {
-                                        ready = true;
-                                        break;
+                                let ready = match tauri::async_runtime::spawn_blocking(move || {
+                                    wait_for_backend_ready(addr, 600, loopback_http_ok, || {
+                                        std::thread::sleep(Duration::from_millis(100))
+                                    })
+                                })
+                                .await
+                                {
+                                    Ok(ready) => ready,
+                                    Err(err) => {
+                                        eprintln!(
+                                            "[uh-desktop] backend readiness task failed: {err}"
+                                        );
+                                        false
                                     }
-                                    std::thread::sleep(Duration::from_millis(100));
-                                }
+                                };
                                 if !ready {
                                     show_startup_error(
                                         &handle,
@@ -283,7 +307,8 @@ async fn check_for_updates(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::http_response_is_ok;
+    use super::{http_response_is_ok, wait_for_backend_ready};
+    use std::net::SocketAddr;
 
     #[test]
     fn recognizes_successful_http_response_status_lines() {
@@ -301,5 +326,56 @@ mod tests {
         assert!(!http_response_is_ok(b"HTTP/1.1 404 Not Found\r\n"));
         assert!(!http_response_is_ok(b""));
         assert!(!http_response_is_ok(b"not http"));
+    }
+
+    #[test]
+    fn backend_readiness_succeeds_after_a_retry_when_both_routes_are_ready() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 1234));
+        let mut health_calls = 0;
+        let mut root_calls = 0;
+        let mut sleeps = 0;
+
+        let ready = wait_for_backend_ready(
+            addr,
+            3,
+            |_addr, path| match path {
+                "/health" => {
+                    health_calls += 1;
+                    health_calls >= 2
+                }
+                "/" => {
+                    root_calls += 1;
+                    root_calls >= 1
+                }
+                _ => false,
+            },
+            || sleeps += 1,
+        );
+
+        assert!(ready);
+        assert_eq!(health_calls, 2);
+        assert_eq!(root_calls, 1);
+        assert_eq!(sleeps, 1);
+    }
+
+    #[test]
+    fn backend_readiness_exhausts_attempts_and_sleeps_after_each_failure() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 1234));
+        let mut probes = 0;
+        let mut sleeps = 0;
+
+        let ready = wait_for_backend_ready(
+            addr,
+            3,
+            |_addr, _path| {
+                probes += 1;
+                false
+            },
+            || sleeps += 1,
+        );
+
+        assert!(!ready);
+        assert_eq!(probes, 3);
+        assert_eq!(sleeps, 3);
     }
 }
