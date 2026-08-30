@@ -186,8 +186,9 @@ export default function ChaoxingFanya() {
       )
       taskExec.appendLogs([{ timestamp: new Date().toISOString(), level: 'success', message: `任务已创建：${resp.task_id}` }])
     } catch (err) {
-      taskExec.setLoading(false)
       auth.setError(err?.message || '启动任务失败。')
+    } finally {
+      taskExec.setLoading(false)
     }
   }, [
     auth,
