@@ -1,10 +1,62 @@
 import json
+import math
 import random
 
 import requests
 from loguru import logger
 
 from ..answer_base import Tiku
+
+_TRUE_VALUES = frozenset({"1", "true", "yes", "y", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "n", "off", ""})
+_DEFAULT_RETRY = True
+_DEFAULT_RETRY_TIMES = 3
+
+
+def _parse_bool(value, default: bool) -> bool:
+    """Normalize bool-like values accepted by the tiku configuration."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, float):
+        return bool(value) if math.isfinite(value) else default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _TRUE_VALUES:
+            return True
+        if normalized in _FALSE_VALUES:
+            return False
+        try:
+            numeric = float(normalized)
+        except ValueError:
+            return default
+        return bool(numeric) if math.isfinite(numeric) else default
+    return default
+
+
+def _parse_non_negative_int(value, default: int) -> int:
+    """Parse a retry count, falling back for malformed or negative values."""
+    try:
+        if isinstance(value, bool):
+            parsed = int(value)
+        elif isinstance(value, int):
+            parsed = value
+        elif isinstance(value, float):
+            if not math.isfinite(value) or not value.is_integer():
+                raise ValueError
+            parsed = int(value)
+        elif isinstance(value, str):
+            parsed = int(value.strip(), 10)
+        else:
+            parsed = int(value)
+        if parsed < 0:
+            raise ValueError
+        # Keep the existing meaning of this field (total attempts), while
+        # ensuring a zero setting still permits the initial request.
+        return max(1, parsed)
+    except (TypeError, ValueError):
+        return default
 
 
 class TikuLike(Tiku):
@@ -63,15 +115,19 @@ class TikuLike(Tiku):
         ans = None
         try_times = 0
 
-        # 尝试查询，直到成功或达到重试次数
-        while not ans and self._retry and try_times < self._retry_times:
+        # ``_retry_times`` historically means total attempts for this provider.
+        # Disabling retries must still perform the initial request once.
+        retry_enabled = _parse_bool(self._retry, _DEFAULT_RETRY)
+        retry_times = _parse_non_negative_int(self._retry_times, _DEFAULT_RETRY_TIMES)
+        max_attempts = retry_times if retry_enabled else 1
+        while not ans and try_times < max_attempts:
             ans = self._query_single(token, question)
             try_times += 1
             if ans:  # 如果查询成功，减少余额
                 self._balance[token] -= 1
                 logger.info(f"使用Token ...{token[-5:]} 查询成功，剩余次数: {self._balance[token]}")
                 break
-            if try_times < self._retry_times:
+            if try_times < max_attempts:
                 logger.warning(f"使用Token ...{token[-5:]} 查询失败，进行第 {try_times + 1} 次重试...")
 
         # 10次查询后更新余额
@@ -326,8 +382,11 @@ class TikuLike(Tiku):
         self._search = self._conf.get("likeapi_search", False)
         self._model = self._conf.get("likeapi_model", None)
         self._vision = self._conf.get("likeapi_vision", True)
-        self._retry = self._conf.get("likeapi_retry", True)
-        self._retry_times = self._conf.get("likeapi_retry_times", 3)
+        self._retry = _parse_bool(self._conf.get("likeapi_retry", _DEFAULT_RETRY), _DEFAULT_RETRY)
+        self._retry_times = _parse_non_negative_int(
+            self._conf.get("likeapi_retry_times", _DEFAULT_RETRY_TIMES),
+            _DEFAULT_RETRY_TIMES,
+        )
 
     def _init_tiku(self) -> None:
         self.load_config()
