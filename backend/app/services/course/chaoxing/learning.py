@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import configparser
 import enum
+import operator
 import sys
 import threading
 import time
@@ -74,6 +75,27 @@ def str_to_bool(value):
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _validate_jobs(value: Any) -> int:
+    """Return a positive job count or reject an invalid configuration value."""
+    try:
+        # Configuration files provide strings, while programmatic callers must
+        # provide an integer-like value.  ``operator.index`` deliberately
+        # rejects floats instead of silently truncating them via ``int``.
+        jobs = int(value) if isinstance(value, str) else operator.index(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("jobs must be a positive integer") from exc
+    if jobs <= 0:
+        raise ValueError("jobs must be greater than 0")
+    return jobs
+
+
+def _parse_jobs_argument(value: str) -> int:
+    try:
+        return _validate_jobs(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
@@ -91,7 +113,7 @@ def parse_args():
     parser.add_argument(
         "-j",
         "--jobs",
-        type=int,
+        type=_parse_jobs_argument,
         default=4,
         help="同时进行的章节数 (默认4, 如果一个章节有多个任务点，不会限制同时处理任务点的数量)",
     )
@@ -141,7 +163,7 @@ def load_config_from_file(config_path):
         if "speed" in common_config:
             common_config["speed"] = float(common_config["speed"])
         if "jobs" in common_config:
-            common_config["jobs"] = int(common_config["jobs"])
+            common_config["jobs"] = _validate_jobs(common_config["jobs"])
         # 处理notopen_action，设置默认值为retry
         if "notopen_action" not in common_config:
             common_config["notopen_action"] = "retry"
@@ -175,7 +197,7 @@ def build_config_from_args(args):
         "password": args.password,
         "course_list": [item.strip() for item in args.list.split(",") if item.strip()] if args.list else None,
         "speed": args.speed if args.speed else 1.0,
-        "jobs": args.jobs,
+        "jobs": _validate_jobs(args.jobs),
         "notopen_action": args.notopen_action if args.notopen_action else "retry",
     }
     return common_config, {}, {}
@@ -437,6 +459,10 @@ class JobProcessor:
                 record_thread_error(exc)
 
         try:
+            # A non-positive worker count would leave queued tasks with no
+            # worker able to consume them, making the controller wait forever.
+            # Validate before enqueueing or starting any thread.
+            self.worker_num = _validate_jobs(self.worker_num)
             for task in self.tasks:
                 self.task_queue.put(task)
 
