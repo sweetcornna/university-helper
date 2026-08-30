@@ -117,7 +117,7 @@ If you are setting up a brand new server (rare):
 
 1. `ssh root@<server>`
 2. `mkdir -p /opt/university-helper && cd /opt/university-helper`
-3. `git clone <repo>` or `rsync` the source (excluding `.env`, `node_modules`, `dist`, `__pycache__`).
+3. `git clone <repo> .` or `rsync <source>/ ./` the source into the current directory (excluding `.env`, `node_modules`, `dist`, `__pycache__`).
 4. Create `/opt/university-helper/.env` manually with real secrets (see above).
 5. Install Node.js 20 (matching `.nvmrc`). From the repository root, build the SPA before configuring nginx:
    ```bash
@@ -263,7 +263,7 @@ export EASY_LEARNING_SERVER_PASSWORD=<从密钥管理获取>
 
 1. `ssh root@<server>`
 2. `mkdir -p /opt/university-helper && cd /opt/university-helper`
-3. `git clone <repo>` 或用 `rsync` 上传源码（排除 `.env`、`node_modules`、`dist`、`__pycache__`）。
+3. `git clone <repo> .` 或用 `rsync <source>/ ./` 将源码同步到当前目录（排除 `.env`、`node_modules`、`dist`、`__pycache__`）。
 4. 在 `/opt/university-helper/.env` 中**手动**写入真实密钥（参见上文）。
 5. 安装 Node.js 20（以 `.nvmrc` 为准）。在仓库根目录先构建前端，再配置 nginx：
    ```bash
