@@ -160,7 +160,12 @@ pub fn run() {
                                     std::thread::sleep(Duration::from_millis(100));
                                 }
                                 if !ready {
-                                    eprintln!("[uh-backend] 127.0.0.1:{p} never became reachable");
+                                    show_startup_error(
+                                        &handle,
+                                        format!("本地后端 127.0.0.1:{p} 在规定时间内未能响应"),
+                                    );
+                                    kill_sidecar(&handle);
+                                    break;
                                 }
                                 let url = format!("http://127.0.0.1:{p}");
                                 let h = handle.clone();
