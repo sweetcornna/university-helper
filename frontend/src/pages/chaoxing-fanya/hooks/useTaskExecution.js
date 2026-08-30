@@ -11,7 +11,16 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
   const logCursorRef = useRef(0)
 
 
-  const [taskId, setTaskId] = useState('')
+  const taskIdRef = useRef('')
+
+
+  const taskGenerationRef = useRef(0)
+
+
+  const pollInFlightRef = useRef(null)
+
+
+  const [taskId, setTaskIdState] = useState('')
 
 
   const [taskStatus, setTaskStatus] = useState(null)
@@ -29,6 +38,33 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
   const [loading, setLoading] = useState(false)
 
 
+  const isCurrentGeneration = useCallback((generation) => generation === taskGenerationRef.current, [])
+
+
+  const isCurrentTask = useCallback((generation, targetId) => (
+    isCurrentGeneration(generation) &&
+    (!taskIdRef.current || taskIdRef.current === targetId)
+  ), [isCurrentGeneration])
+
+
+  const setTaskId = useCallback((nextId) => {
+    const resolvedId = typeof nextId === 'function' ? nextId(taskIdRef.current) : nextId
+    const normalizedId = String(resolvedId || '').trim()
+
+
+    if (normalizedId !== taskIdRef.current) {
+      taskGenerationRef.current += 1
+      taskIdRef.current = normalizedId
+      setLogs([])
+      setLogCursor(0)
+      logCursorRef.current = 0
+    }
+
+
+    setTaskIdState(normalizedId)
+  }, [])
+
+
   useEffect(() => {
 
 
@@ -39,13 +75,20 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
 
 
 
-  const appendLogs = useCallback((incoming) => {
+  const appendLogs = useCallback((incoming, options = {}) => {
 
 
     if (!Array.isArray(incoming) || incoming.length === 0) return
 
 
+    const generation = options.generation ?? taskGenerationRef.current
+    const targetId = options.taskId ?? taskIdRef.current
+
+
     setLogs((prev) => {
+
+
+      if (!isCurrentTask(generation, targetId)) return prev
 
 
       const merged = [...prev, ...incoming]
@@ -81,7 +124,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     })
 
 
-  }, [])
+  }, [isCurrentTask])
 
 
   const loadTaskSnapshot = useCallback(
@@ -94,6 +137,12 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
 
 
       if (!targetId) return
+
+
+      const generation = taskGenerationRef.current
+
+
+      if (!isCurrentTask(generation, targetId)) return
 
 
       const shouldResetLogs = Boolean(options.resetLogs)
@@ -120,16 +169,17 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       const statusResp = await callApi(`/course/status/${targetId}`)
 
 
-      if (!statusResp) return
+      if (!statusResp || !isCurrentTask(generation, targetId)) return
 
 
-      setTaskStatus(statusResp)
+      setTaskStatus((prev) => (isCurrentTask(generation, targetId) ? statusResp : prev))
 
 
       setTaskHistory((prev) =>
 
 
-        mergeTaskHistory(
+        isCurrentTask(generation, targetId)
+          ? mergeTaskHistory(
 
 
           prev,
@@ -153,7 +203,8 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
           true
 
 
-        )
+          )
+          : prev
 
 
       )
@@ -162,7 +213,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       const logsResp = await callApi(`/course/logs/${targetId}?cursor=${cursor}`)
 
 
-      if (logsResp) {
+      if (logsResp && isCurrentTask(generation, targetId)) {
 
 
         const items = (logsResp.data || []).map((item) => ({
@@ -180,10 +231,11 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
         }))
 
 
-        appendLogs(items)
+        appendLogs(items, { generation, taskId: targetId })
 
 
-        setLogCursor(toNum(logsResp.cursor, cursor + items.length))
+        const nextCursor = toNum(logsResp.cursor, cursor + items.length)
+        setLogCursor((prev) => (isCurrentTask(generation, targetId) ? nextCursor : prev))
 
 
       }
@@ -192,10 +244,10 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       const statusText = String(statusResp?.status || '').toLowerCase()
 
 
-      if (DONE_STATUSES.has(statusText)) {
+      if (DONE_STATUSES.has(statusText) && isCurrentTask(generation, targetId)) {
 
 
-        setLoading(false)
+        setLoading((prev) => (isCurrentTask(generation, targetId) ? false : prev))
 
 
         stopPolling()
@@ -207,9 +259,41 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     },
 
 
-    [appendLogs, callApi, stopPolling]
+    [appendLogs, callApi, isCurrentTask, stopPolling]
 
 
+  )
+
+
+  const runTaskSnapshot = useCallback(
+    async (id, options = {}, fallbackError = '获取任务状态失败。') => {
+      const targetId = String(id || '').trim()
+      if (!targetId) return
+
+
+      const generation = taskGenerationRef.current
+      if (!isCurrentTask(generation, targetId)) return
+      if (
+        pollInFlightRef.current?.generation === generation &&
+        pollInFlightRef.current?.taskId === targetId
+      ) return
+
+
+      const inFlight = { generation, taskId: targetId }
+      pollInFlightRef.current = inFlight
+      try {
+        await loadTaskSnapshot(targetId, options)
+      } catch (err) {
+        if (isCurrentTask(generation, targetId)) {
+          setError(err?.message || fallbackError)
+        }
+      } finally {
+        if (pollInFlightRef.current === inFlight) {
+          pollInFlightRef.current = null
+        }
+      }
+    },
+    [isCurrentTask, loadTaskSnapshot, setError]
   )
 
 
@@ -218,6 +302,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
 
 
     let active = true
+    const restoreGeneration = taskGenerationRef.current
 
 
     const restoreTasks = async () => {
@@ -229,7 +314,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
         const resp = await callApi('/course/tasks')
 
 
-        if (!resp || !active) return
+        if (!resp || !active || !isCurrentGeneration(restoreGeneration)) return
 
 
         const rawTasks = Array.isArray(resp) ? resp : resp?.tasks || resp?.data || []
@@ -247,7 +332,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
           .sort((a, b) => toTimestamp(b.updated_at) - toTimestamp(a.updated_at))
 
 
-        if (!active) return
+        if (!active || !isCurrentGeneration(restoreGeneration)) return
 
 
         setTaskHistory(normalizedTasks)
@@ -265,13 +350,12 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
         setTaskId(restoringTask.task_id)
 
 
-        await loadTaskSnapshot(restoringTask.task_id, { resetLogs: true })
 
 
       } catch (err) {
 
 
-        if (!active) return
+        if (!active || !isCurrentGeneration(restoreGeneration)) return
 
 
         setError((prev) => prev || err?.message || '恢复任务状态失败。')
@@ -295,13 +379,13 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     }
 
 
-  }, [callApi, loadTaskSnapshot, setError])
+  }, [callApi, isCurrentGeneration, setError, setTaskId])
 
 
   const selectTaskFromHistory = useCallback(
 
 
-    async (id) => {
+    (id) => {
 
 
       const targetId = String(id || '').trim()
@@ -316,31 +400,24 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       setNotice('')
 
 
+      const isSameTask = targetId === taskIdRef.current
       setTaskId(targetId)
 
 
       stopPolling()
 
 
-      try {
-
-
-        await loadTaskSnapshot(targetId, { resetLogs: true })
-
-
-      } catch (err) {
-
-
-        setError(err?.message || '读取任务详情失败。')
-
-
+      if (isSameTask) {
+        void runTaskSnapshot(targetId, { resetLogs: true }, '读取任务详情失败。')
       }
+
+
 
 
     },
 
 
-    [loadTaskSnapshot, stopPolling, setError, setNotice]
+    [runTaskSnapshot, setTaskId, stopPolling, setError, setNotice]
 
 
   )
@@ -353,28 +430,10 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     if (!taskId) return undefined
 
 
-    const run = async () => {
+    const targetId = taskId
 
 
-      try {
-
-
-        await loadTaskSnapshot(taskId)
-
-
-      } catch (err) {
-
-
-        setError(err?.message || '获取任务状态失败。')
-
-
-      }
-
-
-    }
-
-
-    void run()
+    void runTaskSnapshot(targetId)
 
 
     stopPolling()
@@ -383,7 +442,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     pollRef.current = setInterval(() => {
 
 
-      void run()
+      void runTaskSnapshot(targetId)
 
 
     }, POLL_MS)
@@ -395,7 +454,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     // pollRef is a mutable ref; including it in deps would not change the
     // effect's identity and only adds noise. Lint rule is overzealous here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadTaskSnapshot, stopPolling, taskId, setError])
+  }, [runTaskSnapshot, stopPolling, taskId])
 
 
   const controlTask = useCallback(
@@ -407,25 +466,31 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       if (!taskId) return
 
 
+      const generation = taskGenerationRef.current
+      const targetId = taskId
+
+
       try {
 
 
-        const resp = await callApi(`/course/task/${taskId}/${action}`, { method: 'POST' })
+        const resp = await callApi(`/course/task/${targetId}/${action}`, { method: 'POST' })
 
 
-        if (!resp) return
+        if (!resp || !isCurrentTask(generation, targetId)) return
 
 
         setNotice(resp.message || '操作成功。')
 
 
-        await loadTaskSnapshot(taskId)
+        await loadTaskSnapshot(targetId)
 
 
       } catch (err) {
 
 
-        setError(err?.message || '任务控制失败。')
+        if (isCurrentTask(generation, targetId)) {
+          setError(err?.message || '任务控制失败。')
+        }
 
 
       }
@@ -434,7 +499,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     },
 
 
-    [callApi, loadTaskSnapshot, taskId, setError, setNotice]
+    [callApi, isCurrentTask, loadTaskSnapshot, taskId, setError, setNotice]
 
 
   )
