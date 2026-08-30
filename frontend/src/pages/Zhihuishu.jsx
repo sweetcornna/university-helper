@@ -219,6 +219,8 @@ export default function Zhihuishu() {
   const navigate = useNavigate()
   const qrPollRef = useRef(null)
   const progressPollRef = useRef(null)
+  const fetchTaskDetailRef = useRef(null)
+  const bootstrapStartedRef = useRef(false)
   const activeTaskStorageReadyRef = useRef(false)
 
   const toast = useToast()
@@ -1031,6 +1033,9 @@ export default function Zhihuishu() {
 
   // Route guard lives in App.jsx (PrivateRoute).
   useEffect(() => {
+    if (bootstrapStartedRef.current) return undefined
+    bootstrapStartedRef.current = true
+
     const storedActiveTaskId = readActiveTaskIdFromStorage()
     activeTaskStorageReadyRef.current = true
 
@@ -1098,6 +1103,10 @@ export default function Zhihuishu() {
   }, [pollQrStatus, qrSessionId, qrStatus, stopQrPolling])
 
   useEffect(() => {
+    fetchTaskDetailRef.current = fetchTaskDetail
+  }, [fetchTaskDetail])
+
+  useEffect(() => {
     if (!activeTaskId) {
       stopProgressPolling()
       return undefined
@@ -1107,13 +1116,13 @@ export default function Zhihuishu() {
     stopProgressPolling()
 
     progressPollRef.current = setInterval(() => {
-      void fetchTaskDetail(activeTaskId, true)
+      void fetchTaskDetailRef.current(activeTaskId, true)
     }, pollSeconds * 1000)
 
-    void fetchTaskDetail(activeTaskId, true)
+    void fetchTaskDetailRef.current(activeTaskId, true)
 
     return stopProgressPolling
-  }, [activeTaskId, fetchTaskDetail, settings.progressPollSeconds, stopProgressPolling])
+  }, [activeTaskId, settings.progressPollSeconds, stopProgressPolling])
 
   useEffect(() => {
     if (!selectedCourseId) {
