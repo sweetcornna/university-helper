@@ -219,6 +219,21 @@ export default function Zhihuishu() {
   const navigate = useNavigate()
   const qrPollRef = useRef(null)
   const progressPollRef = useRef(null)
+  const mountedRef = useRef(false)
+  const coursesRef = useRef([])
+  const selectedCourseIdRef = useRef('')
+  const courseViewCourseIdRef = useRef('')
+  const courseViewGenerationRef = useRef(0)
+  const courseDetailRequestRef = useRef(0)
+  const videosRequestRef = useRef(0)
+  const progressRequestRef = useRef(0)
+  const taskRecordsRef = useRef([])
+  const activeTaskIdRef = useRef('')
+  const taskViewTargetRef = useRef('')
+  const taskViewGenerationRef = useRef(0)
+  const taskSessionGenerationRef = useRef(0)
+  const taskRequestGenerationRef = useRef(new Map())
+  const taskRequestsInFlightRef = useRef(new Map())
   const fetchTaskDetailRef = useRef(null)
   const bootstrapStartedRef = useRef(false)
   const activeTaskStorageReadyRef = useRef(false)
@@ -262,6 +277,21 @@ export default function Zhihuishu() {
   const [activeTaskId, setActiveTaskId] = useState('')
   const [settingsSaving, setSettingsSaving] = useState(false)
 
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    coursesRef.current = courses
+  }, [courses])
+
+  useEffect(() => {
+    taskRecordsRef.current = taskRecords
+  }, [taskRecords])
+
   const [settings, setSettings] = useState({
     speed: '1.0',
     autoAnswer: true,
@@ -294,15 +324,42 @@ export default function Zhihuishu() {
     return api(`${ZHIHUISHU_API_BASE}${path}`, options)
   }, [])
 
-  const upsertTaskRecord = useCallback((nextTask) => {
+  const selectCourse = useCallback((courseId) => {
+    const normalizedCourseId = parseCourseId(courseId)
+    selectedCourseIdRef.current = normalizedCourseId
+    if (courseViewCourseIdRef.current !== normalizedCourseId) {
+      courseViewCourseIdRef.current = normalizedCourseId
+      courseViewGenerationRef.current += 1
+    }
+    setSelectedCourseId(normalizedCourseId)
+  }, [])
+
+  const beginTaskViewIntent = useCallback((taskId) => {
+    taskViewGenerationRef.current += 1
+    taskViewTargetRef.current = parseCourseId(taskId)
+    return taskViewGenerationRef.current
+  }, [])
+
+  const selectActiveTask = useCallback((taskId) => {
+    const normalizedTaskId = parseCourseId(taskId)
+    beginTaskViewIntent(normalizedTaskId)
+    activeTaskIdRef.current = normalizedTaskId
+    setActiveTaskId(normalizedTaskId)
+  }, [beginTaskViewIntent])
+
+  const upsertTaskRecord = useCallback((nextTask, canWrite) => {
     if (!nextTask?.taskId) return
     setTaskRecords((prev) => {
+      if (canWrite && !canWrite()) return prev
       const index = prev.findIndex((task) => task.taskId === nextTask.taskId)
       if (index === -1) {
-        return [nextTask, ...prev].slice(0, 20)
+        const next = [nextTask, ...prev].slice(0, 20)
+        taskRecordsRef.current = next
+        return next
       }
       const copy = [...prev]
       copy[index] = { ...copy[index], ...nextTask }
+      taskRecordsRef.current = copy
       return copy
     })
   }, [])
@@ -315,7 +372,9 @@ export default function Zhihuishu() {
         if (!task?.taskId) return
         map.set(task.taskId, { ...(map.get(task.taskId) || {}), ...task })
       })
-      return Array.from(map.values()).slice(0, 50)
+      const next = Array.from(map.values()).slice(0, 50)
+      taskRecordsRef.current = next
+      return next
     })
   }, [])
 
@@ -432,49 +491,65 @@ export default function Zhihuishu() {
   const applyGroupedCourses = useCallback((groups) => {
     setCourseGroups(groups)
     const flatCourses = flattenGroups(groups)
+    coursesRef.current = flatCourses
     setCourses(flatCourses)
-    setSelectedCourseId((prev) => {
-      if (prev && flatCourses.some((course) => parseCourseId(course?.courseId || course?.id) === prev)) {
-        return prev
-      }
-      return parseCourseId(flatCourses[0]?.courseId || flatCourses[0]?.id)
-    })
+    const currentCourseId = selectedCourseIdRef.current
+    const nextCourseId = currentCourseId && flatCourses.some(
+      (course) => parseCourseId(course?.courseId || course?.id) === currentCourseId,
+    )
+      ? currentCourseId
+      : parseCourseId(flatCourses[0]?.courseId || flatCourses[0]?.id)
+    selectCourse(nextCourseId)
     return flatCourses
-  }, [])
+  }, [selectCourse])
 
   const loadCourseDetail = useCallback(async (courseId, silent = false) => {
     if (!courseId) return null
 
-    setCourseDetailLoading(true)
+    const requestGeneration = courseDetailRequestRef.current + 1
+    courseDetailRequestRef.current = requestGeneration
+    const viewGeneration = courseViewGenerationRef.current
+    const isCurrent = () => (
+      mountedRef.current &&
+      courseDetailRequestRef.current === requestGeneration &&
+      courseViewGenerationRef.current === viewGeneration &&
+      selectedCourseIdRef.current === courseId
+    )
+
+    setCourseDetailLoading((current) => (isCurrent() ? true : current))
     try {
       const resp = await requestZhihuishuApi(`/courses/${courseId}`, { method: 'GET' })
+      if (!isCurrent()) return null
       const detail = parseObject(resp, 'data')
-      setCourseDetail(detail)
+      setCourseDetail((current) => (isCurrent() ? detail : current))
 
       const structure = extractCourseStructure(detail)
-      setCourseStructure(structure)
+      setCourseStructure((current) => (isCurrent() ? structure : current))
 
       const detailVideos = flattenStructureVideos(structure)
       if (detailVideos.length > 0) {
-        setVideos(detailVideos)
+        setVideos((current) => (isCurrent() ? detailVideos : current))
       }
 
-      if (!silent) {
+      if (!silent && isCurrent()) {
         setNoticeMessage('success', pickMessage(resp) || '课程详情已更新。')
       }
       return detail
     } catch (err) {
-      const fallback = courses.find((course) => parseCourseId(course?.courseId || course?.id) === courseId) || null
-      setCourseDetail(fallback)
-      setCourseStructure([])
-      if (!silent) {
+      if (!isCurrent()) return null
+      const fallback = coursesRef.current.find(
+        (course) => parseCourseId(course?.courseId || course?.id) === courseId,
+      ) || null
+      setCourseDetail((current) => (isCurrent() ? fallback : current))
+      setCourseStructure((current) => (isCurrent() ? [] : current))
+      if (!silent && isCurrent()) {
         setNoticeMessage('info', '课程详情接口不可用，已使用课程列表数据。')
       }
       return fallback
     } finally {
-      setCourseDetailLoading(false)
+      setCourseDetailLoading((current) => (isCurrent() ? false : current))
     }
-  }, [courses, requestZhihuishuApi, setNoticeMessage])
+  }, [requestZhihuishuApi, setNoticeMessage])
 
   const loadVideos = useCallback(async (courseId) => {
     if (!courseId) {
@@ -482,38 +557,57 @@ export default function Zhihuishu() {
       return
     }
 
-    setVideosLoading(true)
+    const requestGeneration = videosRequestRef.current + 1
+    videosRequestRef.current = requestGeneration
+    const viewGeneration = courseViewGenerationRef.current
+    const isCurrent = () => (
+      mountedRef.current &&
+      videosRequestRef.current === requestGeneration &&
+      courseViewGenerationRef.current === viewGeneration &&
+      selectedCourseIdRef.current === courseId
+    )
+
+    setVideosLoading((current) => (isCurrent() ? true : current))
     try {
       const detail = await loadCourseDetail(courseId, true)
+      if (!isCurrent()) return null
       const structure = extractCourseStructure(detail || {})
       const detailVideos = flattenStructureVideos(structure)
 
       if (detailVideos.length > 0) {
-        setCourseStructure(structure)
-        setVideos(detailVideos)
-        setNoticeMessage('success', `已从课程结构加载 ${detailVideos.length} 个视频。`)
+        setCourseStructure((current) => (isCurrent() ? structure : current))
+        setVideos((current) => (isCurrent() ? detailVideos : current))
+        if (isCurrent()) {
+          setNoticeMessage('success', `已从课程结构加载 ${detailVideos.length} 个视频。`)
+        }
         return
       }
 
       const legacyResp = await api(`${ZHIHUISHU_API_BASE}/videos/${courseId}`, { method: 'GET' })
+      if (!isCurrent()) return null
       const legacyVideos = parseList(legacyResp, 'data', 'videos')
-      setVideos(legacyVideos)
-      if (courseStructure.length === 0 && legacyVideos.length > 0) {
-        setCourseStructure([
-          {
+      setVideos((current) => (isCurrent() ? legacyVideos : current))
+      if (legacyVideos.length > 0) {
+        setCourseStructure((current) => {
+          if (!isCurrent() || current.length > 0) return current
+          return [{
             id: `${courseId}-legacy`,
             title: '视频任务',
             videos: legacyVideos
-          }
-        ])
+          }]
+        })
       }
-      setNoticeMessage('success', `已加载 ${legacyVideos.length} 个视频任务。`)
+      if (isCurrent()) {
+        setNoticeMessage('success', `已加载 ${legacyVideos.length} 个视频任务。`)
+      }
     } catch (err) {
-      setNoticeMessage('error', err.message || '加载视频列表失败。')
+      if (isCurrent()) {
+        setNoticeMessage('error', err.message || '加载视频列表失败。')
+      }
     } finally {
-      setVideosLoading(false)
+      setVideosLoading((current) => (isCurrent() ? false : current))
     }
-  }, [courseStructure.length, loadCourseDetail, setNoticeMessage])
+  }, [loadCourseDetail, setNoticeMessage])
 
   const loadCourses = useCallback(async (silent = false) => {
     setCoursesLoading(true)
@@ -549,9 +643,20 @@ export default function Zhihuishu() {
   const loadCourseProgress = useCallback(async (courseId, silent = true) => {
     if (!courseId) return null
 
-    setProgressLoading(true)
+    const requestGeneration = progressRequestRef.current + 1
+    progressRequestRef.current = requestGeneration
+    const viewGeneration = courseViewGenerationRef.current
+    const isCurrent = () => (
+      mountedRef.current &&
+      progressRequestRef.current === requestGeneration &&
+      courseViewGenerationRef.current === viewGeneration &&
+      selectedCourseIdRef.current === courseId
+    )
+
+    setProgressLoading((current) => (isCurrent() ? true : current))
     try {
       const resp = await api(`${ZHIHUISHU_API_BASE}/progress/${courseId}`, { method: 'GET' })
+      if (!isCurrent()) return null
       const progressPayload = parseObject(resp, 'data', '')
       const statusValue = String(progressPayload?.status || resp?.status || 'running')
       const messageValue = progressPayload?.message || resp?.message || '进度已更新'
@@ -564,36 +669,64 @@ export default function Zhihuishu() {
         current_video: currentVideo
       }
 
-      setProgress(normalizedProgress)
-      setTaskRecords((prev) =>
-        applyCourseProgressToTaskRecords(prev, {
+      setProgress((current) => (isCurrent() ? normalizedProgress : current))
+      setTaskRecords((prev) => {
+        if (!isCurrent()) return prev
+        const next = applyCourseProgressToTaskRecords(prev, {
           courseId,
-          activeTaskId,
+          activeTaskId: activeTaskIdRef.current,
           progress: normalizedProgress,
           updatedAt: new Date().toISOString()
         })
-      )
-      if (!silent) {
+        taskRecordsRef.current = next
+        return next
+      })
+      if (!silent && isCurrent()) {
         setNoticeMessage('success', '课程进度已刷新。')
       }
       return progressPayload
     } catch (err) {
-      if (!silent) {
+      if (!silent && isCurrent()) {
         setNoticeMessage('error', err.message || '查询进度失败。')
       }
       return null
     } finally {
-      setProgressLoading(false)
+      setProgressLoading((current) => (isCurrent() ? false : current))
     }
-  }, [activeTaskId, setNoticeMessage])
+  }, [setNoticeMessage])
 
   const fetchTaskDetail = useCallback(async (taskId, silent = false) => {
     if (!taskId) return null
 
+    const requestsInFlight = taskRequestsInFlightRef.current.get(taskId)
+    if (silent && requestsInFlight?.size) return null
+
+    const requestGeneration = (taskRequestGenerationRef.current.get(taskId) || 0) + 1
+    taskRequestGenerationRef.current.set(taskId, requestGeneration)
+    const nextRequestsInFlight = requestsInFlight || new Set()
+    nextRequestsInFlight.add(requestGeneration)
+    taskRequestsInFlightRef.current.set(taskId, nextRequestsInFlight)
+
+    const viewGeneration = silent
+      ? taskViewGenerationRef.current
+      : beginTaskViewIntent(taskId)
+    const sessionGeneration = taskSessionGenerationRef.current
+    const isLatestTaskRequest = () => (
+      mountedRef.current &&
+      taskSessionGenerationRef.current === sessionGeneration &&
+      taskRequestGenerationRef.current.get(taskId) === requestGeneration
+    )
+    const canWriteTaskView = () => (
+      isLatestTaskRequest() &&
+      taskViewGenerationRef.current === viewGeneration &&
+      taskViewTargetRef.current === taskId
+    )
+
     try {
       const resp = await requestZhihuishuApi(`/tasks/${taskId}`, { method: 'GET' })
+      if (!isLatestTaskRequest()) return null
       const detail = parseObject(resp, 'data')
-      const previous = taskRecords.find((task) => task.taskId === taskId) || {}
+      const previous = taskRecordsRef.current.find((task) => task.taskId === taskId) || {}
       const normalized = normalizeTaskRecord(detail, previous)
       if (!normalized) return null
 
@@ -617,15 +750,20 @@ export default function Zhihuishu() {
         }
       }
 
-      const fallbackCourse = courses.find((course) => parseCourseId(course?.courseId || course?.id) === normalized.courseId)
+      const fallbackCourse = coursesRef.current.find(
+        (course) => parseCourseId(course?.courseId || course?.id) === normalized.courseId,
+      )
       if (!normalized.courseName && fallbackCourse) {
         normalized.courseName = fallbackCourse.courseName || fallbackCourse.name || fallbackCourse.title || normalized.courseId
       }
 
-      upsertTaskRecord(normalized)
-      setActiveTaskId(normalized.taskId)
-      if (normalized.courseId === selectedCourseId) {
-        setProgress({
+      upsertTaskRecord(normalized, isLatestTaskRequest)
+      if (canWriteTaskView()) {
+        activeTaskIdRef.current = normalized.taskId
+        setActiveTaskId(normalized.taskId)
+      }
+      if (normalized.courseId === selectedCourseIdRef.current && canWriteTaskView()) {
+        setProgress((current) => (canWriteTaskView() ? {
           status: normalized.status,
           message: normalized.message,
           current_video: normalized.currentTask,
@@ -633,30 +771,46 @@ export default function Zhihuishu() {
           completed: normalized.completed,
           failed: normalized.failed,
           percentage: normalized.percentage
-        })
+        } : current))
       }
-      if (Array.isArray(normalized.videos) && normalized.videos.length > 0 && normalized.courseId === selectedCourseId) {
-        setVideos(normalized.videos.map((video, index) => ({
+      if (
+        Array.isArray(normalized.videos) &&
+        normalized.videos.length > 0 &&
+        normalized.courseId === selectedCourseIdRef.current &&
+        canWriteTaskView()
+      ) {
+        const taskVideos = normalized.videos.map((video, index) => ({
           id: parseCourseId(video?.id || video?.videoId || index + 1),
           title: video?.title || video?.name || video?.videoName || `视频 ${index + 1}`,
           status: video?.status || 'pending'
-        })))
+        }))
+        setVideos((current) => (canWriteTaskView() ? taskVideos : current))
       }
-      if (!silent) {
+      if (!silent && canWriteTaskView()) {
         setNoticeMessage('success', pickMessage(resp) || '任务详情已刷新。')
       }
       return normalized
     } catch (err) {
-      const fallback = taskRecords.find((task) => task.taskId === taskId)
+      if (!isLatestTaskRequest()) return null
+      const fallback = taskRecordsRef.current.find((task) => task.taskId === taskId)
       if (fallback?.courseId) {
         await loadCourseProgress(fallback.courseId, true)
       }
-      if (!silent) {
+      if (!silent && canWriteTaskView()) {
         setNoticeMessage('error', err.message || '获取任务详情失败。')
+        beginTaskViewIntent(activeTaskIdRef.current)
       }
       return null
+    } finally {
+      const pendingRequests = taskRequestsInFlightRef.current.get(taskId)
+      if (pendingRequests) {
+        pendingRequests.delete(requestGeneration)
+        if (pendingRequests.size === 0) {
+          taskRequestsInFlightRef.current.delete(taskId)
+        }
+      }
     }
-  }, [courses, loadCourseProgress, requestZhihuishuApi, selectedCourseId, setNoticeMessage, taskRecords, upsertTaskRecord])
+  }, [beginTaskViewIntent, loadCourseProgress, requestZhihuishuApi, setNoticeMessage, upsertTaskRecord])
 
   const fetchTaskList = useCallback(async ({ silent = false, taskType, courseId, preferredTaskId } = {}) => {
     try {
@@ -681,9 +835,9 @@ export default function Zhihuishu() {
       mergeTaskRecords(normalized, true)
       const preferredId = parseCourseId(preferredTaskId)
       if (preferredId && normalized.some((task) => task.taskId === preferredId)) {
-        setActiveTaskId(preferredId)
-      } else if (!activeTaskId && normalized[0]?.taskId) {
-        setActiveTaskId(normalized[0].taskId)
+        selectActiveTask(preferredId)
+      } else if (!activeTaskIdRef.current && normalized[0]?.taskId) {
+        selectActiveTask(normalized[0].taskId)
       }
       if (!silent) {
         setNoticeMessage('success', normalized.length > 0 ? '任务列表已刷新。' : '暂无任务记录。')
@@ -695,7 +849,7 @@ export default function Zhihuishu() {
       }
       return []
     }
-  }, [activeTaskId, courses, mergeTaskRecords, requestZhihuishuApi, setNoticeMessage])
+  }, [courses, mergeTaskRecords, requestZhihuishuApi, selectActiveTask, setNoticeMessage])
 
   const refreshTaskList = useCallback(async () => {
     const loadedTasks = await fetchTaskList({ silent: true })
@@ -754,7 +908,7 @@ export default function Zhihuishu() {
         updatedAt: new Date().toISOString()
       })
 
-      setActiveTaskId(taskId)
+      selectActiveTask(taskId)
       setActiveTab('tasks')
       setNoticeMessage('success', pickMessage(resp) || '课程任务已启动。')
       await fetchTaskDetail(taskId, true)
@@ -763,7 +917,7 @@ export default function Zhihuishu() {
     } finally {
       setStartLoadingType('')
     }
-  }, [courses, fetchTaskDetail, requestZhihuishuApi, selectedCourseId, setNoticeMessage, settings.autoAnswer, settings.speed, startLoadingType, upsertTaskRecord])
+  }, [courses, fetchTaskDetail, requestZhihuishuApi, selectActiveTask, selectedCourseId, setNoticeMessage, settings.autoAnswer, settings.speed, startLoadingType, upsertTaskRecord])
 
   const cancelTaskById = useCallback(async (taskId) => {
     if (!taskId || taskActionLoading || taskItemActionLoading) return
@@ -844,7 +998,7 @@ export default function Zhihuishu() {
         message: pickMessage(resp) || '任务已取消。',
         updatedAt: new Date().toISOString()
       })))
-      setActiveTaskId('')
+      selectActiveTask('')
       setProgress(null)
       stopProgressPolling()
       setNoticeMessage('success', pickMessage(resp) || '任务已取消。')
@@ -963,7 +1117,7 @@ export default function Zhihuishu() {
       const currentTask = normalizeTaskRecord(statusPayload?.current_task || {})
       if (currentTask) {
         upsertTaskRecord(currentTask)
-        setActiveTaskId(currentTask.taskId)
+        selectActiveTask(currentTask.taskId)
       }
       if (statusPayload?.progress && typeof statusPayload.progress === 'object') {
         setProgress(statusPayload.progress)
@@ -978,11 +1132,19 @@ export default function Zhihuishu() {
       }
       return null
     }
-  }, [requestZhihuishuApi, setNoticeMessage, upsertTaskRecord])
+  }, [requestZhihuishuApi, selectActiveTask, setNoticeMessage, upsertTaskRecord])
+
+  const invalidateTaskRequests = useCallback(() => {
+    taskSessionGenerationRef.current += 1
+    taskRequestsInFlightRef.current.clear()
+  }, [])
 
   const resetZhihuishuSession = useCallback(() => {
     stopQrPolling()
     stopProgressPolling()
+    invalidateTaskRequests()
+    taskRecordsRef.current = []
+    coursesRef.current = []
 
     setZhihuishuLoggedIn(false)
     setLoginMethod('qr')
@@ -995,18 +1157,19 @@ export default function Zhihuishu() {
 
     setCourseGroups([])
     setCourses([])
-    setSelectedCourseId('')
+    selectCourse('')
     setCourseDetail(null)
     setCourseStructure([])
     setVideos([])
     setProgress(null)
     setTaskRecords([])
-    setActiveTaskId('')
+    selectActiveTask('')
 
     setNoticeMessage('info', '已清理智慧树会话状态。')
-  }, [setNoticeMessage, stopProgressPolling, stopQrPolling])
+  }, [invalidateTaskRequests, selectActiveTask, selectCourse, setNoticeMessage, stopProgressPolling, stopQrPolling])
 
   const logoutZhihuishu = useCallback(async () => {
+    invalidateTaskRequests()
     try {
       const resp = await requestZhihuishuApi('/logout', { method: 'POST' })
       resetZhihuishuSession()
@@ -1014,7 +1177,7 @@ export default function Zhihuishu() {
     } catch (err) {
       setNoticeMessage('error', err.message || '智慧树退出失败。')
     }
-  }, [requestZhihuishuApi, resetZhihuishuSession, setNoticeMessage])
+  }, [invalidateTaskRequests, requestZhihuishuApi, resetZhihuishuSession, setNoticeMessage])
 
   const logoutSystem = useCallback(async () => {
     if (!window.confirm('确定要退出登录吗？将清除登录状态并返回登录页。')) return
@@ -1053,18 +1216,19 @@ export default function Zhihuishu() {
           if (normalizedStoredTaskId) {
             const existsInList = loadedTasks.some((task) => task.taskId === normalizedStoredTaskId)
             if (existsInList) {
-              setActiveTaskId(normalizedStoredTaskId)
+              selectActiveTask(normalizedStoredTaskId)
             } else {
+              beginTaskViewIntent(normalizedStoredTaskId)
               const restoredTask = await fetchTaskDetail(normalizedStoredTaskId, true)
               if (!restoredTask?.taskId) {
-                setActiveTaskId(loadedTasks[0]?.taskId || '')
+                selectActiveTask(loadedTasks[0]?.taskId || '')
               }
             }
           } else if (loadedTasks[0]?.taskId) {
-            setActiveTaskId(loadedTasks[0].taskId)
+            selectActiveTask(loadedTasks[0].taskId)
           }
         } else {
-          setActiveTaskId('')
+          selectActiveTask('')
         }
       } finally {
         setBooting(false)
@@ -1075,6 +1239,7 @@ export default function Zhihuishu() {
       stopProgressPolling()
     }
   }, [
+    beginTaskViewIntent,
     fetchTaskDetail,
     fetchTaskList,
     loadConfigFromBackend,
@@ -1082,6 +1247,7 @@ export default function Zhihuishu() {
     loadZhihuishuStatus,
     navigate,
     readActiveTaskIdFromStorage,
+    selectActiveTask,
     stopProgressPolling,
     stopQrPolling
   ])
@@ -1129,8 +1295,13 @@ export default function Zhihuishu() {
       setCourseDetail(null)
       setCourseStructure([])
       setVideos([])
+      setCourseDetailLoading(false)
+      setVideosLoading(false)
+      setProgressLoading(false)
       return
     }
+    setVideosLoading(false)
+    setProgressLoading(false)
     void loadCourseDetail(selectedCourseId, true)
   }, [loadCourseDetail, selectedCourseId])
 
@@ -1322,7 +1493,9 @@ export default function Zhihuishu() {
                   id="zhs-course"
                   className={`${FIELD_CLASS} cursor-pointer`}
                   value={selectedCourseId}
-                  onChange={(event) => setSelectedCourseId(event.target.value)}
+                  onChange={(event) => {
+                    selectCourse(event.target.value)
+                  }}
                 >
                   <option value="">请选择课程</option>
                   {courseGroups.map((group) => (
