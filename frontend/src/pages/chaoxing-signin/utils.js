@@ -314,30 +314,117 @@ export const fileToBase64 = (file) => {
   })
 }
 
+export const MAX_QR_FILE_BYTES = 5 * 1024 * 1024
+
+export const ALLOWED_QR_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+
+export const MAX_QR_IMAGE_DIMENSION = 4096
+
+export const MAX_QR_IMAGE_PIXELS = 12 * 1024 * 1024
+
+const QR_FILE_TYPE_ERROR = '二维码图片格式不受支持，请选择 JPG、PNG 或 WebP 图片。'
+
+const QR_FILE_SIZE_ERROR = '二维码图片不能超过 5 MB，请压缩后重试。'
+
+const QR_IMAGE_DIMENSIONS_ERROR = '二维码图片尺寸过大，请选择较小的图片。'
+
+const QR_DECODE_ERROR = '无法识别二维码，请确认图片包含有效的二维码。'
+
 export const decodeQrCodeFromFile = (file) => {
+  const fileType = typeof file?.type === 'string' ? file.type.toLowerCase() : ''
+  if (!ALLOWED_QR_IMAGE_TYPES.has(fileType)) {
+    return Promise.reject(new Error(QR_FILE_TYPE_ERROR))
+  }
+
+  if (!Number.isFinite(file.size) || file.size < 0 || file.size > MAX_QR_FILE_BYTES) {
+    return Promise.reject(new Error(QR_FILE_SIZE_ERROR))
+  }
+
   return new Promise((resolve, reject) => {
-    const reader = new FileReader()
+    let settled = false
+
+    const resolveOnce = (value) => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+
+    const rejectOnce = (error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+
+    const imageLoadError = () => rejectOnce(new Error('图片加载失败，请重新选择。'))
+
+    let reader
+    try {
+      reader = new FileReader()
+    } catch (_) {
+      rejectOnce(new Error('文件读取失败，请重新选择。'))
+      return
+    }
+
     reader.onload = () => {
-      const img = new Image()
+      if (settled) return
+
+      let img
+      try {
+        img = new Image()
+      } catch (_) {
+        imageLoadError()
+        return
+      }
+
       img.onload = () => {
-        const canvas = document.createElement('canvas')
-        canvas.width = img.width
-        canvas.height = img.height
-        const ctx = canvas.getContext('2d')
-        ctx.drawImage(img, 0, 0)
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const code = jsQR(imageData.data, imageData.width, imageData.height)
-        if (code && code.data) {
-          resolve(code.data)
-        } else {
-          reject(new Error('无法识别二维码，请确认图片包含有效的二维码。'))
+        if (settled) return
+
+        const width = img.naturalWidth || img.width
+        const height = img.naturalHeight || img.height
+        if (
+          !Number.isInteger(width) ||
+          width <= 0 ||
+          !Number.isInteger(height) ||
+          height <= 0 ||
+          width > MAX_QR_IMAGE_DIMENSION ||
+          height > MAX_QR_IMAGE_DIMENSION ||
+          width * height > MAX_QR_IMAGE_PIXELS
+        ) {
+          rejectOnce(new Error(QR_IMAGE_DIMENSIONS_ERROR))
+          return
+        }
+
+        try {
+          const canvas = document.createElement('canvas')
+          canvas.width = width
+          canvas.height = height
+          const ctx = canvas.getContext('2d')
+          if (!ctx) throw new Error('二维码图片处理上下文不可用')
+          ctx.drawImage(img, 0, 0)
+          const imageData = ctx.getImageData(0, 0, width, height)
+          const code = jsQR(imageData.data, imageData.width, imageData.height)
+          if (code && code.data) {
+            resolveOnce(code.data)
+          } else {
+            rejectOnce(new Error(QR_DECODE_ERROR))
+          }
+        } catch (_) {
+          rejectOnce(new Error(QR_DECODE_ERROR))
         }
       }
-      img.onerror = () => reject(new Error('图片加载失败，请重新选择。'))
-      img.src = reader.result
+      img.onerror = imageLoadError
+      try {
+        img.src = reader.result
+      } catch (_) {
+        imageLoadError()
+      }
     }
-    reader.onerror = () => reject(new Error('文件读取失败，请重新选择。'))
-    reader.readAsDataURL(file)
+    reader.onerror = () => rejectOnce(new Error('文件读取失败，请重新选择。'))
+    try {
+      reader.readAsDataURL(file)
+    } catch (_) {
+      rejectOnce(new Error('文件读取失败，请重新选择。'))
+    }
   })
 }
 
