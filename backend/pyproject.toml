@@ -5,8 +5,8 @@ description = "Multi-tenant campus helper backend (Chaoxing + Zhihuishu)"
 # Runtime is uniformly 3.11 (Docker python:3.11-slim, ruff target-version py311,
 # mypy 3.11) and the code uses 3.11-only stdlib (datetime.UTC) plus 3.10 `match`.
 requires-python = ">=3.11"
-readme = { file = "../README.md", content-type = "text/markdown" }
-license = { file = "../LICENSE" }
+readme = { text = "Multi-tenant campus helper backend (Chaoxing + Zhihuishu)", content-type = "text/plain" }
+license = { text = "MIT License" }
 
 # Runtime dependencies are tracked in requirements.txt for image-build parity.
 # Keep this section as a minimal description; `pip-compile` / `uv pip compile`
@@ -28,8 +28,10 @@ dev = [
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["app"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app", "app.*"]
+namespaces = false
 
 # ---------- Ruff ----------
 [tool.ruff]
