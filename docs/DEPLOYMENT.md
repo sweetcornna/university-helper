@@ -291,9 +291,13 @@ docker compose -f docker-compose.server.yml logs -f postgres
 # 数据库 shell
 docker compose -f docker-compose.server.yml exec postgres psql -U easylearning -d main_db
 
-# 备份
-docker compose -f docker-compose.server.yml exec postgres \
-  pg_dump -U easylearning main_db > /opt/university-helper/backups/main_db-$(date +%F).sql
+# 加密数据库备份（推荐；请从仓库根目录执行）
+AGE_RECIPIENT=age1xxxxxx... \
+  bash scripts/db_backup.sh /opt/backups/university-helper
+# 或使用 recipient 文件：
+AGE_RECIPIENT_FILE=/etc/uh/age-recipients.txt \
+  bash scripts/db_backup.sh /opt/backups/university-helper
+# - 文件名、原子发布和保留天数均由脚本统一负责
 ```
 
 ---
