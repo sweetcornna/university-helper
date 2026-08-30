@@ -27,7 +27,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-Set-Location $RepoRoot
 
 $Project     = "university-helper"
 $ComposeFile = "docker-compose.release.yml"
@@ -43,6 +42,31 @@ function Normalize-ImageTag([string]$RawTag) {
   if ($RawTag -match '^v(?=\d)') { return $RawTag.Substring(1) }
   return $RawTag
 }
+
+function Validate-Domain([string]$Value) {
+  # Keep this diagnostic constant: domain input may contain control characters.
+  $FqdnPattern = '\A[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+\z'
+  if (
+    [string]::IsNullOrEmpty($Value) -or
+    $Value.Length -gt 253 -or
+    -not [Regex]::IsMatch($Value, $FqdnPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+  ) {
+    Die "Invalid --domain: expected an ASCII FQDN (for example example.com)."
+  }
+
+  foreach ($label in ($Value -split '\.')) {
+    if ($label.Length -gt 63) {
+      Die "Invalid --domain: expected an ASCII FQDN (for example example.com)."
+    }
+  }
+}
+
+$DomainProvided = $PSBoundParameters.ContainsKey("Domain")
+if ($DomainProvided) {
+  Validate-Domain $Domain
+}
+
+Set-Location $RepoRoot
 
 function New-HexSecret([int]$Bytes = 32) {
   $b = New-Object byte[] $Bytes

@@ -7,6 +7,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -227,3 +228,210 @@ def test_bash_and_powershell_bind_modes_match_and_tls_proxy_stays_loopback():
     )
     assert "HTTP_BIND_HOST=$HttpBindHost" in powershell
     assert "$env:HTTP_BIND_HOST = $HttpBindHost" in powershell
+
+
+POWERSHELL_CONTAINER_IMAGE = "mcr.microsoft.com/powershell:7.4-alpine-3.20"
+DOCKER_EXECUTABLE = shutil.which("docker")
+
+
+def _powershell_runtime() -> str | None:
+    if shutil.which("pwsh") is not None:
+        return "host"
+    if DOCKER_EXECUTABLE is None:
+        return None
+    probe = subprocess.run(
+        [DOCKER_EXECUTABLE, "info"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+        check=False,
+    )
+    return "container" if probe.returncode == 0 else None
+
+
+POWERSHELL_RUNTIME = _powershell_runtime()
+
+
+def _powershell_domain_fixture(
+    tmp_path: Path, script_source: str, request: pytest.FixtureRequest
+) -> tuple[Path, dict[str, str], Path]:
+    if POWERSHELL_RUNTIME == "container":
+        container_root = Path(tempfile.mkdtemp(prefix=".pytest-powershell-", dir=REPO_ROOT))
+        request.addfinalizer(lambda: shutil.rmtree(container_root, ignore_errors=True))
+        root = container_root / "powershell-domain"
+    else:
+        root = tmp_path / "powershell-domain"
+    scripts_dir = root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "deploy_server.ps1").write_text(script_source, encoding="utf-8")
+    shutil.copy2(COMPOSE_FILE, root / COMPOSE_FILE.name)
+
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    docker_log = root / "docker.log"
+    _write_executable(
+        bin_dir / "docker",
+        """
+        #!/bin/sh
+        printf '%s\\n' "$*" >> "docker.log"
+        case "$1:$2" in
+          info:) exit 0 ;;
+          compose:version|compose:*) exit 0 ;;
+          *) exit 1 ;;
+        esac
+        """,
+    )
+
+    wrapper = root / "run-test.ps1"
+    wrapper.write_text(
+        textwrap.dedent(
+            """
+            param(
+              [AllowEmptyString()][string]$Domain
+            )
+            $ErrorActionPreference = 'Stop'
+            function Invoke-WebRequest {
+              param(
+                [Parameter(Position=0)][string]$Uri,
+                [switch]$UseBasicParsing,
+                [int]$TimeoutSec
+              )
+              [pscustomobject]@{ StatusCode = 200 }
+            }
+            function Start-Sleep { param([int]$Seconds) }
+            & (Join-Path $PSScriptRoot 'scripts/deploy_server.ps1') -Yes -Domain $Domain
+            $childSucceeded = $?
+            $childExitCode = $LASTEXITCODE
+            if ($childExitCode -is [int] -and $childExitCode -ne 0) {
+              exit $childExitCode
+            }
+            if (-not $childSucceeded) {
+              exit 1
+            }
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    return wrapper, env, docker_log
+
+
+def _powershell_command(wrapper: Path, domain: str) -> list[str]:
+    if POWERSHELL_RUNTIME == "host":
+        return ["pwsh", "-NoProfile", "-File", str(wrapper), "-Domain", domain]
+    return [
+        DOCKER_EXECUTABLE or "docker",
+        "run",
+        "--rm",
+        "--platform",
+        "linux/amd64",
+        "-v",
+        f"{wrapper.parent}:/workspace",
+        "-w",
+        "/workspace",
+        "-e",
+        "PATH=/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        POWERSHELL_CONTAINER_IMAGE,
+        "/usr/bin/pwsh",
+        "-NoProfile",
+        "-File",
+        "/workspace/run-test.ps1",
+        "-Domain",
+        domain,
+    ]
+
+
+POWERSHELL_VALID_DOMAINS = [
+    "example.com",
+    "sub.example.com",
+    "xn--fiqs8s.com",
+    "a" * 63 + ".example.com",
+    ".".join(["a" * 63, "b" * 63, "c" * 63, "d" * 61]),
+]
+
+POWERSHELL_INVALID_DOMAINS = [
+    "",
+    "example",
+    "../../nginx/nginx",
+    "https://example.com",
+    "example.com/path",
+    "example.com:443",
+    "example..com",
+    "-example.com",
+    "example-.com",
+    "a" * 64 + ".example.com",
+    ".".join(["a" * 63] * 4),
+    "example_com",
+    "éxample.com",
+    "example\t.com",
+    "example\n.com",
+    "example\r.com",
+    "example.com\n",
+    "example.com\r\n",
+    'example".com',
+    "example'.com",
+]
+
+
+def test_powershell_domain_validation_is_strict_and_precedes_side_effects():
+    source = POWERSHELL_DEPLOY.read_text(encoding="utf-8")
+    validation = source.index("function Validate-Domain")
+    invocation = source.index("Validate-Domain $Domain")
+
+    assert invocation > validation
+    assert invocation < source.index("Set-Location $RepoRoot")
+    assert invocation < source.index("Get-Command docker")
+    assert invocation < source.index('Set-Content -Path ".env"')
+    assert "[Regex]::IsMatch" in source
+    assert r"\A" in source
+    assert r"\z" in source
+    assert "Length -gt 253" in source
+    assert "Length -gt 63" in source
+    assert '$PSBoundParameters.ContainsKey("Domain")' in source
+    assert "expected an ASCII FQDN (for example example.com)." in source
+
+
+@pytest.mark.skipif(POWERSHELL_RUNTIME is None, reason="neither pwsh nor a working Docker daemon is available")
+@pytest.mark.parametrize("domain", POWERSHELL_VALID_DOMAINS)
+def test_powershell_deploy_accepts_ascii_fqdn_matrix(tmp_path, request, domain):
+    source = POWERSHELL_DEPLOY.read_text(encoding="utf-8")
+    wrapper, env, docker_log = _powershell_domain_fixture(tmp_path, source, request)
+
+    result = subprocess.run(
+        _powershell_command(wrapper, domain),
+        cwd=wrapper.parent,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert f'CORS_ORIGINS=["https://{domain}"]' in (wrapper.parent / ".env").read_text(encoding="ascii")
+    assert docker_log.exists()
+
+
+@pytest.mark.skipif(POWERSHELL_RUNTIME is None, reason="neither pwsh nor a working Docker daemon is available")
+@pytest.mark.parametrize("domain", POWERSHELL_INVALID_DOMAINS)
+def test_powershell_deploy_rejects_invalid_domain_before_side_effects(tmp_path, request, domain):
+    source = POWERSHELL_DEPLOY.read_text(encoding="utf-8")
+    wrapper, env, docker_log = _powershell_domain_fixture(tmp_path, source, request)
+
+    result = subprocess.run(
+        _powershell_command(wrapper, domain),
+        cwd=wrapper.parent,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert result.stdout.strip() == "[x] Invalid --domain: expected an ASCII FQDN (for example example.com)."
+    assert not docker_log.exists()
+    assert not (wrapper.parent / ".env").exists()
