@@ -12,18 +12,31 @@ const task = {
   type: 'normal',
 }
 
-function AutoSigninHarness({ requestChaoxingApi, onExecute }) {
-  const [form, setForm] = useState({ username: 'initial-user', password: 'initial-password' })
-  const callbacksRef = useRef({
-    setResultType: vi.fn(),
-    setResultMessage: vi.fn(),
-    setSigninTasks: vi.fn(),
-    redirectingRef: { current: false },
+const deferred = () => {
+  let resolve
+  let reject
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve
+    reject = promiseReject
   })
+  return { promise, resolve, reject }
+}
+
+function AutoSigninHarness({ requestChaoxingApi, onExecute, executeBehavior, callbacks }) {
+  const [form, setForm] = useState({ username: 'initial-user', password: 'initial-password' })
+  const callbacksRef = useRef(
+    callbacks || {
+      setResultType: vi.fn(),
+      setResultMessage: vi.fn(),
+      setSigninTasks: vi.fn(),
+      redirectingRef: { current: false },
+    }
+  )
   const executeSignin = useCallback(async (courseId, signType, options) => {
-    onExecute({ username: form.username, password: form.password, courseId, signType, options })
-    return { status: true }
-  }, [form.password, form.username, onExecute])
+    const details = { username: form.username, password: form.password, courseId, signType, options }
+    onExecute(details)
+    return executeBehavior ? executeBehavior(details) : { status: true }
+  }, [executeBehavior, form.password, form.username, onExecute])
   const autoSignin = useAutoSignin(form, executeSignin, requestChaoxingApi, callbacksRef.current)
 
   return (
@@ -157,5 +170,154 @@ describe('useAutoSignin scheduler dependencies', () => {
     fireEvent.click(rendered.getByTestId('toggle'))
     await flushPromises()
     expect(taskRequestCount(requestChaoxingApi)).toBe(4)
+  })
+
+  test('does not execute tasks after disabling while the task list is pending', async () => {
+    const taskRequest = deferred()
+    const requestChaoxingApi = vi.fn(() => taskRequest.promise)
+    const onExecute = vi.fn()
+    const callbacks = {
+      setResultType: vi.fn(),
+      setResultMessage: vi.fn(),
+      setSigninTasks: vi.fn(),
+      redirectingRef: { current: false },
+    }
+    const rendered = render(
+      <AutoSigninHarness
+        callbacks={callbacks}
+        requestChaoxingApi={requestChaoxingApi}
+        onExecute={onExecute}
+      />
+    )
+
+    fireEvent.click(rendered.getByTestId('toggle'))
+    await flushPromises()
+    expect(taskRequestCount(requestChaoxingApi)).toBe(1)
+
+    fireEvent.click(rendered.getByTestId('toggle'))
+    await flushPromises()
+
+    await act(async () => {
+      taskRequest.resolve({ data: [task] })
+      await taskRequest.promise
+    })
+    await flushPromises()
+
+    expect(onExecute).not.toHaveBeenCalled()
+    expect(callbacks.setSigninTasks).not.toHaveBeenCalled()
+    expect(callbacks.setResultType).not.toHaveBeenCalled()
+  })
+
+  test('stops the current cycle before starting its next task after disabling', async () => {
+    const firstExecution = deferred()
+    const requestChaoxingApi = vi.fn().mockResolvedValue({
+      data: [
+        task,
+        { ...task, taskId: 'task-2', courseId: 'course-2', courseName: '第二门课程' },
+      ],
+    })
+    const onExecute = vi.fn()
+    const executeBehavior = vi.fn(() => firstExecution.promise)
+    const callbacks = {
+      setResultType: vi.fn(),
+      setResultMessage: vi.fn(),
+      setSigninTasks: vi.fn(),
+      redirectingRef: { current: false },
+    }
+    const rendered = render(
+      <AutoSigninHarness
+        callbacks={callbacks}
+        executeBehavior={executeBehavior}
+        requestChaoxingApi={requestChaoxingApi}
+        onExecute={onExecute}
+      />
+    )
+
+    fireEvent.click(rendered.getByTestId('toggle'))
+    await flushPromises()
+    expect(onExecute).toHaveBeenCalledTimes(1)
+    expect(onExecute).toHaveBeenCalledWith(expect.objectContaining({ courseId: 'course-1' }))
+
+    fireEvent.click(rendered.getByTestId('toggle'))
+    await flushPromises()
+
+    await act(async () => {
+      firstExecution.resolve({ status: true })
+      await firstExecution.promise
+    })
+    await flushPromises()
+
+    expect(onExecute).toHaveBeenCalledTimes(1)
+    expect(executeBehavior).toHaveBeenCalledTimes(1)
+    expect(callbacks.setResultType).not.toHaveBeenCalledWith('success')
+    expect(callbacks.setResultMessage).not.toHaveBeenCalledWith(expect.stringContaining('自动签到完成'))
+  })
+
+  test('starts the new generation while the old task list is still pending', async () => {
+    const oldTaskRequest = deferred()
+    const newTaskRequest = deferred()
+    const newExecution = deferred()
+    const requestChaoxingApi = vi.fn()
+      .mockReturnValueOnce(oldTaskRequest.promise)
+      .mockReturnValueOnce(newTaskRequest.promise)
+      .mockResolvedValue({ data: [] })
+    const onExecute = vi.fn()
+    const executeBehavior = vi.fn(() => newExecution.promise)
+    const callbacks = {
+      setResultType: vi.fn(),
+      setResultMessage: vi.fn(),
+      setSigninTasks: vi.fn(),
+      redirectingRef: { current: false },
+    }
+    const rendered = render(
+      <AutoSigninHarness
+        callbacks={callbacks}
+        executeBehavior={executeBehavior}
+        requestChaoxingApi={requestChaoxingApi}
+        onExecute={onExecute}
+      />
+    )
+
+    fireEvent.click(rendered.getByTestId('interval'))
+    await flushPromises()
+    fireEvent.click(rendered.getByTestId('toggle'))
+    await flushPromises()
+    expect(taskRequestCount(requestChaoxingApi)).toBe(1)
+
+    fireEvent.click(rendered.getByTestId('toggle'))
+    await flushPromises()
+    fireEvent.click(rendered.getByTestId('toggle'))
+    await flushPromises()
+    expect(taskRequestCount(requestChaoxingApi)).toBe(2)
+
+    await act(async () => {
+      newTaskRequest.resolve({ data: [task] })
+      await newTaskRequest.promise
+    })
+    await flushPromises()
+    expect(onExecute).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      oldTaskRequest.resolve({ data: [task] })
+      await oldTaskRequest.promise
+    })
+    await flushPromises()
+
+    expect(callbacks.setSigninTasks).toHaveBeenCalledTimes(1)
+    expect(callbacks.setResultType).not.toHaveBeenCalledWith('success')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60 * 1000)
+    })
+    expect(taskRequestCount(requestChaoxingApi)).toBe(2)
+    expect(onExecute).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      newExecution.resolve({ status: true })
+      await newExecution.promise
+    })
+    await flushPromises()
+
+    expect(callbacks.setResultType).toHaveBeenCalledWith('success')
   })
 })
