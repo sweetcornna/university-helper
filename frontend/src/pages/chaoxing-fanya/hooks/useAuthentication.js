@@ -127,19 +127,37 @@ export default function useAuthentication({ stopPolling }) {
   const loadCourses = useCallback(async () => {
 
 
-    const resp = await callApi('/chaoxing/courses')
+    setError('')
 
 
-    if (!resp) return
+    setNotice('')
 
 
-    const list = Array.isArray(resp?.courses) ? resp.courses : Array.isArray(resp?.data) ? resp.data : []
+    try {
 
 
-    setCourses(list)
+      const resp = await callApi('/chaoxing/courses')
 
 
-    setNotice(list.length > 0 ? `已获取 ${list.length} 门课程。` : '未查询到课程。')
+      if (!resp) return
+
+
+      const list = Array.isArray(resp?.courses) ? resp.courses : Array.isArray(resp?.data) ? resp.data : []
+
+
+      setCourses(list)
+
+
+      setNotice(list.length > 0 ? `已获取 ${list.length} 门课程。` : '未查询到课程。')
+
+
+    } catch (err) {
+
+
+      setError(err?.message || '获取课程失败。')
+
+
+    }
 
 
   }, [callApi])
