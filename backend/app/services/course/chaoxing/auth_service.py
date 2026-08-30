@@ -4,6 +4,7 @@ from requests import RequestException
 
 from .cipher import AESCipher
 from .config import GlobalConst as gc
+from .cookies import use_cookies
 
 
 class ChaoxingAuthService:
@@ -15,7 +16,7 @@ class ChaoxingAuthService:
     def login(self, login_with_cookies=False):
         if login_with_cookies:
             logger.info("Logging in with cookies")
-            self.session_manager.update_cookies()
+            self.session_manager.update_cookies(use_cookies())
             logger.debug("Cookie session loaded (cookies redacted)")
             if not self._validate_cookie_session():
                 logger.warning("Cookie 登录校验失败，尝试使用账号密码重新登录")
