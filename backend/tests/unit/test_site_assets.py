@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import gzip
 import hashlib
+import json
 import re
+import subprocess
 import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path
@@ -107,3 +109,76 @@ def test_site_external_scripts_match_sri_from_network():
             f"Content-Encoding: {content_encoding})"
         )
         print(f"{src} -> {actual_sri} ({len(content)} bytes; Content-Encoding: {content_encoding})")
+
+
+def test_site_night_script_handles_missing_scrolltrigger_without_stopping_common_init():
+    """Run the browser script in a VM for both CDN loading outcomes."""
+    night_script = json.dumps((SITE_DIR / "assets" / "night.js").read_text(encoding="utf-8"))
+    node_harness = f"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const source = {night_script};
+
+function run(withScrollTrigger) {{
+  const htmlClasses = new Set();
+  const bodyToggles = [];
+  const events = [];
+  const registered = [];
+  const stars = {{
+    children: [],
+    style: {{}},
+    appendChild(child) {{ this.children.push(...child.children); }}
+  }};
+  const gsap = {{
+    registerPlugin(plugin) {{ registered.push(plugin); }},
+    set() {{}},
+  }};
+  const scrollTrigger = {{}};
+  const document = {{
+    documentElement: {{
+      scrollHeight: 1000,
+      classList: {{ add(name) {{ htmlClasses.add(name); }} }},
+    }},
+    body: {{ classList: {{ toggle(name, value) {{ bodyToggles.push([name, value]); }} }} }},
+    createDocumentFragment() {{
+      return {{ children: [], appendChild(child) {{ this.children.push(child); }} }};
+    }},
+    createElement() {{
+      return {{ className: '', style: {{ setProperty() {{}} }} }};
+    }},
+    getElementById(id) {{ return id === 'stars' ? stars : null; }},
+    querySelector() {{ return null; }},
+    querySelectorAll() {{ return []; }},
+  }};
+  const window = {{
+    innerHeight: 600,
+    scrollY: 0,
+    gsap,
+    matchMedia() {{ return {{ matches: withScrollTrigger }}; }},
+    addEventListener(name) {{ events.push(name); }},
+  }};
+  if (withScrollTrigger) window.ScrollTrigger = scrollTrigger;
+  const context = {{ window, document, requestAnimationFrame(callback) {{ callback(); }} }};
+  vm.runInNewContext(source, context);
+  return {{ bodyToggles, events, htmlClasses, registered, scrollTrigger, stars }};
+}}
+
+const fallback = run(false);
+assert.equal(fallback.registered.length, 0);
+assert.equal(fallback.stars.children.length, 110);
+assert.deepEqual(fallback.events.sort(), ['resize', 'scroll']);
+assert.equal(fallback.bodyToggles.length, 1);
+assert.equal(fallback.htmlClasses.has('js-anim'), false);
+
+const animated = run(true);
+assert.deepEqual(animated.registered, [animated.scrollTrigger]);
+assert.equal(animated.htmlClasses.has('js-anim'), true);
+"""
+    result = subprocess.run(
+        ["node", "--eval", node_harness],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
