@@ -115,6 +115,130 @@ describe('useBackgroundTasks polling races', () => {
     }
   })
 
+  test('starts a new generation when reopening the same task and ignores stale logs', async () => {
+    const oldStatus = deferred()
+    const oldLogs = deferred()
+    const newStatus = deferred()
+    const newLogs = deferred()
+    const nextStatus = deferred()
+    const nextLogs = deferred()
+    const statusResponses = [oldStatus, newStatus, nextStatus]
+    const logResponses = [oldLogs, newLogs, nextLogs]
+    let statusCalls = 0
+    let logsCalls = 0
+    const requestChaoxingApi = vi.fn((path) => {
+      if (path === '/task/X') return statusResponses[statusCalls++].promise
+      if (path.startsWith('/logs/X?cursor=')) return logResponses[logsCalls++].promise
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const rendered = renderBackgroundTasks(requestChaoxingApi)
+    let oldOpenPromise
+    let newOpenPromise
+
+    try {
+      await act(async () => {
+        oldOpenPromise = rendered.current.openBackgroundTask('X')
+      })
+
+      await act(async () => {
+        oldStatus.resolve({ data: { status: 'running', task_id: 'X' } })
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(rendered.current.taskStatus).toEqual({ status: 'running', task_id: 'X' })
+      expect(rendered.current.statusLoading).toBe(true)
+
+      await act(async () => {
+        newOpenPromise = rendered.current.openBackgroundTask('X')
+      })
+
+      expect(statusCalls).toBe(2)
+      expect(logsCalls).toBe(2)
+      expect(requestChaoxingApi).toHaveBeenNthCalledWith(4, '/logs/X?cursor=0')
+      expect(rendered.current.taskStatus).toBe(null)
+      expect(rendered.current.logs).toEqual([])
+      expect(rendered.current.statusLoading).toBe(true)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await act(async () => {
+        newStatus.resolve({ data: { status: 'running', task_id: 'X' } })
+        newLogs.resolve({ data: [{ message: 'new generation' }], cursor: 101 })
+        await newOpenPromise
+      })
+
+      expect(rendered.current.taskStatus).toEqual({ status: 'running', task_id: 'X' })
+      expect(rendered.current.logs).toEqual([{ message: 'new generation' }])
+      expect(rendered.current.statusLoading).toBe(false)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await act(async () => {
+        oldLogs.resolve({ data: [{ message: 'stale generation' }], cursor: 999 })
+        await oldOpenPromise
+      })
+
+      expect(rendered.current.taskStatus).toEqual({ status: 'running', task_id: 'X' })
+      expect(rendered.current.logs).toEqual([{ message: 'new generation' }])
+      expect(rendered.current.statusLoading).toBe(false)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+      })
+      expect(requestChaoxingApi).toHaveBeenLastCalledWith('/logs/X?cursor=101')
+
+      await act(async () => {
+        nextStatus.resolve({ data: { status: 'completed', task_id: 'X' } })
+        nextLogs.resolve({ data: [], cursor: 101 })
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(rendered.current.statusLoading).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+  test('external task clearing invalidates a pending generation', async () => {
+    const status = deferred()
+    const logs = deferred()
+    const requestChaoxingApi = vi.fn((path) => {
+      if (path === '/task/X') return status.promise
+      if (path === '/logs/X?cursor=0') return logs.promise
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const rendered = renderBackgroundTasks(requestChaoxingApi)
+    let openPromise
+
+    try {
+      await act(async () => {
+        openPromise = rendered.current.openBackgroundTask('X')
+      })
+      expect(rendered.current.statusLoading).toBe(true)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await act(async () => {
+        rendered.current.setTaskId('')
+      })
+      expect(rendered.current.taskId).toBe('')
+      expect(rendered.current.statusLoading).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+
+      await act(async () => {
+        status.resolve({ data: { status: 'completed', task_id: 'X' } })
+        logs.resolve({ data: [{ message: 'stale after clear' }], cursor: 1 })
+        await openPromise
+      })
+
+      expect(rendered.current.taskStatus).toBe(null)
+      expect(rendered.current.logs).toEqual([])
+      expect(rendered.current.statusLoading).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
   test('reports and stops polling when the current task fails', async () => {
     const status = deferred()
     const logs = deferred()

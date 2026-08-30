@@ -7,21 +7,23 @@ import {
 
 export default function useBackgroundTasks(requestChaoxingApi) {
   const pollRef = useRef(null)
+  // Monotonic generation for every open/clear operation. Task ids can be
+  // reused, so the id alone cannot distinguish an old request from a reopened
+  // task with the same id.
+  const taskGenerationRef = useRef(0)
   // Client-tracked log cursor: the server now slices statelessly from this
   // offset, so reopening a task / overlapping polls no longer race on a shared
   // server cursor and drop logs. Reset to 0 whenever a task is (re)opened.
   const logCursorRef = useRef(0)
-  // Task-scoped in-flight guard: holds the task id whose poll is currently in
-  // flight (or ''). It skips a *second poll of the SAME task* (so two overlapping
-  // refreshes don't read one cursor and double-append), while still allowing a
-  // newly-opened task to poll. Paired with openTaskRef below, which drops stale
-  // responses so an in-flight poll for task A can't write A's status/logs/cursor
-  // into a freshly-opened task B's view.
-  const inFlightRef = useRef('')
-  // The currently-open task id; responses for any other id are discarded.
-  const openTaskRef = useRef('')
+  // Task-scoped in-flight guard: a new generation may poll even when its task
+  // id is the same as an older generation still in flight.
+  const inFlightRef = useRef(null)
+  // The currently-open task identity; responses for any other id or generation
+  // are discarded.
+  const openTaskRef = useRef({ taskId: '', generation: 0 })
 
-  const [taskId, setTaskId] = useState('')
+  const [taskId, setTaskIdState] = useState('')
+  const [taskGeneration, setTaskGeneration] = useState(0)
   const [taskStatus, setTaskStatus] = useState(null)
   const [logs, setLogs] = useState([])
   const [statusLoading, setStatusLoading] = useState(false)
@@ -33,12 +35,45 @@ export default function useBackgroundTasks(requestChaoxingApi) {
     }
   }, [])
 
-  const refreshTaskStatus = useCallback(async (currentTaskId, { setResultType, setResultMessage, setBackgroundTaskHistory } = {}) => {
+  const invalidateTaskGeneration = useCallback(() => {
+    const generation = taskGenerationRef.current + 1
+    taskGenerationRef.current = generation
+    openTaskRef.current = { taskId: '', generation }
+    inFlightRef.current = null
+    setTaskGeneration(generation)
+    return generation
+  }, [])
+
+  const setTaskId = useCallback((nextTaskId) => {
+    if (nextTaskId === '') {
+      invalidateTaskGeneration()
+      setStatusLoading(false)
+    }
+    setTaskIdState(nextTaskId)
+  }, [invalidateTaskGeneration])
+
+  const refreshTaskStatus = useCallback(async (
+    currentTaskId,
+    { setResultType, setResultMessage, setBackgroundTaskHistory } = {},
+    expectedGeneration = openTaskRef.current.generation,
+  ) => {
     if (!currentTaskId) return
-    // Skip only a concurrent poll of the SAME task (prevents one-cursor double
-    // append); a different (newly-opened) task is allowed to proceed.
-    if (inFlightRef.current === currentTaskId) return
-    inFlightRef.current = currentTaskId
+
+    const generation = expectedGeneration
+    const isCurrentTask = () => {
+      const openTask = openTaskRef.current
+      return openTask.taskId === currentTaskId && openTask.generation === generation
+    }
+    const isCurrentPoll = () => {
+      const inFlight = inFlightRef.current
+      return isCurrentTask() && inFlight?.taskId === currentTaskId && inFlight.generation === generation
+    }
+
+    // Reject calls for an id/generation that is no longer open, then skip only
+    // a concurrent poll from this exact generation.
+    if (!isCurrentTask() || isCurrentPoll()) return
+
+    inFlightRef.current = { taskId: currentTaskId, generation }
     setStatusLoading(true)
 
     try {
@@ -60,9 +95,9 @@ export default function useBackgroundTasks(requestChaoxingApi) {
 
       const statusResp = await statusPromise
 
-      // The open task changed while this request was in flight — discard the
-      // stale result so it can't overwrite the new task's view or cursor.
-      if (openTaskRef.current !== currentTaskId) return
+      // The open task or generation changed while this request was in flight —
+      // discard the stale result so it cannot overwrite the new task's view.
+      if (!isCurrentTask()) return
 
       const statusData = statusResp?.data || {}
       setTaskStatus(statusData)
@@ -81,10 +116,10 @@ export default function useBackgroundTasks(requestChaoxingApi) {
 
       const logsResult = await logsPromise
 
-      // The open task or in-flight generation changed while logs were
-      // loading — discard the stale result so it can't overwrite the new
+      // The open task, generation, or in-flight poll changed while logs were
+      // loading — discard the stale result so it cannot overwrite the new
       // task's logs or cursor.
-      if (openTaskRef.current !== currentTaskId || inFlightRef.current !== currentTaskId) return
+      if (!isCurrentPoll()) return
 
       if (!logsResult.ok) {
         // Logs are supplementary to status. Keep the current task alive and
@@ -101,15 +136,16 @@ export default function useBackgroundTasks(requestChaoxingApi) {
         }
       }
     } catch (err) {
-      if (openTaskRef.current !== currentTaskId || inFlightRef.current !== currentTaskId) return
+      if (!isCurrentPoll()) return
       if (setResultType) setResultType('error')
       if (setResultMessage) setResultMessage(err.message || '查询任务状态失败。')
       stopPolling()
     } finally {
-      // Only clear if still ours — a newer task's poll may have taken the slot.
-      if (inFlightRef.current === currentTaskId) {
-        inFlightRef.current = ''
-        if (openTaskRef.current === currentTaskId) setStatusLoading(false)
+      // Only clear if this exact generation still owns the poll slot — a newer
+      // generation may have taken it, including when the task id is reused.
+      if (isCurrentPoll()) {
+        inFlightRef.current = null
+        if (isCurrentTask()) setStatusLoading(false)
       }
     }
   }, [requestChaoxingApi, stopPolling])
@@ -117,24 +153,39 @@ export default function useBackgroundTasks(requestChaoxingApi) {
   const openBackgroundTask = useCallback(async (nextTaskId, callbacks) => {
     const normalizedTaskId = String(nextTaskId || '').trim()
     if (!normalizedTaskId) return false
-    // Mark B as the open task BEFORE refreshing so any in-flight poll for the
-    // previous task is treated as stale and its response is dropped.
-    openTaskRef.current = normalizedTaskId
-    setTaskId(normalizedTaskId)
+
+    const generation = taskGenerationRef.current + 1
+    taskGenerationRef.current = generation
+    // Mark the new task identity BEFORE refreshing so any in-flight poll for
+    // the previous generation is treated as stale and its response is dropped.
+    openTaskRef.current = { taskId: normalizedTaskId, generation }
+    setTaskIdState(normalizedTaskId)
+    setTaskGeneration(generation)
     setTaskStatus(null)
     setLogs([])
     logCursorRef.current = 0
-    await refreshTaskStatus(normalizedTaskId, callbacks)
+    await refreshTaskStatus(normalizedTaskId, callbacks, generation)
     return true
   }, [refreshTaskStatus])
 
-  // Keep openTaskRef in sync for interval-driven polls (openBackgroundTask sets
-  // it eagerly; this covers taskId changes from any other path).
+  // Keep openTaskRef in sync for taskId changes from any other path. The public
+  // setTaskId('') wrapper invalidates eagerly; this also covers functional state
+  // updates and preserves the setter's existing API shape.
   useEffect(() => {
-    openTaskRef.current = taskId
+    if (openTaskRef.current.taskId === taskId) return
+
+    const generation = taskGenerationRef.current + 1
+    taskGenerationRef.current = generation
+    openTaskRef.current = { taskId, generation }
+    setTaskGeneration(generation)
+    if (!taskId) {
+      inFlightRef.current = null
+      logCursorRef.current = 0
+      setStatusLoading(false)
+    }
   }, [taskId])
 
-  // Poll effect: when taskId changes, start/stop 3s polling
+  // Poll effect: when taskId or its generation changes, start/stop 3s polling.
   useEffect(() => {
     if (!taskId) return undefined
     stopPolling()
@@ -142,7 +193,7 @@ export default function useBackgroundTasks(requestChaoxingApi) {
       refreshTaskStatus(taskId)
     }, POLL_INTERVAL_MS)
     return stopPolling
-  }, [refreshTaskStatus, stopPolling, taskId])
+  }, [refreshTaskStatus, stopPolling, taskId, taskGeneration])
 
   return {
     taskId,
