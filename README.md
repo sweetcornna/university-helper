@@ -46,8 +46,11 @@ It bundles the backend and runs locally without Docker, Postgres, or Python.
 | macOS (Intel) | `University.Helper_<ver>_x64.dmg` | same right-click → **Open** |
 | Linux | `university-helper_<ver>_amd64.AppImage` / `.deb` | `chmod +x *.AppImage && ./*.AppImage` |
 
-The app auto-updates from GitHub Releases. Builds are signed for the updater but
-are not yet OS code-signed, so first launch may show Windows/macOS warnings.
+Installers are published for each listed platform. Signed updater artifacts and
+automatic updates are available only for releases where the repository's Tauri
+signing secret is configured; without it, installers still build but the release
+omits updater artifacts. Builds are not yet OS code-signed, so first launch may
+show Windows/macOS warnings.
 On macOS, try **right-click → Open** first. If Gatekeeper says the app is
 damaged or should be moved to the Trash, drag it to `/Applications`, then remove
 the download quarantine flag:
