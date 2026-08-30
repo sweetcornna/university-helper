@@ -220,6 +220,51 @@ describe('Zhihuishu request race guards', () => {
     expect(screen.queryByText('课程 A 章节')).not.toBeInTheDocument()
   })
 
+  test('clears the previous course view before a pending switch and on deselect', async () => {
+    const courseBRequest = deferred()
+    configureCourseApi({
+      courseDetails: {
+        [COURSE_A]: () => Promise.resolve(courseDetailResponse(COURSE_A, '课程 A', 'A 课程视频')),
+        [COURSE_B]: () => courseBRequest.promise,
+      },
+      progress: {
+        [COURSE_A]: () => Promise.resolve({
+          data: {
+            status: 'running',
+            message: 'A 课程进度',
+            total: 2,
+            completed: 1,
+            percentage: 50,
+          },
+        }),
+      },
+    })
+
+    const selector = await openCourses()
+    await waitFor(() => expect(screen.getByText('课程 A 章节')).toBeInTheDocument())
+    expect(screen.getByText('A 课程视频')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新进度' }))
+    await waitFor(() => expect(screen.getByText('消息：A 课程进度')).toBeInTheDocument())
+
+    fireEvent.change(selector, { target: { value: COURSE_B } })
+    await waitFor(() => expect(countRequests(`${API_BASE}/courses/${COURSE_B}`)).toBe(1))
+    expect(screen.queryByText('课程 A 章节')).not.toBeInTheDocument()
+    expect(screen.queryByText('A 课程视频')).not.toBeInTheDocument()
+    expect(screen.queryByText('消息：A 课程进度')).not.toBeInTheDocument()
+    expect(screen.getByText('正在加载课程详情...')).toBeInTheDocument()
+
+    await settle(courseBRequest, courseDetailResponse(COURSE_B, '课程 B', 'B 课程视频'))
+    expect(screen.getByText('课程 B 章节')).toBeInTheDocument()
+    expect(screen.getByText('B 课程视频')).toBeInTheDocument()
+    expect(screen.queryByText('课程 A 章节')).not.toBeInTheDocument()
+    expect(screen.queryByText('A 课程视频')).not.toBeInTheDocument()
+
+    fireEvent.change(selector, { target: { value: '' } })
+    expect(screen.getByText('请选择课程查看详情与进度。')).toBeInTheDocument()
+    expect(screen.queryByText('消息：A 课程进度')).not.toBeInTheDocument()
+  })
+
   test('invalidates A synchronously when a refreshed course list automatically selects B', async () => {
     const courseARequest = deferred()
     const courseBRequest = deferred()
@@ -576,7 +621,7 @@ describe('Zhihuishu request race guards', () => {
     expect(screen.queryByText('A 任务视频')).not.toBeInTheDocument()
   })
 
-  test('a pre-switch background A response updates its record and terminal notice but not B view', async () => {
+  test('a pre-switch background A response updates its record and terminal notice without restoring stale B data', async () => {
     const backgroundARequest = deferred()
     let taskCalls = 0
     api.mockImplementation((path) => {
@@ -615,6 +660,8 @@ describe('Zhihuishu request race guards', () => {
     const selector = screen.getByRole('combobox', { name: '分组课程' })
     fireEvent.change(selector, { target: { value: COURSE_B } })
     toast.notify.mockReset()
+    expect(screen.queryByText('消息：B 基准进度')).not.toBeInTheDocument()
+    expect(screen.queryByText('B 基准视频')).not.toBeInTheDocument()
 
     await settle(backgroundARequest, { data: taskResponse('task-a', COURSE_A, 'completed', [
       { id: 'a-video', title: 'A 后台视频' },
@@ -624,8 +671,8 @@ describe('Zhihuishu request race guards', () => {
     expect(toast.notify.mock.calls.some(([, message]) => String(message).includes('学习完成'))).toBe(true)
 
     fireEvent.click(getWorkspaceTab('课程'))
-    expect(screen.getByText('消息：B 基准进度')).toBeInTheDocument()
-    expect(screen.getByText('B 基准视频')).toBeInTheDocument()
+    expect(screen.queryByText('消息：B 基准进度')).not.toBeInTheDocument()
+    expect(screen.queryByText('B 基准视频')).not.toBeInTheDocument()
     expect(screen.queryByText('A 后台视频')).not.toBeInTheDocument()
   })
 

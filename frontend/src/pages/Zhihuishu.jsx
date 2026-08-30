@@ -1295,11 +1295,16 @@ export default function Zhihuishu() {
       setCourseDetail(null)
       setCourseStructure([])
       setVideos([])
+      setProgress(null)
       setCourseDetailLoading(false)
       setVideosLoading(false)
       setProgressLoading(false)
       return
     }
+    setCourseDetail(null)
+    setCourseStructure([])
+    setVideos([])
+    setProgress(null)
     setVideosLoading(false)
     setProgressLoading(false)
     void loadCourseDetail(selectedCourseId, true)
