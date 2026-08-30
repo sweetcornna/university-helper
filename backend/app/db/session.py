@@ -33,6 +33,7 @@ if TYPE_CHECKING:  # annotations only — no runtime psycopg2 import
 logger = logging.getLogger(__name__)
 
 main_pool: ThreadedConnectionPool | None = None
+_main_pool_lock = threading.Lock()
 
 
 @dataclass
@@ -53,19 +54,24 @@ _TENANT_NAME_RE = re.compile(r"^tenant_[a-z0-9]+$")
 def _get_main_pool() -> ThreadedConnectionPool:
     global main_pool
     if main_pool is None:
-        from psycopg2.extras import RealDictCursor
-        from psycopg2.pool import ThreadedConnectionPool
+        with _main_pool_lock:
+            # Another thread may have initialized the pool while we waited for
+            # the lock. Publish it only after construction succeeds so a
+            # failed connection attempt can be retried by a later caller.
+            if main_pool is None:
+                from psycopg2.extras import RealDictCursor
+                from psycopg2.pool import ThreadedConnectionPool
 
-        main_pool = ThreadedConnectionPool(
-            minconn=5,
-            maxconn=30,
-            host=settings.MAIN_DB_HOST,
-            database=settings.MAIN_DB_NAME,
-            user=settings.MAIN_DB_USER,
-            password=settings.MAIN_DB_PASSWORD,
-            port=settings.MAIN_DB_PORT,
-            cursor_factory=RealDictCursor,
-        )
+                main_pool = ThreadedConnectionPool(
+                    minconn=5,
+                    maxconn=30,
+                    host=settings.MAIN_DB_HOST,
+                    database=settings.MAIN_DB_NAME,
+                    user=settings.MAIN_DB_USER,
+                    password=settings.MAIN_DB_PASSWORD,
+                    port=settings.MAIN_DB_PORT,
+                    cursor_factory=RealDictCursor,
+                )
     return main_pool
 
 
