@@ -107,15 +107,6 @@ if [[ "$#" -eq 0 ]]; then
   exit 1
 fi
 
-if [[ "${1:-}" != "--frontend" ]]; then
-  for rel_path in "$@"; do
-    if [[ "$rel_path" == frontend/* ]]; then
-      echo "Frontend source paths are not accepted in per-file mode; run 'cd frontend && npm ci && npm run build', then from the repository root './scripts/hotfix_publish.sh --frontend'." >&2
-      exit 1
-    fi
-  done
-fi
-
 if [[ "$SERVER_IP" == *:* ]]; then
   [[ "$SERVER_IP" =~ ^[0-9A-Fa-f:]+$ ]] || invalid_config "SERVER_IP" "must be a hostname or IP address"
   FILE_TRANSFER_HOST="[$SERVER_IP]"
@@ -199,9 +190,10 @@ needs_app_hotcopy=false
 needs_web_reload=false
 backend_files=()
 
-# Resolve and validate every input before starting any remote operation.  Keep
-# the canonical source path so a symlink cannot be swapped after validation to
-# make scp read a file outside the repository.
+# Resolve and validate every input before starting any remote operation.  Both
+# the source path and the repository-relative path are canonicalized here; all
+# upload, classification, and remote-target code below must use these validated
+# values so aliases cannot change the meaning between a check and a use.
 require_cmd realpath
 repo_root_canonical="$(realpath "$ROOT_DIR")" || {
   echo "Unable to resolve repository root: $ROOT_DIR" >&2
@@ -235,6 +227,15 @@ for rel_path in "$@"; do
     fi
   done
 
+  # Keep the accepted CLI contract simple and unambiguous: a leading './' is
+  # harmless and is canonicalized below, but no '..' component is accepted.
+  # This prevents an in-repository traversal alias from bypassing the path
+  # policy or changing the eventual remote destination.
+  if [[ "$rel_path" =~ (^|/)\.\.(/|$) ]]; then
+    echo "Path contains '..' components: $rel_path" >&2
+    exit 1
+  fi
+
   abs_path="$ROOT_DIR/$rel_path"
   if ! canonical_path="$(realpath "$abs_path" 2>/dev/null)"; then
     echo "File not found: $rel_path" >&2
@@ -245,7 +246,9 @@ for rel_path in "$@"; do
     exit 1
   fi
   case "$canonical_path" in
-    "$repo_root_canonical"/*) ;;
+    "$repo_root_canonical"/*)
+      canonical_rel_path="${canonical_path#"$repo_root_canonical"/}"
+      ;;
     *)
       echo "Path escapes repository root: $rel_path" >&2
       exit 1
@@ -253,7 +256,18 @@ for rel_path in "$@"; do
   esac
   [[ -f "$canonical_path" ]] || { echo "Not a regular file: $rel_path" >&2; exit 1; }
 
-  validated_rel_paths+=("$rel_path")
+  case "$canonical_rel_path" in
+    frontend/*)
+      echo "Frontend source paths are not accepted in per-file mode; run 'cd frontend && npm ci && npm run build', then from the repository root './scripts/hotfix_publish.sh --frontend'." >&2
+      exit 1
+      ;;
+    .env|.env.*)
+      echo "Sensitive repository paths are not accepted in per-file mode." >&2
+      exit 1
+      ;;
+  esac
+
+  validated_rel_paths+=("$canonical_rel_path")
   validated_abs_paths+=("$canonical_path")
 done
 

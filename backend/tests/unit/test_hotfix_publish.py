@@ -20,6 +20,7 @@ def publisher_fixture(tmp_path):
     target.parent.mkdir(parents=True)
     target.write_text("print('fixture')\n")
     (target.parent / "space name.py").write_text("print('spaces')\n")
+    (repo / ".env").write_text("SECRET_KEY=fixture-only\n")
     (repo / "Dockerfile.server").write_text("FROM scratch\n")
     frontend_dist = repo / "frontend" / "dist"
     frontend_dist.mkdir(parents=True)
@@ -104,6 +105,16 @@ def test_normal_relative_file_keeps_remote_target_semantics(publisher_fixture):
     assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py'" in log
     assert "docker cp '/opt/university-helper/backend/app/main.py' 'shuake-easy-learning-app:/srv/backend/app/main.py'" in log
     assert publisher_fixture["call_marker"].exists()
+
+
+def test_dot_prefix_alias_is_canonicalized_before_upload_and_classification(publisher_fixture):
+    result = run_publisher(publisher_fixture, "./backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    log = publisher_fixture["call_log"].read_text()
+    assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py'" in log
+    assert "docker cp '/opt/university-helper/backend/app/main.py' 'shuake-easy-learning-app:/srv/backend/app/main.py'" in log
+    assert "./backend" not in log
 
 
 def test_space_in_repository_path_is_one_literal_remote_word(publisher_fixture):
@@ -210,7 +221,13 @@ def test_password_metacharacters_never_enter_rsync_shell_command(publisher_fixtu
 @pytest.mark.parametrize(
     "malicious_path",
     [
+        "",
+        ".",
         "../../secret.txt",
+        "backend/../../secret.txt",
+        "backend/../.env",
+        "backend/../frontend/src/App.jsx",
+        "backend/app/../app/main.py",
         "backend/app/escape.py",
         "backend/app/quote'name.py",
         "backend/app/bad\nname.py",
@@ -219,6 +236,16 @@ def test_password_metacharacters_never_enter_rsync_shell_command(publisher_fixtu
 )
 def test_malicious_path_is_rejected_before_network_calls(publisher_fixture, malicious_path):
     result = run_publisher(publisher_fixture, malicious_path)
+
+    assert result.returncode != 0
+    assert not publisher_fixture["call_marker"].exists()
+    assert not publisher_fixture["call_log"].exists()
+
+
+def test_absolute_path_is_rejected_before_network_calls(publisher_fixture):
+    path = str(publisher_fixture["repo"] / "backend" / "app" / "main.py")
+
+    result = run_publisher(publisher_fixture, path)
 
     assert result.returncode != 0
     assert not publisher_fixture["call_marker"].exists()
