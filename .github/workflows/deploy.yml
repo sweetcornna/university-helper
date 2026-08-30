@@ -42,15 +42,21 @@ jobs:
       - name: Publish to production
         env:
           SSH_KEY_DATA: ${{ secrets.VPS_SSH_KEY }}
+          SERVER_SSH_KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
           SERVER_IP: ${{ secrets.VPS_HOST }}
           SERVER_USER: ${{ secrets.VPS_USER }}
         run: |
-          if [ -z "$SSH_KEY_DATA" ] || [ -z "$SERVER_IP" ]; then
-            echo "::error::Missing VPS_SSH_KEY / VPS_HOST secrets — cannot deploy." >&2
+          set -euo pipefail
+          if [ -z "${SSH_KEY_DATA:-}" ] || [ -z "${SERVER_IP:-}" ] || [ -z "${SERVER_SSH_KNOWN_HOSTS:-}" ]; then
+            echo "::error::Missing VPS_SSH_KEY / VPS_HOST / SERVER_SSH_KNOWN_HOSTS secrets — cannot deploy." >&2
             exit 1
           fi
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_KEY_DATA" > ~/.ssh/uh_deploy_key
-          chmod 600 ~/.ssh/uh_deploy_key
+          install -m 700 -d "$HOME/.ssh"
+          key_file="$(mktemp "$HOME/.ssh/uh_deploy_key.XXXXXX")"
+          known_hosts_file="$(mktemp "$HOME/.ssh/uh_known_hosts.XXXXXX")"
+          trap 'rm -f -- "$key_file" "$known_hosts_file"' EXIT
+          printf '%s\n' "$SSH_KEY_DATA" > "$key_file"
+          printf '%s\n' "$SERVER_SSH_KNOWN_HOSTS" > "$known_hosts_file"
+          chmod 600 "$key_file" "$known_hosts_file"
           # Reuse the project's deploy tool (the "更新器") in key mode.
-          SSH_KEY=~/.ssh/uh_deploy_key bash scripts/hotfix_publish.sh --frontend
+          SSH_KEY="$key_file" SSH_KNOWN_HOSTS_FILE="$known_hosts_file" bash scripts/hotfix_publish.sh --frontend

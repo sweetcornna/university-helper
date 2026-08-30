@@ -83,6 +83,22 @@ If you need to seed a fresh server, copy `.env.example` and fill in real secrets
 
 This is the only supported deploy path for ongoing changes.
 
+Before any non-dry-run publish, configure a trusted OpenSSH `known_hosts` file
+for the exact `SERVER_IP`. Obtain the complete host-key line (or verify its
+fingerprint) through the server console/provider or an already-trusted
+administrator workstation, then review it out of band; do not blindly trust
+an online first-connection scan on first contact.
+
+```bash
+export SSH_KNOWN_HOSTS_FILE="$HOME/.ssh/uh_known_hosts"
+chmod 600 "$SSH_KNOWN_HOSTS_FILE"
+# Put the verified, complete known_hosts line for SERVER_IP in this file.
+```
+
+The GitHub Actions deploy uses the same trusted line(s) from the
+`SERVER_SSH_KNOWN_HOSTS` secret. The publisher refuses missing, empty,
+unparseable, or non-matching host-key files before opening a transport.
+
 Preferred: SSH-key auth (the script defaults to this whenever `SSH_KEY` is set or an agent has the key).
 
 ```bash
@@ -246,13 +262,30 @@ CREDENTIAL_ENCRYPTION_KEY=<已轮换，禁止入仓>
 
 这是日常迭代唯一支持的部署方式。
 
+任何非 dry-run 推送前，都必须为准确的 `SERVER_IP` 配置可信的 OpenSSH
+`known_hosts` 文件。应从服务器控制台/云厂商界面或已经信任的管理员工作站获取完整主机密钥行，
+并通过带外方式核对指纹；首次连接不要盲目信任在线首次连接扫描结果。
+
+```bash
+export SSH_KNOWN_HOSTS_FILE="$HOME/.ssh/uh_known_hosts"
+chmod 600 "$SSH_KNOWN_HOSTS_FILE"
+# 将已核验的、完整的 SERVER_IP 对应 known_hosts 行写入此文件。
+```
+
+GitHub Actions 部署使用同样的可信主机密钥行（配置在
+`SERVER_SSH_KNOWN_HOSTS` secret 中）。发布脚本在建立传输前会拒绝缺失、空、
+无法解析或与目标不匹配的主机密钥文件。
+
 ```bash
 export EASY_LEARNING_SERVER_IP=111.228.53.64
 export EASY_LEARNING_SERVER_PASSWORD=<从密钥管理获取>
 
 ./scripts/hotfix_publish.sh \
-  backend/app/api/v1/course.py \
-  frontend/src/pages/Zhihuishu.jsx
+  backend/app/api/v1/course.py
+
+cd frontend && npm ci && npm run build
+cd ..
+./scripts/hotfix_publish.sh --frontend
 ```
 
 行为：

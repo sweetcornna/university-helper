@@ -9,6 +9,9 @@ import pytest
 
 SCRIPT_SOURCE = Path(__file__).resolve().parents[3] / "scripts" / "hotfix_publish.sh"
 DEPLOYMENT_DOCS = Path(__file__).resolve().parents[3] / "docs" / "DEPLOYMENT.md"
+DEPLOY_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "deploy.yml"
+VALID_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH84F05NZJtXRPAMA4JxtJtUqhAFKe2+FB8cN71iYmBi hotfix test key"
+VALID_KNOWN_HOST = f"test.invalid {VALID_HOST_KEY}\n"
 
 
 @pytest.fixture
@@ -33,6 +36,9 @@ def publisher_fixture(tmp_path):
 
     outside = tmp_path / "secret.txt"
     outside.write_text("do not publish\n")
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(VALID_KNOWN_HOST)
+    known_hosts.chmod(0o600)
     escape = target.parent / "escape.py"
     escape.symlink_to(outside)
     for unsafe_name in ("quote'name.py", "bad\nname.py", "$(touch_marker).py"):
@@ -73,12 +79,15 @@ exec "$@"
             "SERVER_IP": "test.invalid",
             "SERVER_USER": "tester",
             "EASY_LEARNING_REMOTE_DIR": "/opt/university-helper",
+            "SSH_KNOWN_HOSTS_FILE": str(known_hosts),
         }
     )
     return {
         "repo": repo,
         "script": script,
         "outside": outside,
+        "fake_bin": fake_bin,
+        "known_hosts": known_hosts,
         "env": env,
         "call_log": call_log,
         "call_marker": call_marker,
@@ -103,7 +112,10 @@ def test_normal_relative_file_keeps_remote_target_semantics(publisher_fixture):
     log = publisher_fixture["call_log"].read_text()
     assert "mkdir -p '/opt/university-helper/backend/app'" in log
     assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py'" in log
-    assert "docker cp '/opt/university-helper/backend/app/main.py' 'shuake-easy-learning-app:/srv/backend/app/main.py'" in log
+    assert (
+        "docker cp '/opt/university-helper/backend/app/main.py' 'shuake-easy-learning-app:/srv/backend/app/main.py'"
+        in log
+    )
     assert publisher_fixture["call_marker"].exists()
 
 
@@ -113,7 +125,10 @@ def test_dot_prefix_alias_is_canonicalized_before_upload_and_classification(publ
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
     assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py'" in log
-    assert "docker cp '/opt/university-helper/backend/app/main.py' 'shuake-easy-learning-app:/srv/backend/app/main.py'" in log
+    assert (
+        "docker cp '/opt/university-helper/backend/app/main.py' 'shuake-easy-learning-app:/srv/backend/app/main.py'"
+        in log
+    )
     assert "./backend" not in log
 
 
@@ -124,7 +139,10 @@ def test_space_in_repository_path_is_one_literal_remote_word(publisher_fixture):
     log = publisher_fixture["call_log"].read_text()
     assert "mkdir -p '/opt/university-helper/backend/app'" in log
     assert "tester@test.invalid:'/opt/university-helper/backend/app/space name.py'" in log
-    assert "docker cp '/opt/university-helper/backend/app/space name.py' 'shuake-easy-learning-app:/srv/backend/app/space name.py'" in log
+    assert (
+        "docker cp '/opt/university-helper/backend/app/space name.py' 'shuake-easy-learning-app:/srv/backend/app/space name.py'"
+        in log
+    )
 
 
 def test_compose_values_are_individually_quoted_in_remote_command(publisher_fixture):
@@ -144,7 +162,192 @@ def test_frontend_rsync_quotes_remote_path_and_rsh_words(publisher_fixture):
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
     assert "tester@test.invalid:'/opt/university-helper/frontend/dist/'" in log
-    assert "'ssh' '-o' 'StrictHostKeyChecking=accept-new'" in log
+    assert (
+        f"'ssh' '-o' 'StrictHostKeyChecking=yes' '-o' 'UserKnownHostsFile={publisher_fixture['known_hosts']}'"
+    ) in log
+
+
+def test_password_auth_uses_the_same_pinned_host_key_policy(publisher_fixture):
+    publisher_fixture["env"]["EASY_LEARNING_SERVER_PASSWORD"] = "fixture-password"
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    log = publisher_fixture["call_log"].read_text()
+    assert "StrictHostKeyChecking=yes" in log
+    assert f"UserKnownHostsFile={publisher_fixture['known_hosts']}" in log
+    assert "PreferredAuthentications=password" in log
+    assert "accept-new" not in log
+
+
+def test_key_auth_uses_the_same_pinned_host_key_policy(publisher_fixture):
+    key = publisher_fixture["repo"] / "fixture-deploy-key"
+    key.write_text("not a real key; transport is stubbed\n")
+    key.chmod(0o600)
+    publisher_fixture["env"]["SSH_KEY"] = str(key)
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    log = publisher_fixture["call_log"].read_text()
+    assert "StrictHostKeyChecking=yes" in log
+    assert f"UserKnownHostsFile={publisher_fixture['known_hosts']}" in log
+    assert "\n-i\n" in log
+    assert f"\n{key}\n" in log
+    assert "accept-new" not in log
+
+
+@pytest.mark.parametrize("known_hosts_case", ["missing", "empty", "unmatched", "malformed"])
+def test_invalid_known_hosts_fails_closed_before_any_transport(publisher_fixture, known_hosts_case):
+    known_hosts = publisher_fixture["known_hosts"]
+    if known_hosts_case == "missing":
+        known_hosts.unlink()
+    elif known_hosts_case == "empty":
+        known_hosts.write_text("")
+    elif known_hosts_case == "unmatched":
+        known_hosts.write_text(VALID_KNOWN_HOST.replace("test.invalid", "other.invalid"))
+    else:
+        known_hosts.write_text("test.invalid ssh-ed25519 NOT_BASE64\n")
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "SSH_KNOWN_HOSTS_FILE" in result.stderr
+    assert not publisher_fixture["call_marker"].exists()
+    assert not publisher_fixture["call_log"].exists()
+
+
+def test_known_hosts_accepts_tab_separators_and_crlf(publisher_fixture):
+    publisher_fixture["known_hosts"].write_bytes(
+        f"# trusted fixture\r\n\r\ntest.invalid\t{VALID_HOST_KEY}\r\n".encode()
+    )
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    assert publisher_fixture["call_marker"].exists()
+
+
+def install_ssh_keygen_lookup_passthrough(publisher_fixture):
+    """Make host lookup preserve valid separators unsupported by older macOS ssh-keygen."""
+    real_ssh_keygen = shutil.which("ssh-keygen")
+    assert real_ssh_keygen is not None
+    publisher_fixture["env"]["REAL_SSH_KEYGEN"] = real_ssh_keygen
+    shim = publisher_fixture["fake_bin"] / "ssh-keygen"
+    shim.write_text(
+        """#!/usr/bin/env bash
+if [[ "${1:-}" == "-F" ]]; then
+  printf '# Host %s found\n' "${2:-}"
+  exec /bin/cat "${4:-}"
+fi
+exec "$REAL_SSH_KEYGEN" "$@"
+"""
+    )
+    shim.chmod(0o755)
+
+
+def test_revoked_only_with_tab_separators_and_crlf_fails_before_transport(publisher_fixture):
+    install_ssh_keygen_lookup_passthrough(publisher_fixture)
+    publisher_fixture["known_hosts"].write_bytes(f"@revoked\ttest.invalid\t{VALID_HOST_KEY}\r\n".encode())
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "matching entry is revoked" in result.stderr
+    assert not publisher_fixture["call_marker"].exists()
+    assert not publisher_fixture["call_log"].exists()
+
+
+def test_mixed_revoked_and_valid_matches_are_accepted(publisher_fixture):
+    install_ssh_keygen_lookup_passthrough(publisher_fixture)
+    publisher_fixture["known_hosts"].write_bytes(
+        (f"@revoked\ttest.invalid\t{VALID_HOST_KEY}\r\n" f"test.invalid\t{VALID_HOST_KEY}\r\n").encode()
+    )
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    assert publisher_fixture["call_marker"].exists()
+
+
+def test_known_hosts_accepts_hashed_host_entry(publisher_fixture):
+    known_hosts = publisher_fixture["known_hosts"]
+    hash_result = subprocess.run(
+        ["ssh-keygen", "-H", "-f", str(known_hosts)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert hash_result.returncode == 0, hash_result.stderr
+    assert known_hosts.read_text().startswith("|1|")
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    assert publisher_fixture["call_marker"].exists()
+
+
+def test_known_hosts_accepts_bracketed_default_port_entry(publisher_fixture):
+    publisher_fixture["known_hosts"].write_text(f"[test.invalid]:22 {VALID_HOST_KEY}\n")
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    assert publisher_fixture["call_marker"].exists()
+
+
+def test_known_hosts_accepts_bracketed_ipv6_default_port_entry(publisher_fixture):
+    publisher_fixture["env"]["SERVER_IP"] = "2001:db8::1"
+    publisher_fixture["known_hosts"].write_text(f"[2001:db8::1]:22 {VALID_HOST_KEY}\n")
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    assert publisher_fixture["call_marker"].exists()
+
+
+@pytest.mark.parametrize(
+    "invalid_entry",
+    [
+        "test.invalid\n",
+        "@unsupported test.invalid ssh-ed25519 AAAA\n",
+        "test.invalid not-a-key AAAA\n",
+    ],
+)
+def test_unparseable_known_hosts_entry_fails_closed_before_transport(publisher_fixture, invalid_entry):
+    publisher_fixture["known_hosts"].write_text(invalid_entry)
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "SSH_KNOWN_HOSTS_FILE" in result.stderr
+    assert not publisher_fixture["call_marker"].exists()
+    assert not publisher_fixture["call_log"].exists()
+
+
+def test_missing_known_hosts_is_allowed_only_for_dry_run(publisher_fixture):
+    publisher_fixture["env"].pop("SSH_KNOWN_HOSTS_FILE")
+    publisher_fixture["env"].pop("EASY_LEARNING_SSH_KNOWN_HOSTS_FILE", None)
+
+    result = run_publisher(publisher_fixture, "--dry-run", "./backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    assert "Dry run" in result.stdout
+    assert "backend/app/main.py" in result.stdout
+    assert not publisher_fixture["call_marker"].exists()
+    assert not publisher_fixture["call_log"].exists()
+
+
+def test_frontend_dry_run_never_requires_known_hosts_or_rsync(publisher_fixture):
+    publisher_fixture["env"].pop("SSH_KNOWN_HOSTS_FILE")
+    publisher_fixture["env"].pop("EASY_LEARNING_SSH_KNOWN_HOSTS_FILE", None)
+
+    result = run_publisher(publisher_fixture, "--dry-run", "--frontend")
+
+    assert result.returncode == 0, result.stderr
+    assert "would sync frontend/dist/" in result.stdout
+    assert not publisher_fixture["call_marker"].exists()
+    assert not publisher_fixture["call_log"].exists()
 
 
 def test_frontend_source_is_rejected_before_network_calls(publisher_fixture):
@@ -177,6 +380,26 @@ def test_hotfix_docs_require_built_dist_frontend_mode():
     assert "cd frontend && npm ci && npm run build" in section
     assert "./scripts/hotfix_publish.sh --frontend" in section
 
+    chinese_section = document.split("## 推送热修（小改动）", 1)[1].split("## 全新服务器初始化", 1)[0]
+    assert "frontend/src/" not in chinese_section
+    assert "cd frontend && npm ci && npm run build" in chinese_section
+    assert "./scripts/hotfix_publish.sh --frontend" in chinese_section
+    assert "backend/app/api/v1/course.py" in chinese_section
+
+
+def test_deploy_workflow_passes_trusted_known_hosts_without_tofu():
+    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    publish_step = workflow.split("      - name: Publish to production", 1)[1]
+
+    assert "SERVER_SSH_KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}" in publish_step
+    assert "SSH_KNOWN_HOSTS_FILE=" in publish_step
+    assert "mktemp" in publish_step
+    assert "chmod 600" in publish_step
+    assert "trap" in publish_step
+    assert "StrictHostKeyChecking=yes" in SCRIPT_SOURCE.read_text(encoding="utf-8")
+    assert "accept-new" not in SCRIPT_SOURCE.read_text(encoding="utf-8")
+    assert "ssh-keyscan" not in workflow
+
 
 @pytest.mark.parametrize(
     ("variable", "malicious_value"),
@@ -194,9 +417,7 @@ def test_hotfix_docs_require_built_dist_frontend_mode():
         ("SSH_KEY", "/tmp/key'bad"),
     ],
 )
-def test_unsafe_environment_config_is_rejected_before_network_calls(
-    publisher_fixture, variable, malicious_value
-):
+def test_unsafe_environment_config_is_rejected_before_network_calls(publisher_fixture, variable, malicious_value):
     publisher_fixture["env"][variable] = malicious_value
 
     result = run_publisher(publisher_fixture, "backend/app/main.py")

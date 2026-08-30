@@ -22,10 +22,13 @@
 #   SERVER_USER / EASY_LEARNING_SERVER_USER    (default: root)
 #   SSH_KEY                                     path to private key (optional)
 #   EASY_LEARNING_SERVER_PASSWORD               password (sshpass fallback)
+#   SSH_KNOWN_HOSTS_FILE / EASY_LEARNING_SSH_KNOWN_HOSTS_FILE
+#                                               trusted OpenSSH known_hosts file
 #
 # Usage:
 #   scripts/hotfix_publish.sh backend/app/foo.py [more files...]
 #   scripts/hotfix_publish.sh --frontend          # rsync the whole built dist
+#   scripts/hotfix_publish.sh --dry-run <file>...  # validate and show, no network
 set -euo pipefail
 
 SERVER_IP="${SERVER_IP:-${EASY_LEARNING_SERVER_IP:-8.134.33.19}}"
@@ -33,6 +36,8 @@ SERVER_USER="${SERVER_USER:-${EASY_LEARNING_SERVER_USER:-root}}"
 SERVER_PASSWORD="${EASY_LEARNING_SERVER_PASSWORD:-}"
 REMOTE_DIR="${EASY_LEARNING_REMOTE_DIR:-/opt/university-helper}"
 SSH_KEY="${SSH_KEY:-}"
+SSH_KNOWN_HOSTS_FILE="${SSH_KNOWN_HOSTS_FILE:-${EASY_LEARNING_SSH_KNOWN_HOSTS_FILE:-}}"
+DRY_RUN=0
 
 # Standalone binary — the docker compose v2 plugin segfaults on this box.
 COMPOSE_BIN="${EASY_LEARNING_COMPOSE_BIN:-docker-compose}"
@@ -98,12 +103,81 @@ validate_relative_path() {
   [[ ! "$value" =~ (^|/)\.\.?(/|$) ]] || invalid_config "$name" "must not contain '.' or '..' path components"
 }
 
+validate_known_hosts() {
+  local file=$1 host=$2 known_line first_field entry marker host_field key_type key_data
+  local entry_count=0 matching_entries trusted_match=0
+
+  [[ -n "$file" ]] || invalid_config "SSH_KNOWN_HOSTS_FILE" "must point to a preconfigured known_hosts file"
+  validate_absolute_path "SSH_KNOWN_HOSTS_FILE" "$file"
+  [[ -f "$file" ]] || invalid_config "SSH_KNOWN_HOSTS_FILE" "file not found"
+  [[ -s "$file" ]] || invalid_config "SSH_KNOWN_HOSTS_FILE" "must not be empty"
+  require_cmd ssh-keygen
+
+  # Parse every non-comment entry locally before constructing any transport.
+  # ssh-keygen -F only performs host lookup and intentionally accepts malformed
+  # key blobs, so validate each key separately as a public key as well.
+  while IFS= read -r known_line || [[ -n "$known_line" ]]; do
+    [[ "$known_line" =~ ^[[:space:]]*$ ]] && continue
+    IFS=$' \t\r' read -r first_field _ <<< "$known_line"
+    [[ "$first_field" == \#* ]] && continue
+
+    entry="$known_line"
+    if [[ "$entry" == @* ]]; then
+      IFS=$' \t\r' read -r marker entry <<< "$entry"
+      case "$marker" in
+        @cert-authority|@revoked)
+          ;;
+        *)
+          invalid_config "SSH_KNOWN_HOSTS_FILE" "contains an unsupported marker"
+          ;;
+      esac
+    fi
+
+    IFS=$' \t\r' read -r host_field key_type key_data <<< "$entry"
+    [[ -n "$host_field" && -n "$key_type" && -n "$key_data" ]] || invalid_config "SSH_KNOWN_HOSTS_FILE" "contains an unparseable entry"
+    if ! printf '%s %s\n' "$key_type" "$key_data" | ssh-keygen -lf /dev/stdin >/dev/null 2>&1; then
+      invalid_config "SSH_KNOWN_HOSTS_FILE" "contains an invalid host key"
+    fi
+    entry_count=$((entry_count + 1))
+  done < "$file"
+  (( entry_count > 0 )) || invalid_config "SSH_KNOWN_HOSTS_FILE" "contains no host keys"
+
+  # Matching is checked separately so a syntactically valid file for another
+  # host cannot accidentally authorize this deployment target.  Hashed host
+  # entries are handled by ssh-keygen itself.
+  matching_entries="$(ssh-keygen -F "$host" -f "$file" 2>/dev/null || true)"
+  # ssh-keygen treats an explicit [host]:port entry as distinct from the
+  # default-port host query.  The publisher has no separate port setting, so
+  # SSH will connect on port 22 and this form is also a valid trust anchor.
+  if [[ -z "$matching_entries" ]]; then
+    matching_entries="$(ssh-keygen -F "[$host]:22" -f "$file" 2>/dev/null || true)"
+  fi
+  [[ -n "$matching_entries" ]] || invalid_config "SSH_KNOWN_HOSTS_FILE" "has no entry matching SERVER_IP"
+  while IFS= read -r known_line || [[ -n "$known_line" ]]; do
+    IFS=$' \t\r' read -r first_field _ <<< "$known_line"
+    [[ -z "$first_field" || "$first_field" == \#* ]] && continue
+    if [[ "$first_field" != "@revoked" ]]; then
+      trusted_match=1
+    fi
+  done <<< "$matching_entries"
+  (( trusted_match == 1 )) || invalid_config "SSH_KNOWN_HOSTS_FILE" "matching entry is revoked"
+}
+
 # Validate every environment-controlled command component before any ssh, scp,
 # or rsync execution.  These allowlists match the identifiers and paths accepted
 # by the tools below rather than attempting to blacklist shell metacharacters.
 [[ -n "$SERVER_IP" ]] || { echo "Missing SERVER_IP (or EASY_LEARNING_SERVER_IP)" >&2; exit 1; }
+arguments=()
+for argument in "$@"; do
+  if [[ "$argument" == "--dry-run" ]]; then
+    DRY_RUN=1
+  else
+    arguments+=("$argument")
+  fi
+done
+set -- "${arguments[@]}"
 if [[ "$#" -eq 0 ]]; then
-  echo "Usage: scripts/hotfix_publish.sh <file> [file...]   |   --frontend" >&2
+  echo "Usage: scripts/hotfix_publish.sh [--dry-run] <file> [file...]   |   --frontend" >&2
   exit 1
 fi
 
@@ -140,26 +214,34 @@ if [[ -n "$SSH_KEY" ]]; then
   [[ -f "$SSH_KEY" ]] || invalid_config "SSH_KEY" "file not found"
 fi
 
-require_cmd ssh
-require_cmd scp
-
 # Build SSH/SCP/RSYNC transports.
-if [[ -n "$SERVER_PASSWORD" && -z "$SSH_KEY" ]]; then
-  echo "WARNING: using sshpass password auth — switch to SSH keys (set SSH_KEY)." >&2
-  require_cmd sshpass
-  export SSHPASS="$SERVER_PASSWORD"
-  SSH_PW_OPTS=(-o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=10)
-  SSH_BASE=(sshpass -e ssh "${SSH_PW_OPTS[@]}" "${SERVER_USER}@${SERVER_IP}")
-  SCP_BASE=(sshpass -e scp "${SSH_PW_OPTS[@]}")
-  RSYNC_SSH=(sshpass -e ssh "${SSH_PW_OPTS[@]}")
+if [[ "$DRY_RUN" == "0" ]]; then
+  # This must happen before any SSH/SCP/rsync command is even constructed.
+  # The file is an explicit trust anchor; never replace it with an unverified
+  # first-connection scan or another implicit trust mechanism.
+  validate_known_hosts "$SSH_KNOWN_HOSTS_FILE" "$SERVER_IP"
+  require_cmd ssh
+  require_cmd scp
+
+  if [[ -n "$SERVER_PASSWORD" && -z "$SSH_KEY" ]]; then
+    echo "WARNING: using sshpass password auth — switch to SSH keys (set SSH_KEY)." >&2
+    require_cmd sshpass
+    export SSHPASS="$SERVER_PASSWORD"
+    SSH_PW_OPTS=(-o StrictHostKeyChecking=yes "-o" "UserKnownHostsFile=$SSH_KNOWN_HOSTS_FILE" -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=10)
+    SSH_BASE=(sshpass -e ssh "${SSH_PW_OPTS[@]}" "${SERVER_USER}@${SERVER_IP}")
+    SCP_BASE=(sshpass -e scp "${SSH_PW_OPTS[@]}")
+    RSYNC_SSH=(sshpass -e ssh "${SSH_PW_OPTS[@]}")
+  else
+    SSH_OPTS=(-o StrictHostKeyChecking=yes "-o" "UserKnownHostsFile=$SSH_KNOWN_HOSTS_FILE" -o ConnectTimeout=10)
+    [[ -n "$SSH_KEY" ]] && SSH_OPTS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
+    SSH_BASE=(ssh "${SSH_OPTS[@]}" "${SERVER_USER}@${SERVER_IP}")
+    SCP_BASE=(scp "${SSH_OPTS[@]}")
+    RSYNC_SSH=(ssh "${SSH_OPTS[@]}")
+  fi
+  RSYNC_RSH="$(join_shell_words "${RSYNC_SSH[@]}")"
 else
-  SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
-  [[ -n "$SSH_KEY" ]] && SSH_OPTS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
-  SSH_BASE=(ssh "${SSH_OPTS[@]}" "${SERVER_USER}@${SERVER_IP}")
-  SCP_BASE=(scp "${SSH_OPTS[@]}")
-  RSYNC_SSH=(ssh "${SSH_OPTS[@]}")
+  echo "Dry run: no network commands will be executed."
 fi
-RSYNC_RSH="$(join_shell_words "${RSYNC_SSH[@]}")"
 
 remote_sh() { "${SSH_BASE[@]}" "$@"; }
 
@@ -171,6 +253,10 @@ done
 
 # ── --frontend: rsync the whole built dist (handles deletes of stale hashes) ──
 if [[ "$1" == "--frontend" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "Dry run: would sync frontend/dist/ to $REMOTE_DIR/frontend/dist/."
+    exit 0
+  fi
   require_cmd rsync
   [[ -f "$ROOT_DIR/frontend/dist/index.html" ]] || { echo "frontend/dist not built — run 'npm run build' first." >&2; exit 1; }
   echo "Backing up remote dist + syncing new build"
@@ -270,6 +356,12 @@ for rel_path in "$@"; do
   validated_rel_paths+=("$canonical_rel_path")
   validated_abs_paths+=("$canonical_path")
 done
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  printf 'Dry run: validated %d repository path(s):\n' "${#validated_rel_paths[@]}"
+  printf '  %s\n' "${validated_rel_paths[@]}"
+  exit 0
+fi
 
 for index in "${!validated_rel_paths[@]}"; do
   rel_path="${validated_rel_paths[$index]}"
