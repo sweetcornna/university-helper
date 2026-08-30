@@ -218,6 +218,10 @@ SECRET_KEY=<至少 32 字符，已轮换，禁止入仓>
 SHUAKE_COMPAT_SECRET=<可选>
 CORS_ORIGINS=["https://shuake.cornna.xyz"]
 APP_PORT=8000
+# Fernet 密钥（urlsafe-base64），生成命令：
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# 生产环境必填；应用缺失该密钥时会拒绝启动。密钥禁止入仓。
+CREDENTIAL_ENCRYPTION_KEY=<已轮换，禁止入仓>
 ```
 
 若需要全新初始化一台服务器，请基于 `.env.example` 手动填写真实密钥；任何已填写真实值的 `.env` **都不要提交**。
