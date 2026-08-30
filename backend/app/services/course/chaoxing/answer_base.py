@@ -163,7 +163,7 @@ class Tiku:
             # 但判断题必须先归一化映射到 true_list/false_list，否则一句完整的
             # 句子（如"这道题表述是对的"）会在 judgement_select 里退化为随机选择，
             # 而且会被缓存固化，导致判断题覆盖率静默变成随机。
-            from api.answer import AI, SiliconFlow  # type: ignore
+            from .answer_providers import AI, SiliconFlow
 
             if isinstance(self, (AI, SiliconFlow)):
                 if q_type == "judgement":
