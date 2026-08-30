@@ -7,10 +7,20 @@ from api.logger import logger
 
 
 class Live:
-    def __init__(self, attachment: dict, defaults: dict, course_id: str):
+    def __init__(
+        self,
+        attachment: dict,
+        defaults: dict,
+        course_id: str,
+        session_manager: SessionManager | None = None,
+    ):
         self.attachment = attachment
         self.defaults = defaults  # 包含用户ID、课程ID等信息
         self.course_id = course_id  # 课程ID
+        # Live must use the owning Chaoxing client's session so its requests
+        # carry the authenticated user's cookies.  Keep the argument optional
+        # for callers that still use the original three-argument constructor.
+        self.session_manager = session_manager
         self.name = self.attachment.get("property", {}).get("title", "未知直播")  # 直播名称
         self.headers = gc.HEADERS.copy()
         self.headers.update({"Referer": "https://mooc1.chaoxing.com/ananas/modules/live/index.html?v=2022-1214-1139"})
@@ -30,7 +40,7 @@ class Live:
         url = f"https://zhibo.chaoxing.com/saveTimePc?streamName={stream_name}&vdoid={vdoid}&userId={user_id}&isStart=0&t={int(time.time()*1000)}&courseId={self.course_id}"
 
         # 发送请求记录时长
-        session = SessionManager.get_session()
+        session = self.session_manager.get_session()
         try:
             response = session.get(url, headers=self.headers, timeout=10)
             response.raise_for_status()
@@ -58,7 +68,7 @@ class Live:
         status_url = f"https://mooc1.chaoxing.com/ananas/live/liveinfo?liveid={live_id}&userid={user_id}&clazzid={clazz_id}&knowledgeid={knowledge_id}&courseid={self.course_id}&jobid={job_id}&ut=s"
 
         # 发送请求并解析状态（包含总时长）
-        session = SessionManager.get_session()
+        session = self.session_manager.get_session()
         try:
             response = session.get(status_url, headers=self.headers, timeout=10)
             response.raise_for_status()

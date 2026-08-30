@@ -284,7 +284,12 @@ def process_job(
             }
 
             # 创建直播对象
-            live = Live(attachment=job, defaults=defaults, course_id=course.get("courseId"))
+            live = Live(
+                attachment=job,
+                defaults=defaults,
+                course_id=course.get("courseId"),
+                session_manager=chaoxing.session_manager,
+            )
 
             # 启动直播处理线程
             run_state = {"result": None}
