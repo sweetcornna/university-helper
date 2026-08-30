@@ -351,6 +351,8 @@ class ChapterTask:
 
 
 class JobProcessor:
+    _JOIN_POLL_INTERVAL = 0.2
+
     def __init__(self, chaoxing: Chaoxing, course: dict[str, Any], tasks: list[ChapterTask], config: dict[str, Any]):
         self.chaoxing = chaoxing
         self.course = course
@@ -374,15 +376,27 @@ class JobProcessor:
         self._pending_retries = 0
         self._retry_lock = threading.Lock()
 
-    def _enqueue_retry(self, task: "ChapterTask") -> None:
+    def _enqueue_retry(self, task: "ChapterTask", stop_event: threading.Event | None = None) -> None:
         """Move a task into the retry pipeline.
 
         Increments the pending-retry counter BEFORE the worker's task_done()
         decrements unfinished_tasks, so the task is continuously accounted for.
         """
+        with self._drain_lock:
+            if stop_event is not None and stop_event.is_set():
+                return
+            with self._retry_lock:
+                self._pending_retries += 1
+            try:
+                self.retry_queue.put(task)
+            except BaseException:
+                self._release_pending_retry()
+                raise
+
+    def _release_pending_retry(self) -> None:
         with self._retry_lock:
-            self._pending_retries += 1
-        self.retry_queue.put(task)
+            if self._pending_retries > 0:
+                self._pending_retries -= 1
 
     def _has_outstanding_work(self) -> bool:
         with self._retry_lock:
@@ -390,62 +404,171 @@ class JobProcessor:
         return self.task_queue.unfinished_tasks > 0 or pending > 0
 
     def run(self):
-        for task in self.tasks:
-            self.task_queue.put(task)
+        """Process this batch and always shut down the threads it starts.
 
-        started_workers = 0
-        for i in range(self.worker_num):
-            thread = threading.Thread(target=self.worker_thread, daemon=True)
-            self.threads.append(thread)
+        The queues intentionally remain instance attributes for compatibility
+        with the existing processor API, but the stop event and thread list belong
+        to this invocation only. In particular, a worker from an earlier run must
+        never observe the stop state of a later run.
+        """
+        run_stop = threading.Event()
+        run_threads: list[threading.Thread] = []
+        self.threads = run_threads
+        thread_error: BaseException | None = None
+        thread_error_lock = threading.Lock()
+        run_exception: BaseException | None = None
+
+        def record_thread_error(exc: BaseException) -> None:
+            nonlocal thread_error
+            with thread_error_lock:
+                if thread_error is None:
+                    thread_error = exc
+
+        def run_worker() -> None:
             try:
-                thread.start()
+                self.worker_thread(run_stop)
+            except BaseException as exc:
+                record_thread_error(exc)
+
+        def run_retry() -> None:
+            try:
+                self.retry_thread(run_stop)
+            except BaseException as exc:
+                record_thread_error(exc)
+
+        try:
+            for task in self.tasks:
+                self.task_queue.put(task)
+
+            started_workers = 0
+            for _ in range(self.worker_num):
+                thread = threading.Thread(target=run_worker, daemon=True)
+                try:
+                    thread.start()
+                except RuntimeError as exc:
+                    if not _is_thread_start_failure(exc):
+                        raise
+                    if started_workers == 0:
+                        logger.warning("Cannot start Chaoxing worker thread; processing chapters inline")
+                        self._drain_pending_tasks()
+                        self._run_inline()
+                        return
+                    logger.warning(
+                        "Cannot start all Chaoxing worker threads; continuing with {} worker(s)",
+                        started_workers,
+                    )
+                    break
+                else:
+                    run_threads.append(thread)
+                    started_workers += 1
+
+            retry_thread = threading.Thread(target=run_retry, daemon=True)
+            try:
+                retry_thread.start()
             except RuntimeError as exc:
                 if not _is_thread_start_failure(exc):
                     raise
-                self.threads.pop()
-                if started_workers == 0:
-                    logger.warning("Cannot start Chaoxing worker thread; processing chapters inline")
-                    self._drain_pending_tasks()
-                    self._run_inline()
-                    return
-                logger.warning(
-                    "Cannot start all Chaoxing worker threads; continuing with {} worker(s)",
-                    started_workers,
-                )
-                break
+                logger.warning("Cannot start Chaoxing retry thread; retry queue will be promoted by controller loop")
             else:
-                started_workers += 1
+                run_threads.append(retry_thread)
 
-        try:
-            threading.Thread(target=self.retry_thread, daemon=True).start()
-        except RuntimeError as exc:
-            if not _is_thread_start_failure(exc):
-                raise
-            logger.warning("Cannot start Chaoxing retry thread; retry queue will be promoted by controller loop")
+            while True:
+                if thread_error is not None:
+                    raise thread_error
 
-        while True:
-            self._promote_retry_once()
-            if should_stop(self.config):
-                self._drain_pending_tasks()
-                if not self._has_outstanding_work():
+                self._promote_retry_once(run_stop)
+                if thread_error is not None:
+                    raise thread_error
+
+                if should_stop(self.config):
+                    self._drain_pending_tasks()
+                    if not self._has_outstanding_work():
+                        break
+                elif not self._has_outstanding_work():
                     break
-            elif not self._has_outstanding_work():
-                break
-            time.sleep(0.2)
-        time.sleep(0.5)
+                run_stop.wait(0.2)
+        except BaseException as exc:
+            run_exception = exc
+            raise
+        finally:
+            cleanup_error = self._shutdown_run(run_stop, run_threads)
+            if run_exception is None:
+                if thread_error is not None:
+                    raise thread_error
+                if cleanup_error is not None:
+                    raise cleanup_error
 
-    def _promote_retry_once(self) -> None:
+    def _shutdown_run(
+        self,
+        run_stop: threading.Event,
+        run_threads: list[threading.Thread],
+    ) -> BaseException | None:
+        """Stop and join the threads belonging to one ``run`` call."""
+        run_stop.set()
+        cleanup_error: BaseException | None = None
+
+        def record_cleanup_error(exc: BaseException) -> None:
+            nonlocal cleanup_error
+            if cleanup_error is None:
+                cleanup_error = exc
+
+        # Workers and the retry loop use timed queue gets, so setting the event
+        # is enough to wake them without putting incomparable values in the
+        # priority queues. Drain first to discard work requested for cancellation
+        # or an exceptional run, then wait until every started thread has really
+        # exited. Cleanup is best-effort: remember the first failure but continue
+        # joining every other thread and make one final drain attempt.
         try:
-            task = self.retry_queue.get_nowait()
-        except Empty:
-            return
-        except ShutDown:
-            return
+            self._drain_pending_tasks()
+        except BaseException as exc:
+            record_cleanup_error(exc)
 
-        self.task_queue.put(task)
-        with self._retry_lock:
-            if self._pending_retries > 0:
-                self._pending_retries -= 1
+        for thread in run_threads:
+            while True:
+                try:
+                    if not thread.is_alive():
+                        break
+                    thread.join(timeout=self._JOIN_POLL_INTERVAL)
+                except BaseException as exc:
+                    record_cleanup_error(exc)
+                    # A transient join failure must not let a live worker escape
+                    # this run. Sleep before retrying so a persistently broken
+                    # join implementation cannot create a busy loop while the
+                    # worker is responding to the stop event.
+                    time.sleep(self._JOIN_POLL_INTERVAL)
+
+        try:
+            self._drain_pending_tasks()
+        except BaseException as exc:
+            record_cleanup_error(exc)
+
+        return cleanup_error
+
+    def _promote_retry_once(self, stop_event: threading.Event | None = None) -> None:
+        with self._drain_lock:
+            try:
+                task = self.retry_queue.get_nowait()
+            except Empty:
+                return
+            except ShutDown:
+                return
+
+            try:
+                if stop_event is not None and stop_event.is_set():
+                    return
+                # Re-queueing increments unfinished_tasks by 1 (the matching +1
+                # for the task_done() the worker already issued on the retry
+                # decision). Put FIRST, then drop the pending-retry counter, so
+                # the task is never simultaneously absent from both
+                # unfinished_tasks and _pending_retries (which would let run()
+                # exit mid-retry).
+                self.task_queue.put(task)
+            finally:
+                try:
+                    self.retry_queue.task_done()
+                except ValueError:
+                    pass
+                self._release_pending_retry()
 
     def _run_inline(self) -> None:
         for task in sorted(self.tasks, key=lambda item: item.index):
@@ -505,133 +628,159 @@ class JobProcessor:
 
     def _drain_pending_tasks(self):
         with self._drain_lock:
-            # Only task_queue items carry an outstanding unfinished_tasks count
-            # (a put() not yet matched by task_done()). Items sitting in
-            # retry_queue have already had their task_done() issued by the worker
-            # when it decided to retry; draining them must NOT call task_done()
-            # again (over-decrement -> ValueError) but MUST release the
-            # pending-retry counter, since they will never be re-queued. See F05.
-            for queue_obj, mark_done, is_retry in (
-                (self.task_queue, True, False),
-                (self.retry_queue, False, True),
-                (self.wait_queue, False, False),
-            ):
-                while True:
-                    try:
-                        queue_obj.get_nowait()
-                    except Empty:
-                        break
-                    except ShutDown:
-                        break
-                    else:
-                        if mark_done:
-                            try:
-                                self.task_queue.task_done()
-                            except ValueError:
-                                pass
-                        if is_retry:
-                            with self._retry_lock:
-                                if self._pending_retries > 0:
-                                    self._pending_retries -= 1
+            self._drain_pending_tasks_locked()
+
+    def _drain_pending_tasks_locked(self) -> None:
+        # Every item removed from task_queue or retry_queue has a matching
+        # task_done(). Retry items additionally release the hand-off counter.
+        for queue_obj, is_task_queue, is_retry in (
+            (self.task_queue, True, False),
+            (self.retry_queue, False, True),
+            (self.wait_queue, False, False),
+        ):
+            while True:
+                try:
+                    queue_obj.get_nowait()
+                except Empty:
+                    break
+                except ShutDown:
+                    break
+                else:
+                    if is_task_queue or is_retry:
+                        try:
+                            queue_obj.task_done()
+                        except ValueError:
+                            pass
+                    if is_retry:
+                        self._release_pending_retry()
 
     @log_error
-    def worker_thread(self):
+    def worker_thread(self, stop_event: threading.Event | None = None):
         tqdm.set_lock(tqdm.get_lock())
         while True:
             try:
-                task = self.task_queue.get()
+                task = self.task_queue.get(timeout=0.2)
+            except Empty:
+                if stop_event is not None and stop_event.is_set():
+                    return
+                continue
             except ShutDown:
                 logger.info("Queue shut down")
                 return
 
-            # 处理单个章节，并在需要时通过 config 中的回调上报章节完成进度
             try:
-                task.result = process_chapter(self.chaoxing, self.course, task.point, self.speed, self.config)
-            except Exception:
-                logger.exception("Chapter processing crashed: {}", task.point.get("title", "unknown"))
-                task.result = ChapterResult.ERROR
-
-            match task.result:
-                case ChapterResult.SUCCESS:
-                    logger.debug("Task success: {}", task.point["title"])
-                    self.task_queue.task_done()
-                    logger.debug(f"unfinished task: {self.task_queue.unfinished_tasks}")
-
-                case ChapterResult.NOT_OPEN:
-                    # task.tries += 1
-                    if self.config["notopen_action"] == "continue":
-                        logger.warning("章节未开启: {}, 正在跳过", task.point["title"])
-                        self.task_queue.task_done()
-                        continue
-
-                    if task.tries >= self.max_tries:
-                        logger.error(
-                            "章节未开启: {} 可能由于上一章节的章节检测未完成, 也可能由于该章节因为时效已关闭，"
-                            "请手动检查完成并提交再重试。或者在配置中配置(自动跳过关闭章节/开启题库并启用提交)",
-                            task.point["title"],
-                        )
-                        self.task_queue.task_done()
-                        continue
-
-                    # self.wait_queue.put(task)
-                    # Hand the task to the retry pipeline and mark THIS processing
-                    # pass done. retry_thread will re-put() the task onto
-                    # task_queue (a fresh +1 to unfinished_tasks), so each
-                    # get()/process pass must be balanced by exactly one
-                    # task_done() — otherwise unfinished_tasks never returns to
-                    # 0 and run() hangs forever (F05). _enqueue_retry bumps the
-                    # pending-retry counter first so the task stays accounted for
-                    # across the hand-off window.
-                    self._enqueue_retry(task)
-                    self.task_queue.task_done()
-
-                case ChapterResult.ERROR:
-                    task.tries += 1
-                    logger.warning("Retrying task {} ({}/{} attempts)", task.point["title"], task.tries, self.max_tries)
-                    if task.tries >= self.max_tries:
-                        logger.error("Max retries reached for task: {}", task.point["title"])
-                        self.failed_tasks.append(task)
-                        self.task_queue.task_done()
-                        continue
-                    # See NOT_OPEN branch: balance this processing pass with a
-                    # task_done() because retry_thread re-puts the task.
-                    self._enqueue_retry(task)
-                    self.task_queue.task_done()
-
-                case ChapterResult.CANCELLED:
-                    logger.info("Task cancelled: {}", task.point["title"])
-                    self.task_queue.task_done()
-                    self._drain_pending_tasks()
+                if stop_event is not None and stop_event.is_set():
                     return
 
-                case _:
-                    logger.error("Invalid task state {} for task {}", task.result, task.point["title"])
-                    self.failed_tasks.append(task)
-                    self.task_queue.task_done()
+                # 处理单个章节，并在需要时通过 config 中的回调上报章节完成进度
+                try:
+                    task.result = process_chapter(self.chaoxing, self.course, task.point, self.speed, self.config)
+                except Exception:
+                    logger.exception("Chapter processing crashed: {}", task.point.get("title", "unknown"))
+                    task.result = ChapterResult.ERROR
+
+                # A run-level stop can be requested while process_chapter is in
+                # flight.  Do not create a fresh retry after shutdown starts.
+                if stop_event is not None and stop_event.is_set():
+                    return
+
+                match task.result:
+                    case ChapterResult.SUCCESS:
+                        logger.debug("Task success: {}", task.point["title"])
+                        logger.debug(f"unfinished task: {self.task_queue.unfinished_tasks}")
+
+                    case ChapterResult.NOT_OPEN:
+                        # task.tries += 1
+                        if self.config["notopen_action"] == "continue":
+                            logger.warning("章节未开启: {}, 正在跳过", task.point["title"])
+                            continue
+
+                        if task.tries >= self.max_tries:
+                            logger.error(
+                                "章节未开启: {} 可能由于上一章节的章节检测未完成, 也可能由于该章节因为时效已关闭，"
+                                "请手动检查完成并提交再重试。或者在配置中配置(自动跳过关闭章节/开启题库并启用提交)",
+                                task.point["title"],
+                            )
+                            continue
+
+                        # Hand the task to the retry pipeline and mark THIS
+                        # processing pass done in the finally block below.
+                        self._enqueue_retry(task, stop_event)
+
+                    case ChapterResult.ERROR:
+                        task.tries += 1
+                        logger.warning(
+                            "Retrying task {} ({}/{} attempts)", task.point["title"], task.tries, self.max_tries
+                        )
+                        if task.tries >= self.max_tries:
+                            logger.error("Max retries reached for task: {}", task.point["title"])
+                            self.failed_tasks.append(task)
+                            continue
+                        # See NOT_OPEN branch: retry_thread re-puts the task,
+                        # while this pass is balanced in finally below.
+                        self._enqueue_retry(task, stop_event)
+
+                    case ChapterResult.CANCELLED:
+                        logger.info("Task cancelled: {}", task.point["title"])
+                        self._drain_pending_tasks()
+                        return
+
+                    case _:
+                        logger.error("Invalid task state {} for task {}", task.result, task.point["title"])
+                        self.failed_tasks.append(task)
+            finally:
+                self.task_queue.task_done()
 
     @log_error
-    def retry_thread(self):
+    def retry_thread(self, stop_event: threading.Event | None = None):
         try:
             while True:
+                if stop_event is not None and stop_event.is_set():
+                    return
                 if should_stop(self.config):
                     self._drain_pending_tasks()
                     return
                 try:
-                    task = self.retry_queue.get(timeout=0.5)
+                    task = self.retry_queue.get(timeout=self._JOIN_POLL_INTERVAL)
                 except Empty:
                     continue
-                # Re-queueing increments unfinished_tasks by 1 (the matching +1
-                # for the task_done() the worker already issued on the retry
-                # decision). Put FIRST, then drop the pending-retry counter, so
-                # the task is never simultaneously absent from both
-                # unfinished_tasks and _pending_retries (which would let run()
-                # exit mid-retry). Do NOT call task_done() here — that lives in
-                # the worker so put/task_done stay balanced (1 get -> 1
-                # task_done, 1 retry -> 1 put). See F05.
-                self.task_queue.put(task)
-                with self._retry_lock:
-                    self._pending_retries -= 1
-                time.sleep(1)
+                except ShutDown:
+                    return
+
+                pending_released = False
+                try:
+                    # should_stop is an application callback and may itself call
+                    # back into the processor. Never invoke it while holding the
+                    # non-reentrant drain lock.
+                    stopping = (stop_event is not None and stop_event.is_set()) or should_stop(self.config)
+
+                    # Re-queueing increments unfinished_tasks by 1 (the
+                    # matching +1 for the task_done() the worker already issued
+                    # on the retry decision). Put FIRST, then drop the
+                    # pending-retry counter, so the task is never simultaneously
+                    # absent from both counters (F05).
+                    with self._drain_lock:
+                        if stopping or (stop_event is not None and stop_event.is_set()):
+                            self._release_pending_retry()
+                            pending_released = True
+                            self._drain_pending_tasks_locked()
+                            return
+                        self.task_queue.put(task)
+                        self._release_pending_retry()
+                        pending_released = True
+                finally:
+                    if not pending_released:
+                        self._release_pending_retry()
+                    try:
+                        self.retry_queue.task_done()
+                    except ValueError:
+                        pass
+
+                if stop_event is not None:
+                    if stop_event.wait(1):
+                        return
+                else:
+                    time.sleep(1)
         except ShutDown:
             pass
 
