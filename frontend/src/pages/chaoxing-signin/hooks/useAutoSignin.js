@@ -12,6 +12,13 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
   const countdownRef = useRef(null)
   const autoSignedTaskCacheRef = useRef(new Map())
   const autoSigningRef = useRef(false)
+  const formRef = useRef(form)
+  const executeSigninRef = useRef(executeSignin)
+
+  // Keep the scheduler stable while still using the latest form and sign-in
+  // callback when the next cycle starts.
+  formRef.current = form
+  executeSigninRef.current = executeSignin
 
   const [autoSignin, setAutoSignin] = useState(false)
   const [autoSignFilter, setAutoSignFilter] = useState('all')
@@ -70,8 +77,8 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
   const runAutoSigninCycle = useCallback(async () => {
     if (autoSigningRef.current || redirectingRef.current || !autoSignin) return
 
-    const username = form.username.trim()
-    const password = form.password
+    const username = formRef.current.username.trim()
+    const password = formRef.current.password
     if (!username || !password) {
       setResultType('error')
       setResultMessage('自动签到已开启，但账号或密码为空。')
@@ -106,7 +113,7 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
         if (now - lastTriedAt < AUTO_SIGN_TASK_COOLDOWN_MS) continue
         autoSignedTaskCacheRef.current.set(taskKey, now)
 
-        const result = await executeSignin(task?.courseId || null, taskType, { silent: true })
+        const result = await executeSigninRef.current(task?.courseId || null, taskType, { silent: true })
         if (result.status) {
           successCount += 1
         }
@@ -122,7 +129,7 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
     } finally {
       autoSigningRef.current = false
     }
-  }, [autoSignin, autoSignFilter, executeSignin, form.password, form.username, requestChaoxingApi, setResultType, setResultMessage, setSigninTasks, redirectingRef])
+  }, [autoSignin, autoSignFilter, requestChaoxingApi, setResultType, setResultMessage, setSigninTasks, redirectingRef])
 
   // Auto-signin cycle + countdown effect
   useEffect(() => {
