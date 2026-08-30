@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from loguru import logger
@@ -69,7 +70,8 @@ class CacheDAO:
                     return {}
                 try:
                     with self.cache_file.open("r", encoding="utf8") as fp:
-                        return json.load(fp)
+                        data = json.load(fp)
+                        return dict(data) if isinstance(data, Mapping) else {}
                 except json.JSONDecodeError as e:
                     logger.error(f"缓存文件 JSON 解析失败: {e}, 尝试恢复...")
                     # 尝试从原始二进制中以 utf-8 忽略错误地恢复有效 JSON 段
@@ -80,7 +82,9 @@ class CacheDAO:
                         end = text.rfind("}")
                         if start != -1 and end != -1 and start < end:
                             try:
-                                return json.loads(text[start : end + 1])
+                                recovered = json.loads(text[start : end + 1])
+                                if isinstance(recovered, Mapping):
+                                    return dict(recovered)
                             except Exception:
                                 pass
                     except Exception:
@@ -103,7 +107,9 @@ class CacheDAO:
                         end = text.rfind("}")
                         if start != -1 and end != -1 and start < end:
                             try:
-                                return json.loads(text[start : end + 1])
+                                recovered = json.loads(text[start : end + 1])
+                                if isinstance(recovered, Mapping):
+                                    return dict(recovered)
                             except Exception:
                                 pass
                     except Exception:
