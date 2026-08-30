@@ -90,8 +90,7 @@ export SERVER_IP=111.228.53.64
 export SSH_KEY=~/.ssh/uh
 
 ./scripts/hotfix_publish.sh \
-  backend/app/api/v1/course.py \
-  frontend/src/pages/Zhihuishu.jsx
+  backend/app/api/v1/course.py
 ```
 
 Legacy: sshpass + password auth still works but prints a warning:
@@ -106,7 +105,15 @@ Behavior:
 
 - Syncs only the listed files into `/opt/university-helper/` on the server.
 - Backend `.py` changes are copied into the running app container; container is restarted.
-- Frontend changes are rebuilt locally (or on the server) and emitted into `frontend/dist/`, which the host nginx already serves.
+- Frontend changes are published only through the built artifact flow. From the repository root:
+
+  ```bash
+  cd frontend && npm ci && npm run build
+  cd ..
+  ./scripts/hotfix_publish.sh --frontend
+  ```
+
+  This syncs `frontend/dist/`, which the host nginx already serves. Frontend source paths are not accepted in per-file mode.
 - Dependency-layer changes (`backend/requirements.txt`, `Dockerfile.server`) trigger a full app image rebuild.
 
 ---

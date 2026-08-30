@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT_SOURCE = Path(__file__).resolve().parents[3] / "scripts" / "hotfix_publish.sh"
+DEPLOYMENT_DOCS = Path(__file__).resolve().parents[3] / "docs" / "DEPLOYMENT.md"
 
 
 @pytest.fixture
@@ -23,6 +24,9 @@ def publisher_fixture(tmp_path):
     frontend_dist = repo / "frontend" / "dist"
     frontend_dist.mkdir(parents=True)
     (frontend_dist / "index.html").write_text("fixture\n")
+    frontend_source = repo / "frontend" / "src" / "App.jsx"
+    frontend_source.parent.mkdir(parents=True)
+    frontend_source.write_text("export default function App() {}\n")
     script.parent.mkdir(parents=True)
     shutil.copy2(SCRIPT_SOURCE, script)
 
@@ -130,6 +134,37 @@ def test_frontend_rsync_quotes_remote_path_and_rsh_words(publisher_fixture):
     log = publisher_fixture["call_log"].read_text()
     assert "tester@test.invalid:'/opt/university-helper/frontend/dist/'" in log
     assert "'ssh' '-o' 'StrictHostKeyChecking=accept-new'" in log
+
+
+def test_frontend_source_is_rejected_before_network_calls(publisher_fixture):
+    result = run_publisher(publisher_fixture, "frontend/src/App.jsx")
+
+    assert result.returncode != 0
+    assert "Frontend source paths are not accepted in per-file mode" in result.stderr
+    assert "cd frontend && npm ci && npm run build" in result.stderr
+    assert "./scripts/hotfix_publish.sh --frontend" in result.stderr
+    assert not publisher_fixture["call_marker"].exists()
+    assert not publisher_fixture["call_log"].exists()
+
+
+def test_mixed_backend_and_frontend_sources_are_rejected_before_network_calls(publisher_fixture):
+    result = run_publisher(publisher_fixture, "backend/app/main.py", "frontend/src/App.jsx")
+
+    assert result.returncode != 0
+    assert "Frontend source paths are not accepted in per-file mode" in result.stderr
+    assert not publisher_fixture["call_marker"].exists()
+    assert not publisher_fixture["call_log"].exists()
+
+
+def test_hotfix_docs_require_built_dist_frontend_mode():
+    document = DEPLOYMENT_DOCS.read_text(encoding="utf-8")
+    section = document.split("## Deploying a Hotfix (small code change)", 1)[1].split(
+        "## First-Time Server Bootstrap", 1
+    )[0]
+
+    assert "frontend/src/" not in section
+    assert "cd frontend && npm ci && npm run build" in section
+    assert "./scripts/hotfix_publish.sh --frontend" in section
 
 
 @pytest.mark.parametrize(

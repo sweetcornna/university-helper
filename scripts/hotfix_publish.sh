@@ -12,8 +12,8 @@
 #   - Two compose files: docker-compose.server.yml + docker-compose.newhost.yml
 #     (the overlay adds the `web` nginx container that serves the SPA).
 #   - The SPA is served by the `web` container from a read-only bind-mount of
-#     /opt/university-helper/frontend/dist, so frontend files take effect as
-#     soon as they're uploaded (an `nginx -s reload` is issued to be safe).
+#     /opt/university-helper/frontend/dist, so built frontend artifacts take
+#     effect as soon as they're uploaded (an `nginx -s reload` is issued to be safe).
 #   - Backend code lives at /srv/backend inside the app container.
 #   - The app is published on 127.0.0.1:8000, so /health is reachable locally.
 #
@@ -105,6 +105,15 @@ validate_relative_path() {
 if [[ "$#" -eq 0 ]]; then
   echo "Usage: scripts/hotfix_publish.sh <file> [file...]   |   --frontend" >&2
   exit 1
+fi
+
+if [[ "${1:-}" != "--frontend" ]]; then
+  for rel_path in "$@"; do
+    if [[ "$rel_path" == frontend/* ]]; then
+      echo "Frontend source paths are not accepted in per-file mode; run 'cd frontend && npm ci && npm run build', then from the repository root './scripts/hotfix_publish.sh --frontend'." >&2
+      exit 1
+    fi
+  done
 fi
 
 if [[ "$SERVER_IP" == *:* ]]; then
