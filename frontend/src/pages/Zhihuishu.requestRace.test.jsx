@@ -183,6 +183,20 @@ const changePollInterval = async (seconds) => {
   await flushPromises()
 }
 
+const advanceTimers = async (milliseconds) => {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(milliseconds)
+  })
+  await flushPromises()
+}
+
+const qrLoginResponse = (sessionId, qrCode, message = '请使用智慧树 App 扫码。') => ({
+  session_id: sessionId,
+  qr_code: qrCode,
+  status: 'pending',
+  message,
+})
+
 describe('Zhihuishu request race guards', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -706,5 +720,285 @@ describe('Zhihuishu request race guards', () => {
     expect(taskCalls).toBe(2)
 
     await settle(secondSilentRequest, { data: taskResponse('task-a') })
+  })
+
+  test('a qr-login response cannot revive the QR session after reset', async () => {
+    const qrLoginRequest = deferred()
+    api.mockImplementation((path) => {
+      if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+      if (path === `${API_BASE}/qr-login`) return qrLoginRequest.promise
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+
+    renderPage()
+    await flushPromises()
+    fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+    await waitFor(() => expect(countRequests(`${API_BASE}/qr-login`)).toBe(1))
+
+    fireEvent.click(getWorkspaceTab('status'))
+    fireEvent.click(screen.getByRole('button', { name: '清理智慧树会话状态' }))
+    await flushPromises()
+    toast.notify.mockReset()
+
+    await settle(qrLoginRequest, qrLoginResponse('session-a', 'qr-a'))
+    expect(screen.getByText('二维码状态：未开始')).toBeInTheDocument()
+    expect(toast.notify).not.toHaveBeenCalled()
+
+    fireEvent.click(getWorkspaceTab('登录'))
+    expect(screen.getByRole('button', { name: '生成二维码' })).toBeEnabled()
+    expect(screen.queryByRole('img', { name: '智慧树二维码' })).not.toBeInTheDocument()
+  })
+
+  test.each([
+    ['success', { status: 'success', message: 'A 旧成功' }],
+    ['failed', { status: 'failed', message: 'A 旧失败' }],
+    ['pending', { status: 'pending', message: 'A 旧等待', qr_code: 'qr-a-old' }],
+  ])('an old A poll %s cannot write state, load data, or stop B polling', async (mode, response) => {
+    vi.useFakeTimers()
+    const oldPollRequest = deferred()
+    let qrLoginCalls = 0
+    api.mockImplementation((path) => {
+      if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+      if (path === `${API_BASE}/qr-login`) {
+        qrLoginCalls += 1
+        return Promise.resolve(qrLoginCalls === 1
+          ? qrLoginResponse('session-a', 'qr-a', 'A 等待扫码')
+          : qrLoginResponse('session-b', 'qr-b', 'B 等待扫码'))
+      }
+      if (path === `${API_BASE}/login-status/session-a`) return oldPollRequest.promise
+      if (path === `${API_BASE}/login-status/session-b`) {
+        return Promise.resolve({ status: 'pending', message: 'B 仍在等待', qr_code: 'qr-b' })
+      }
+      if (path === `${API_BASE}/courses/grouped`) return Promise.resolve({ data: [] })
+      if (path === `${API_BASE}/config`) return Promise.resolve({ data: {} })
+      if (path === `${API_BASE}/tasks`) return Promise.resolve({ data: [] })
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+
+    renderPage()
+    await flushPromises()
+    fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+    await flushPromises()
+    await advanceTimers(2000)
+    expect(countRequests(`${API_BASE}/login-status/session-a`)).toBe(1)
+
+    fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+    await flushPromises()
+    expect(screen.getByText('B 等待扫码')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '智慧树二维码' })).toHaveAttribute(
+      'src',
+      'data:image/png;base64,qr-b',
+    )
+    toast.notify.mockReset()
+
+    if (mode === 'failed') {
+      await fail(oldPollRequest, new Error(response.message))
+    } else {
+      await settle(oldPollRequest, response)
+    }
+
+    expect(screen.getByText('B 等待扫码')).toBeInTheDocument()
+    expect(screen.queryByText(response.message)).not.toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '智慧树二维码' })).toHaveAttribute(
+      'src',
+      'data:image/png;base64,qr-b',
+    )
+    expect(countRequests(`${API_BASE}/courses/grouped`)).toBe(0)
+    expect(countRequests(`${API_BASE}/config`)).toBe(0)
+    expect(countRequests(`${API_BASE}/tasks`)).toBe(0)
+    expect(toast.notify).not.toHaveBeenCalled()
+
+    await advanceTimers(2000)
+    expect(countRequests(`${API_BASE}/login-status/session-b`)).toBe(1)
+    expect(screen.getByText('B 仍在等待')).toBeInTheDocument()
+  })
+
+  test('a slow poll has at most one request in flight for its generation', async () => {
+    vi.useFakeTimers()
+    const firstPollRequest = deferred()
+    const secondPollRequest = deferred()
+    let pollCalls = 0
+    api.mockImplementation((path) => {
+      if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+      if (path === `${API_BASE}/qr-login`) {
+        return Promise.resolve(qrLoginResponse('session-a', 'qr-a'))
+      }
+      if (path === `${API_BASE}/login-status/session-a`) {
+        pollCalls += 1
+        return pollCalls === 1 ? firstPollRequest.promise : secondPollRequest.promise
+      }
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+
+    renderPage()
+    await flushPromises()
+    fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+    await flushPromises()
+
+    await advanceTimers(6000)
+    expect(pollCalls).toBe(1)
+
+    await settle(firstPollRequest, { status: 'pending', message: '继续等待' })
+    await advanceTimers(2000)
+    expect(pollCalls).toBe(2)
+  })
+
+  test('QR success loads data and announces success only once', async () => {
+    vi.useFakeTimers()
+    api.mockImplementation((path) => {
+      if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+      if (path === `${API_BASE}/qr-login`) {
+        return Promise.resolve(qrLoginResponse('session-a', 'qr-a'))
+      }
+      if (path === `${API_BASE}/login-status/session-a`) {
+        return Promise.resolve({ status: 'success', message: '登录成功' })
+      }
+      if (path === `${API_BASE}/courses/grouped`) return Promise.resolve({ data: [] })
+      if (path === `${API_BASE}/config`) return Promise.resolve({ data: {} })
+      if (path === `${API_BASE}/tasks`) return Promise.resolve({ data: [] })
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+
+    renderPage()
+    await flushPromises()
+    fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+    await flushPromises()
+    toast.notify.mockReset()
+
+    await advanceTimers(2000)
+    await advanceTimers(6000)
+
+    expect(countRequests(`${API_BASE}/login-status/session-a`)).toBe(1)
+    expect(countRequests(`${API_BASE}/courses/grouped`)).toBe(1)
+    expect(countRequests(`${API_BASE}/config`)).toBe(1)
+    expect(countRequests(`${API_BASE}/tasks`)).toBe(1)
+    expect(toast.notify.mock.calls.filter(([type, message]) => (
+      type === 'success' && message === '二维码登录成功，正在加载课程。'
+    ))).toHaveLength(1)
+  })
+
+  test('a poll that resolves after unmount has no QR side effects', async () => {
+    vi.useFakeTimers()
+    const pollRequest = deferred()
+    api.mockImplementation((path) => {
+      if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+      if (path === `${API_BASE}/qr-login`) {
+        return Promise.resolve(qrLoginResponse('session-a', 'qr-a'))
+      }
+      if (path === `${API_BASE}/login-status/session-a`) return pollRequest.promise
+      if (path === `${API_BASE}/courses/grouped`) return Promise.resolve({ data: [] })
+      if (path === `${API_BASE}/config`) return Promise.resolve({ data: {} })
+      if (path === `${API_BASE}/tasks`) return Promise.resolve({ data: [] })
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+
+    const page = renderPage()
+    await flushPromises()
+    fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+    await flushPromises()
+    await advanceTimers(2000)
+    expect(countRequests(`${API_BASE}/login-status/session-a`)).toBe(1)
+
+    toast.notify.mockReset()
+    page.unmount()
+    await settle(pollRequest, { status: 'success', message: '卸载后旧成功' })
+
+    expect(countRequests(`${API_BASE}/courses/grouped`)).toBe(0)
+    expect(countRequests(`${API_BASE}/config`)).toBe(0)
+    expect(countRequests(`${API_BASE}/tasks`)).toBe(0)
+    expect(toast.notify).not.toHaveBeenCalled()
+  })
+
+  test.each(['reset', 'new QR', 'unmount'])(
+    'QR success loaders cannot write after %s invalidates their owner',
+    async (invalidation) => {
+      vi.useFakeTimers()
+      const coursesRequest = deferred()
+      const configRequest = deferred()
+      const tasksRequest = deferred()
+      const nextQrLoginRequest = deferred()
+      let qrLoginCalls = 0
+      api.mockImplementation((path) => {
+        if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+        if (path === `${API_BASE}/qr-login`) {
+          qrLoginCalls += 1
+          return qrLoginCalls === 1
+            ? Promise.resolve(qrLoginResponse('session-a', 'qr-a'))
+            : nextQrLoginRequest.promise
+        }
+        if (path === `${API_BASE}/login-status/session-a`) {
+          return Promise.resolve({ status: 'success', message: 'A 登录成功' })
+        }
+        if (path === `${API_BASE}/courses/grouped`) return coursesRequest.promise
+        if (path === `${API_BASE}/config`) return configRequest.promise
+        if (path === `${API_BASE}/tasks`) return tasksRequest.promise
+        if (path === `${API_BASE}/courses/${COURSE_A}`) {
+          return Promise.resolve(courseDetailResponse(COURSE_A, '旧课程 A'))
+        }
+        throw new Error(`Unexpected API request: ${path}`)
+      })
+
+      const page = renderPage()
+      await flushPromises()
+      fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+      await flushPromises()
+      await advanceTimers(2000)
+      expect(countRequests(`${API_BASE}/courses/grouped`)).toBe(1)
+      expect(countRequests(`${API_BASE}/config`)).toBe(1)
+      expect(countRequests(`${API_BASE}/tasks`)).toBe(1)
+
+      if (invalidation === 'reset') {
+        fireEvent.click(getWorkspaceTab('status'))
+        fireEvent.click(screen.getByRole('button', { name: '清理智慧树会话状态' }))
+        await flushPromises()
+      } else if (invalidation === 'new QR') {
+        fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+        await flushPromises()
+      } else {
+        page.unmount()
+      }
+      toast.notify.mockReset()
+
+      await settle(coursesRequest, courseGroupsResponse)
+      await settle(configRequest, { data: { speed: 3, auto_answer: false } })
+      await settle(tasksRequest, { data: [taskResponse('old-qr-task')] })
+
+      expect(localStorage.getItem('zhihuishu_page_settings_v1')).toBeNull()
+      expect(countRequests(`${API_BASE}/courses/${COURSE_A}`)).toBe(0)
+      expect(toast.notify).not.toHaveBeenCalled()
+
+      if (invalidation !== 'unmount') {
+        fireEvent.click(getWorkspaceTab('课程'))
+        expect(screen.queryByText('课程 A')).not.toBeInTheDocument()
+        fireEvent.click(getWorkspaceTab('任务'))
+        expect(screen.queryByText('任务 ID：old-qr-task')).not.toBeInTheDocument()
+      }
+      if (invalidation === 'reset') {
+        fireEvent.click(getWorkspaceTab('status'))
+        expect(screen.getByText('智慧树登录：未登录')).toBeInTheDocument()
+      }
+    },
+  )
+
+  test('an ordinary deferred course loader still applies its response', async () => {
+    const coursesRequest = deferred()
+    api.mockImplementation((path) => {
+      if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+      if (path === `${API_BASE}/courses/grouped`) return coursesRequest.promise
+      if (path === `${API_BASE}/courses/${COURSE_A}`) {
+        return Promise.resolve(courseDetailResponse(COURSE_A, '课程 A'))
+      }
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+
+    renderPage()
+    await flushPromises()
+    fireEvent.click(getWorkspaceTab('课程'))
+    fireEvent.click(screen.getByRole('button', { name: '刷新课程' }))
+    await waitFor(() => expect(countRequests(`${API_BASE}/courses/grouped`)).toBe(1))
+
+    await settle(coursesRequest, courseGroupsResponse)
+    expect(screen.getByRole('combobox', { name: '分组课程' })).toHaveValue(COURSE_A)
+    expect(screen.getAllByText('课程 A').length).toBeGreaterThan(0)
   })
 })

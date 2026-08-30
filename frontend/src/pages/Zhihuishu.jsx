@@ -218,6 +218,9 @@ const normalizeTaskRecord = (payload, fallback = {}) => {
 export default function Zhihuishu() {
   const navigate = useNavigate()
   const qrPollRef = useRef(null)
+  const qrGenerationRef = useRef(0)
+  const qrSessionOwnerRef = useRef({ generation: 0, sessionId: '' })
+  const qrPollsInFlightRef = useRef(new Map())
   const progressPollRef = useRef(null)
   const mountedRef = useRef(false)
   const coursesRef = useRef([])
@@ -279,8 +282,19 @@ export default function Zhihuishu() {
 
   useEffect(() => {
     mountedRef.current = true
+    const qrPollsInFlight = qrPollsInFlightRef.current
     return () => {
       mountedRef.current = false
+      qrGenerationRef.current += 1
+      qrSessionOwnerRef.current = {
+        generation: qrGenerationRef.current,
+        sessionId: ''
+      }
+      qrPollsInFlight.clear()
+      if (qrPollRef.current) {
+        clearInterval(qrPollRef.current)
+        qrPollRef.current = null
+      }
     }
   }, [])
 
@@ -311,6 +325,23 @@ export default function Zhihuishu() {
       clearInterval(qrPollRef.current)
       qrPollRef.current = null
     }
+  }, [])
+
+  const invalidateQrGeneration = useCallback(() => {
+    const generation = qrGenerationRef.current + 1
+    qrGenerationRef.current = generation
+    qrSessionOwnerRef.current = { generation, sessionId: '' }
+    qrPollsInFlightRef.current.clear()
+    stopQrPolling()
+    return generation
+  }, [stopQrPolling])
+
+  const ownsQrSession = useCallback((generation, sessionId) => {
+    const owner = qrSessionOwnerRef.current
+    return mountedRef.current
+      && qrGenerationRef.current === generation
+      && owner.generation === generation
+      && owner.sessionId === sessionId
   }, [])
 
   const stopProgressPolling = useCallback(() => {
@@ -364,8 +395,9 @@ export default function Zhihuishu() {
     })
   }, [])
 
-  const mergeTaskRecords = useCallback((nextTasks, replaceAll = false) => {
+  const mergeTaskRecords = useCallback((nextTasks, replaceAll = false, canWrite) => {
     setTaskRecords((prev) => {
+      if (canWrite && !canWrite()) return prev
       const base = replaceAll ? [] : prev
       const map = new Map(base.map((task) => [task.taskId, task]))
       nextTasks.forEach((task) => {
@@ -431,11 +463,14 @@ export default function Zhihuishu() {
     }
   }, [])
 
-  const loadConfigFromBackend = useCallback(async (silent = true) => {
+  const loadConfigFromBackend = useCallback(async (silent = true, canWrite = () => true) => {
+    if (!canWrite()) return false
     try {
       const resp = await requestZhihuishuApi('/config', { method: 'GET' })
+      if (!canWrite()) return false
       const config = parseObject(resp, 'data', 'config')
       setSettings((prev) => {
+        if (!canWrite()) return prev
         const merged = {
           ...prev,
           speed: String(config?.speed ?? prev.speed),
@@ -443,14 +478,16 @@ export default function Zhihuishu() {
             ? config.auto_answer
             : (typeof config?.autoAnswer === 'boolean' ? config.autoAnswer : prev.autoAnswer)
         }
+        if (!canWrite()) return prev
         saveSettingsToStorage(merged)
         return merged
       })
-      if (!silent) {
+      if (!silent && canWrite()) {
         setNoticeMessage('success', pickMessage(resp) || '已同步后端配置。')
       }
       return true
     } catch (err) {
+      if (!canWrite()) return false
       if (!silent) {
         setNoticeMessage('info', '后端配置不可用，已使用本地配置。')
       }
@@ -609,21 +646,27 @@ export default function Zhihuishu() {
     }
   }, [loadCourseDetail, setNoticeMessage])
 
-  const loadCourses = useCallback(async (silent = false) => {
+  const loadCourses = useCallback(async (silent = false, canWrite = () => true) => {
+    if (!canWrite()) return []
     setCoursesLoading(true)
     try {
       let groups = []
       try {
         const groupedResp = await requestZhihuishuApi('/courses/grouped', { method: 'GET' })
+        if (!canWrite()) return []
         groups = normalizeCourseGroups(groupedResp)
       } catch (_) {
+        if (!canWrite()) return []
         const legacyResp = await api(`${ZHIHUISHU_API_BASE}/courses`, { method: 'GET' })
+        if (!canWrite()) return []
         groups = normalizeCourseGroups(legacyResp)
       }
 
+      if (!canWrite()) return []
       const flatCourses = applyGroupedCourses(groups)
+      if (!canWrite()) return []
       setZhihuishuLoggedIn(true)
-      if (!silent) {
+      if (!silent && canWrite()) {
         setNoticeMessage(
           'success',
           flatCourses.length > 0 ? '分组课程加载完成。' : '暂无课程数据。'
@@ -631,12 +674,15 @@ export default function Zhihuishu() {
       }
       return flatCourses
     } catch (err) {
+      if (!canWrite()) return []
       if (!silent) {
         setNoticeMessage('error', err.message || '加载课程失败。')
       }
       return []
     } finally {
-      setCoursesLoading(false)
+      if (canWrite()) {
+        setCoursesLoading(false)
+      }
     }
   }, [applyGroupedCourses, requestZhihuishuApi, setNoticeMessage])
 
@@ -812,13 +858,15 @@ export default function Zhihuishu() {
     }
   }, [beginTaskViewIntent, loadCourseProgress, requestZhihuishuApi, setNoticeMessage, upsertTaskRecord])
 
-  const fetchTaskList = useCallback(async ({ silent = false, taskType, courseId, preferredTaskId } = {}) => {
+  const fetchTaskList = useCallback(async ({ silent = false, taskType, courseId, preferredTaskId, canWrite = () => true } = {}) => {
+    if (!canWrite()) return []
     try {
       const query = buildQuery({
         task_type: taskType,
         course_id: courseId
       })
       const resp = await requestZhihuishuApi(`/tasks${query}`, { method: 'GET' })
+      if (!canWrite()) return []
       const tasks = parseList(resp, 'data', 'tasks')
       const normalized = tasks
         .map((task) => {
@@ -832,18 +880,20 @@ export default function Zhihuishu() {
         })
         .filter(Boolean)
 
-      mergeTaskRecords(normalized, true)
+      if (!canWrite()) return []
+      mergeTaskRecords(normalized, true, canWrite)
       const preferredId = parseCourseId(preferredTaskId)
-      if (preferredId && normalized.some((task) => task.taskId === preferredId)) {
+      if (canWrite() && preferredId && normalized.some((task) => task.taskId === preferredId)) {
         selectActiveTask(preferredId)
-      } else if (!activeTaskIdRef.current && normalized[0]?.taskId) {
+      } else if (canWrite() && !activeTaskIdRef.current && normalized[0]?.taskId) {
         selectActiveTask(normalized[0].taskId)
       }
-      if (!silent) {
+      if (!silent && canWrite()) {
         setNoticeMessage('success', normalized.length > 0 ? '任务列表已刷新。' : '暂无任务记录。')
       }
       return normalized
     } catch (err) {
+      if (!canWrite()) return []
       if (!silent) {
         setNoticeMessage('error', err.message || '加载任务列表失败。')
       }
@@ -1009,9 +1059,15 @@ export default function Zhihuishu() {
     }
   }
 
-  const pollQrStatus = useCallback(async (sessionId) => {
+  const pollQrStatus = useCallback(async (sessionId, generation) => {
+    if (!ownsQrSession(generation, sessionId)) return
+    if (qrPollsInFlightRef.current.has(generation)) return
+    qrPollsInFlightRef.current.set(generation, sessionId)
+
     try {
       const resp = await api(`${ZHIHUISHU_API_BASE}/login-status/${sessionId}`, { method: 'GET' })
+      if (!ownsQrSession(generation, sessionId)) return
+
       const nextStatus = String(resp?.status || 'pending')
       setQrStatus(nextStatus)
       setQrMessage(resp?.message || '等待扫码')
@@ -1026,23 +1082,35 @@ export default function Zhihuishu() {
         stopQrPolling()
         setZhihuishuLoggedIn(true)
         setNoticeMessage('success', '二维码登录成功，正在加载课程。')
-        await Promise.all([loadCourses(true), loadConfigFromBackend(true), fetchTaskList({ silent: true })])
+        const canWrite = () => ownsQrSession(generation, sessionId)
+        await Promise.all([
+          loadCourses(true, canWrite),
+          loadConfigFromBackend(true, canWrite),
+          fetchTaskList({ silent: true, canWrite })
+        ])
+        if (!ownsQrSession(generation, sessionId)) return
       }
       if (nextStatus === 'failed') {
         stopQrPolling()
       }
     } catch (err) {
+      if (!ownsQrSession(generation, sessionId)) return
       stopQrPolling()
       setQrStatus('failed')
       setQrError(err.message || '查询二维码状态失败。')
       setNoticeMessage('error', err.message || '查询二维码状态失败。')
+    } finally {
+      if (qrPollsInFlightRef.current.get(generation) === sessionId) {
+        qrPollsInFlightRef.current.delete(generation)
+      }
     }
-  }, [fetchTaskList, loadConfigFromBackend, loadCourses, setNoticeMessage, stopQrPolling])
+  }, [fetchTaskList, loadConfigFromBackend, loadCourses, ownsQrSession, setNoticeMessage, stopQrPolling])
 
   const startQrLogin = useCallback(async () => {
     if (qrLoading) return
 
-    stopQrPolling()
+    const generation = invalidateQrGeneration()
+    let ownerSessionId = ''
     setQrLoading(true)
     setQrError('')
     setQrStatus('loading')
@@ -1051,27 +1119,34 @@ export default function Zhihuishu() {
 
     try {
       const resp = await api(`${ZHIHUISHU_API_BASE}/qr-login`, { method: 'POST' })
+      if (!ownsQrSession(generation, ownerSessionId)) return
+
       const nextSessionId = resp?.session_id
       const nextQrCode = resp?.qr_code
       if (!nextSessionId || !nextQrCode) {
         throw new Error('二维码登录响应无效。')
       }
 
+      ownerSessionId = nextSessionId
+      qrSessionOwnerRef.current = { generation, sessionId: nextSessionId }
       setQrSessionId(nextSessionId)
       setQrCode(nextQrCode)
       setQrStatus(String(resp?.status || 'pending'))
       setQrMessage(resp?.message || '请使用智慧树 App 扫码。')
       setNoticeMessage('success', '二维码已生成，请尽快扫码。')
     } catch (err) {
+      if (!ownsQrSession(generation, ownerSessionId)) return
       const message = err.message || '创建二维码会话失败。'
       setQrStatus('failed')
       setQrError(message)
       setQrMessage(message)
       setNoticeMessage('error', message)
     } finally {
-      setQrLoading(false)
+      if (ownsQrSession(generation, ownerSessionId)) {
+        setQrLoading(false)
+      }
     }
-  }, [qrLoading, setNoticeMessage, stopQrPolling])
+  }, [invalidateQrGeneration, ownsQrSession, qrLoading, setNoticeMessage])
 
   const submitPasswordLogin = async (event) => {
     event.preventDefault()
@@ -1140,7 +1215,7 @@ export default function Zhihuishu() {
   }, [])
 
   const resetZhihuishuSession = useCallback(() => {
-    stopQrPolling()
+    invalidateQrGeneration()
     stopProgressPolling()
     invalidateTaskRequests()
     taskRecordsRef.current = []
@@ -1154,6 +1229,7 @@ export default function Zhihuishu() {
     setQrStatus('idle')
     setQrMessage('')
     setQrError('')
+    setQrLoading(false)
 
     setCourseGroups([])
     setCourses([])
@@ -1166,9 +1242,11 @@ export default function Zhihuishu() {
     selectActiveTask('')
 
     setNoticeMessage('info', '已清理智慧树会话状态。')
-  }, [invalidateTaskRequests, selectActiveTask, selectCourse, setNoticeMessage, stopProgressPolling, stopQrPolling])
+  }, [invalidateQrGeneration, invalidateTaskRequests, selectActiveTask, selectCourse, setNoticeMessage, stopProgressPolling])
 
   const logoutZhihuishu = useCallback(async () => {
+    invalidateQrGeneration()
+    setQrLoading(false)
     invalidateTaskRequests()
     try {
       const resp = await requestZhihuishuApi('/logout', { method: 'POST' })
@@ -1177,10 +1255,12 @@ export default function Zhihuishu() {
     } catch (err) {
       setNoticeMessage('error', err.message || '智慧树退出失败。')
     }
-  }, [invalidateTaskRequests, requestZhihuishuApi, resetZhihuishuSession, setNoticeMessage])
+  }, [invalidateQrGeneration, invalidateTaskRequests, requestZhihuishuApi, resetZhihuishuSession, setNoticeMessage])
 
   const logoutSystem = useCallback(async () => {
     if (!window.confirm('确定要退出登录吗？将清除登录状态并返回登录页。')) return
+    invalidateQrGeneration()
+    setQrLoading(false)
     try {
       await requestZhihuishuApi('/logout', { method: 'POST' })
     } catch (_) {
@@ -1188,7 +1268,7 @@ export default function Zhihuishu() {
     }
     removeToken()
     navigate('/login', { replace: true })
-  }, [navigate, requestZhihuishuApi])
+  }, [invalidateQrGeneration, navigate, requestZhihuishuApi])
 
   useEffect(() => {
     loadSettingsFromStorage()
@@ -1260,9 +1340,12 @@ export default function Zhihuishu() {
   useEffect(() => {
     if (!qrSessionId || qrStatus !== 'pending') return undefined
 
+    const owner = qrSessionOwnerRef.current
+    if (owner.sessionId !== qrSessionId) return undefined
+
     stopQrPolling()
     qrPollRef.current = setInterval(() => {
-      void pollQrStatus(qrSessionId)
+      void pollQrStatus(qrSessionId, owner.generation)
     }, QR_POLL_INTERVAL_MS)
 
     return stopQrPolling
