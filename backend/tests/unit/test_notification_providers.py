@@ -9,6 +9,7 @@ import requests
 
 from app.services.notification.providers import (
     Bark,
+    DefaultNotification,
     NotificationFactory,
     NotificationService,
     Qmsg,
@@ -205,3 +206,36 @@ def test_public_interface_is_stable():
     svc = ServerChan()
     params = list(inspect.signature(svc.send).parameters)
     assert params == ["message"]
+
+
+@pytest.mark.parametrize("provider_name", ["logger", "requests"])
+def test_factory_disables_non_provider_globals(provider_name):
+    service = NotificationFactory.create_service({"provider": provider_name, "url": "https://example.invalid/notify"})
+
+    assert isinstance(service, DefaultNotification)
+    assert service.disabled is True
+
+
+def test_factory_disables_unknown_provider():
+    service = NotificationFactory.create_service({"provider": "NotAProvider", "url": "https://example.invalid/notify"})
+
+    assert isinstance(service, DefaultNotification)
+    assert service.disabled is True
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "provider_cls", "extra_config"),
+    [
+        ("ServerChan", ServerChan, {}),
+        ("Qmsg", Qmsg, {}),
+        ("Bark", Bark, {}),
+        ("Telegram", Telegram, {"tg_chat_id": "123"}),
+    ],
+)
+def test_factory_builds_supported_providers(provider_name, provider_cls, extra_config):
+    config = {"provider": provider_name, "url": "https://example.invalid/notify", **extra_config}
+
+    service = NotificationFactory.create_service(config)
+
+    assert isinstance(service, provider_cls)
+    assert service.disabled is False

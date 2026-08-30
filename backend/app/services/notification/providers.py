@@ -243,8 +243,9 @@ class DefaultNotification(NotificationService):
             if not provider_name:
                 raise KeyError("未指定通知服务提供商")
 
-            # 获取对应的通知服务类
-            provider_class = globals().get(provider_name)
+            # Only configured provider implementations are instantiable here;
+            # module globals also contain imported modules and logger objects.
+            provider_class = _PROVIDER_CLASSES.get(provider_name) if isinstance(provider_name, str) else None
             if not provider_class:
                 logger.error(f"未找到名为 {provider_name} 的通知服务提供商")
                 self.disabled = True
@@ -460,6 +461,14 @@ class Telegram(NotificationService):
         except ValueError as e:
             logger.error(f"{self.name}返回数据解析失败: {type(e).__name__}")
         return False
+
+
+_PROVIDER_CLASSES = {
+    "ServerChan": ServerChan,
+    "Qmsg": Qmsg,
+    "Bark": Bark,
+    "Telegram": Telegram,
+}
 
 
 # 为了向后兼容，保留原来的Notification类
