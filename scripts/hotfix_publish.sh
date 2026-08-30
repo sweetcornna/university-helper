@@ -47,38 +47,9 @@ HEALTH_URL="${EASY_LEARNING_HEALTH_URL:-http://127.0.0.1:8000/health}"
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-if [[ -z "$SERVER_IP" ]]; then
-  echo "Missing SERVER_IP (or EASY_LEARNING_SERVER_IP)" >&2
-  exit 1
-fi
-if [[ "$#" -eq 0 ]]; then
-  echo "Usage: scripts/hotfix_publish.sh <file> [file...]   |   --frontend" >&2
-  exit 1
-fi
-
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 1; }
 }
-require_cmd ssh
-require_cmd scp
-
-# Build SSH/SCP/RSYNC transports.
-if [[ -n "$SERVER_PASSWORD" && -z "$SSH_KEY" ]]; then
-  echo "WARNING: using sshpass password auth — switch to SSH keys (set SSH_KEY)." >&2
-  require_cmd sshpass
-  SSH_PW_OPTS=(-o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=10)
-  SSH_BASE=(sshpass -p "$SERVER_PASSWORD" ssh "${SSH_PW_OPTS[@]}" "${SERVER_USER}@${SERVER_IP}")
-  SCP_BASE=(sshpass -p "$SERVER_PASSWORD" scp "${SSH_PW_OPTS[@]}")
-  RSYNC_RSH="sshpass -p $SERVER_PASSWORD ssh ${SSH_PW_OPTS[*]}"
-else
-  SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
-  [[ -n "$SSH_KEY" ]] && SSH_OPTS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
-  SSH_BASE=(ssh "${SSH_OPTS[@]}" "${SERVER_USER}@${SERVER_IP}")
-  SCP_BASE=(scp "${SSH_OPTS[@]}")
-  RSYNC_RSH="ssh ${SSH_OPTS[*]}"
-fi
-
-remote_sh() { "${SSH_BASE[@]}" "$@"; }
 
 # Quote one value for use as one argument in a POSIX shell command sent over
 # SSH.  ssh concatenates its command arguments and the remote shell parses the
@@ -98,18 +69,117 @@ shell_quote() {
   printf "'%s'" "$quoted"
 }
 
-# Expand COMPOSE_FILES into "-f a -f b".
-compose_f_args() { local f; for f in $COMPOSE_FILES; do printf -- "-f %s " "$f"; done; }
-compose_cmd="$COMPOSE_BIN -p $COMPOSE_PROJECT $(compose_f_args)"
+# rsync's -e value is parsed into a command and arguments a second time.  Build
+# it exclusively from quoted argv values; passwords are supplied through
+# SSHPASS rather than interpolated into that command string.
+join_shell_words() {
+  local value result=''
+  for value in "$@"; do
+    result="${result:+$result }$(shell_quote "$value")"
+  done
+  printf '%s' "$result"
+}
+
+invalid_config() {
+  echo "Invalid $1: $2" >&2
+  exit 1
+}
+
+validate_absolute_path() {
+  local name=$1 value=$2
+  [[ "$value" =~ ^/[A-Za-z0-9._/-]+$ ]] || invalid_config "$name" "must be an absolute path using only letters, digits, '.', '_', '-', and '/'"
+  [[ ! "$value" =~ (^|/)\.\.?(/|$) ]] || invalid_config "$name" "must not contain '.' or '..' path components"
+  [[ "$value" != */ && "$value" != "/" ]] || invalid_config "$name" "must not be the filesystem root or end with '/'"
+}
+
+validate_relative_path() {
+  local name=$1 value=$2
+  [[ "$value" =~ ^[A-Za-z0-9._/-]+$ && "$value" != /* && "$value" != */ ]] || invalid_config "$name" "must be a safe repository-relative path"
+  [[ ! "$value" =~ (^|/)\.\.?(/|$) ]] || invalid_config "$name" "must not contain '.' or '..' path components"
+}
+
+# Validate every environment-controlled command component before any ssh, scp,
+# or rsync execution.  These allowlists match the identifiers and paths accepted
+# by the tools below rather than attempting to blacklist shell metacharacters.
+[[ -n "$SERVER_IP" ]] || { echo "Missing SERVER_IP (or EASY_LEARNING_SERVER_IP)" >&2; exit 1; }
+if [[ "$#" -eq 0 ]]; then
+  echo "Usage: scripts/hotfix_publish.sh <file> [file...]   |   --frontend" >&2
+  exit 1
+fi
+
+if [[ "$SERVER_IP" == *:* ]]; then
+  [[ "$SERVER_IP" =~ ^[0-9A-Fa-f:]+$ ]] || invalid_config "SERVER_IP" "must be a hostname or IP address"
+  FILE_TRANSFER_HOST="[$SERVER_IP]"
+else
+  [[ "$SERVER_IP" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || invalid_config "SERVER_IP" "must be a hostname or IP address"
+  FILE_TRANSFER_HOST="$SERVER_IP"
+fi
+[[ "$SERVER_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || invalid_config "SERVER_USER" "must be a login name"
+validate_absolute_path "EASY_LEARNING_REMOTE_DIR" "$REMOTE_DIR"
+validate_absolute_path "EASY_LEARNING_APP_BACKEND_DIR" "$APP_BACKEND_DIR"
+
+if [[ "$COMPOSE_BIN" == */* ]]; then
+  validate_absolute_path "EASY_LEARNING_COMPOSE_BIN" "$COMPOSE_BIN"
+else
+  [[ "$COMPOSE_BIN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || invalid_config "EASY_LEARNING_COMPOSE_BIN" "must be a command name or absolute path"
+fi
+[[ "$COMPOSE_PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || invalid_config "EASY_LEARNING_COMPOSE_PROJECT" "must be a Compose project name"
+[[ "$APP_CONTAINER" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || invalid_config "EASY_LEARNING_APP_CONTAINER" "must be a container name"
+[[ "$WEB_CONTAINER" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || invalid_config "EASY_LEARNING_WEB_CONTAINER" "must be a container name"
+[[ "$HEALTH_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/?=&+,:@-]*)?$ ]] || invalid_config "EASY_LEARNING_HEALTH_URL" "must be an absolute HTTP(S) URL without shell metacharacters"
+
+[[ -n "$COMPOSE_FILES" && "$COMPOSE_FILES" != *[$'\001'-$'\037'$'\177']* ]] || invalid_config "EASY_LEARNING_COMPOSE_FILES" "must be a non-empty, space-separated path list"
+read -r -a COMPOSE_FILE_LIST <<< "$COMPOSE_FILES"
+[[ "${#COMPOSE_FILE_LIST[@]}" -gt 0 ]] || invalid_config "EASY_LEARNING_COMPOSE_FILES" "must contain at least one path"
+for compose_file in "${COMPOSE_FILE_LIST[@]}"; do
+  validate_relative_path "EASY_LEARNING_COMPOSE_FILES" "$compose_file"
+done
+
+if [[ -n "$SSH_KEY" ]]; then
+  validate_absolute_path "SSH_KEY" "$SSH_KEY"
+  [[ -f "$SSH_KEY" ]] || invalid_config "SSH_KEY" "file not found"
+fi
+
+require_cmd ssh
+require_cmd scp
+
+# Build SSH/SCP/RSYNC transports.
+if [[ -n "$SERVER_PASSWORD" && -z "$SSH_KEY" ]]; then
+  echo "WARNING: using sshpass password auth — switch to SSH keys (set SSH_KEY)." >&2
+  require_cmd sshpass
+  export SSHPASS="$SERVER_PASSWORD"
+  SSH_PW_OPTS=(-o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=10)
+  SSH_BASE=(sshpass -e ssh "${SSH_PW_OPTS[@]}" "${SERVER_USER}@${SERVER_IP}")
+  SCP_BASE=(sshpass -e scp "${SSH_PW_OPTS[@]}")
+  RSYNC_SSH=(sshpass -e ssh "${SSH_PW_OPTS[@]}")
+else
+  SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
+  [[ -n "$SSH_KEY" ]] && SSH_OPTS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
+  SSH_BASE=(ssh "${SSH_OPTS[@]}" "${SERVER_USER}@${SERVER_IP}")
+  SCP_BASE=(scp "${SSH_OPTS[@]}")
+  RSYNC_SSH=(ssh "${SSH_OPTS[@]}")
+fi
+RSYNC_RSH="$(join_shell_words "${RSYNC_SSH[@]}")"
+
+remote_sh() { "${SSH_BASE[@]}" "$@"; }
+
+# Expand COMPOSE_FILES into individually quoted "-f path" arguments.
+compose_cmd="$(shell_quote "$COMPOSE_BIN") -p $(shell_quote "$COMPOSE_PROJECT")"
+for compose_file in "${COMPOSE_FILE_LIST[@]}"; do
+  compose_cmd="$compose_cmd -f $(shell_quote "$compose_file")"
+done
 
 # ── --frontend: rsync the whole built dist (handles deletes of stale hashes) ──
 if [[ "$1" == "--frontend" ]]; then
   require_cmd rsync
   [[ -f "$ROOT_DIR/frontend/dist/index.html" ]] || { echo "frontend/dist not built — run 'npm run build' first." >&2; exit 1; }
   echo "Backing up remote dist + syncing new build"
-  remote_sh "cd '$REMOTE_DIR/frontend' && cp -r dist \"dist.bak.\$(date +%Y%m%d-%H%M%S)\" 2>/dev/null || true"
-  rsync -az --delete -e "$RSYNC_RSH" "$ROOT_DIR/frontend/dist/" "${SERVER_USER}@${SERVER_IP}:$REMOTE_DIR/frontend/dist/"
-  remote_sh "docker exec '$WEB_CONTAINER' nginx -s reload >/dev/null 2>&1 || true"
+  remote_frontend_dir_quoted="$(shell_quote "$REMOTE_DIR/frontend")"
+  remote_dist_target="${SERVER_USER}@${FILE_TRANSFER_HOST}:$(shell_quote "$REMOTE_DIR/frontend/dist/")"
+  web_container_quoted="$(shell_quote "$WEB_CONTAINER")"
+  remote_sh "cd $remote_frontend_dir_quoted && cp -r dist \"dist.bak.\$(date +%Y%m%d-%H%M%S)\" 2>/dev/null || true"
+  rsync -az --delete -e "$RSYNC_RSH" "$ROOT_DIR/frontend/dist/" "$remote_dist_target"
+  remote_sh "docker exec $web_container_quoted nginx -s reload >/dev/null 2>&1 || true"
   echo "Frontend deployed."
   exit 0
 fi
@@ -186,7 +256,7 @@ for index in "${!validated_rel_paths[@]}"; do
   remote_path_quoted="$(shell_quote "$remote_path")"
   remote_dir_quoted="$(shell_quote "$remote_dir")"
   remote_sh "mkdir -p $remote_dir_quoted"
-  "${SCP_BASE[@]}" "$abs_path" "${SERVER_USER}@${SERVER_IP}:$remote_path"
+  "${SCP_BASE[@]}" "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:$remote_path_quoted"
 
   case "$rel_path" in
     backend/*) backend_files+=("$rel_path"); needs_app_hotcopy=true ;;
@@ -201,7 +271,8 @@ done
 
 if [[ "$needs_app_rebuild" == true ]]; then
   echo "Rebuilding app image"
-  remote_sh "cd '$REMOTE_DIR' && $compose_cmd up -d --build app"
+  remote_dir_quoted="$(shell_quote "$REMOTE_DIR")"
+  remote_sh "cd $remote_dir_quoted && $compose_cmd up -d --build app"
 elif [[ "$needs_app_hotcopy" == true ]]; then
   echo "Hot-copying backend files into $APP_CONTAINER"
   for rel_path in "${backend_files[@]}"; do
@@ -211,15 +282,18 @@ elif [[ "$needs_app_hotcopy" == true ]]; then
     backend_target_quoted="$(shell_quote "$backend_target")"
     remote_sh "docker cp $remote_path_quoted $backend_target_quoted"
   done
-  remote_sh "docker restart '$APP_CONTAINER' >/dev/null"
+  app_container_quoted="$(shell_quote "$APP_CONTAINER")"
+  remote_sh "docker restart $app_container_quoted >/dev/null"
 fi
 
 if [[ "$needs_web_reload" == true ]]; then
   echo "Reloading web nginx ($WEB_CONTAINER)"
-  remote_sh "docker exec '$WEB_CONTAINER' nginx -s reload >/dev/null 2>&1 || true"
+  web_container_quoted="$(shell_quote "$WEB_CONTAINER")"
+  remote_sh "docker exec $web_container_quoted nginx -s reload >/dev/null 2>&1 || true"
 fi
 
 echo "Waiting for app health ($HEALTH_URL)"
-remote_sh "for i in \$(seq 1 30); do if curl -fsS --max-time 5 '$HEALTH_URL' >/dev/null 2>&1; then exit 0; fi; sleep 2; done; exit 1"
+health_url_quoted="$(shell_quote "$HEALTH_URL")"
+remote_sh "for i in \$(seq 1 30); do if curl -fsS --max-time 5 $health_url_quoted >/dev/null 2>&1; then exit 0; fi; sleep 2; done; exit 1"
 
 echo "Hotfix publish complete."
