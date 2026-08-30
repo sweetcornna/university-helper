@@ -10,6 +10,36 @@ vi.mock('../utils/api', () => ({
   api: vi.fn(),
 }))
 
+vi.mock('../components', () => {
+  const toast = { notify: () => {} }
+  return {
+    Input: ({ label, ...props }) => (
+      <label>
+        {label}
+        <input {...props} />
+      </label>
+    ),
+    Toggle: ({ checked, onChange, label, disabled = false, id }) => (
+      <button
+        type="button"
+        role="switch"
+        id={id}
+        aria-checked={checked}
+        aria-label={label}
+        disabled={disabled}
+        onClick={() => !disabled && onChange(!checked)}
+      />
+    ),
+    useRuntimeProfile: () => ({
+      profile: 'local',
+      isLocal: true,
+      requiresAuth: false,
+      loading: false,
+    }),
+    useToast: () => toast,
+  }
+})
+
 const NEW_TASK_PATHS = {
   course: '/course/zhihuishu/tasks/course',
   'ai-course': '/course/zhihuishu/tasks/ai-course',
@@ -74,7 +104,7 @@ const configureApi = ({ startBehavior, legacyResponse = taskResponse('legacy-tas
 }
 
 const openCoursesAndSelectCourse = async () => {
-  const coursesButton = await screen.findByRole('button', { name: '课程' })
+  const coursesButton = await screen.findByText('课程', { selector: 'button' })
   fireEvent.click(coursesButton)
   fireEvent.click(await screen.findByRole('button', { name: '刷新课程' }))
   const selector = await screen.findByRole('combobox', { name: '分组课程' })
