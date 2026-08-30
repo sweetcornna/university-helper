@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -28,6 +29,38 @@ THREAD_START_FAILURE_MESSAGE = (
 # coalesce them. Status changes / logs / terminal writes bypass this throttle
 # (force=True) so final state is never lost. (F31)
 PROGRESS_PERSIST_INTERVAL = 5.0
+
+
+class _TaskPersistSequencer:
+    """Run one task's reserved snapshots in mutation order.
+
+    Snapshot revisions are reserved while the manager lock still protects the
+    corresponding state mutation. Store I/O happens after that lock is released,
+    so unrelated tasks remain independent while concurrent callers for the same
+    task cannot overtake one another.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._last_reserved_revision = 0
+        self._last_finished_revision = 0
+
+    def reserve(self) -> int:
+        with self._condition:
+            self._last_reserved_revision += 1
+            return self._last_reserved_revision
+
+    def run(self, revision: int, writer: Callable[[], None]) -> None:
+        with self._condition:
+            self._condition.wait_for(lambda: revision == self._last_finished_revision + 1)
+        try:
+            writer()
+        finally:
+            # A failed write must release the next revision. Persistence is
+            # best-effort, and later snapshots still need a chance to recover.
+            with self._condition:
+                self._last_finished_revision = revision
+                self._condition.notify_all()
 
 
 def _utc_now_iso() -> str:
@@ -115,7 +148,9 @@ class ChaoxingLearningManager:
 
         with self._lock:
             self._tasks[task_id] = task_state
-        self._persist_task_state(self._task_public_payload(task_state))
+            persist_request = self._prepare_persist_locked(task_state)
+        if persist_request:
+            self._persist_task_state(*persist_request)
 
         try:
             threading.Thread(
@@ -612,7 +647,7 @@ class ChaoxingLearningManager:
         self._append_task_log(task_id, message, "error")
 
     def _append_task_log(self, task_id: str, message: str, level: str = "info") -> None:
-        snapshot: dict[str, Any] | None = None
+        persist_request: tuple[dict[str, Any], _TaskPersistSequencer, int] | None = None
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -627,12 +662,12 @@ class ChaoxingLearningManager:
             if len(task["logs"]) > 1000:
                 del task["logs"][:-1000]
             task["updated_at"] = _utc_now_iso()
-            snapshot = self._task_public_payload(task)
-        if snapshot:
-            self._persist_task_state(snapshot)
+            persist_request = self._prepare_persist_locked(task)
+        if persist_request:
+            self._persist_task_state(*persist_request)
 
     def _update_task(self, task_id: str, **changes: Any) -> None:
-        snapshot: dict[str, Any] | None = None
+        persist_request: tuple[dict[str, Any], _TaskPersistSequencer, int] | None = None
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -645,12 +680,12 @@ class ChaoxingLearningManager:
                 return
             task.update(changes)
             task["updated_at"] = _utc_now_iso()
-            snapshot = self._task_public_payload(task)
-        if snapshot:
-            self._persist_task_state(snapshot)
+            persist_request = self._prepare_persist_locked(task)
+        if persist_request:
+            self._persist_task_state(*persist_request)
 
     def _update_progress(self, task_id: str, **updates: Any) -> None:
-        snapshot: dict[str, Any] | None = None
+        persist_request: tuple[dict[str, Any], _TaskPersistSequencer, int] | None = None
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -659,15 +694,15 @@ class ChaoxingLearningManager:
             progress.update(updates)
             task["progress"] = progress
             task["updated_at"] = _utc_now_iso()
-            snapshot = self._task_public_payload(task)
-        if snapshot:
             # High-frequency (video) progress: throttle main-DB writes. The next
             # forced write (status change / terminal) carries the latest
             # progress, so the final state is never lost. (F31)
-            self._persist_task_state(snapshot, task_id=task_id, force=False)
+            persist_request = self._prepare_persist_locked(task, force=False)
+        if persist_request:
+            self._persist_task_state(*persist_request)
 
     def _increase_progress(self, task_id: str, key: str, delta: int = 1) -> None:
-        snapshot: dict[str, Any] | None = None
+        persist_request: tuple[dict[str, Any], _TaskPersistSequencer, int] | None = None
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -676,9 +711,9 @@ class ChaoxingLearningManager:
             progress[key] = int(progress.get(key) or 0) + int(delta)
             task["progress"] = progress
             task["updated_at"] = _utc_now_iso()
-            snapshot = self._task_public_payload(task)
-        if snapshot:
-            self._persist_task_state(snapshot, task_id=task_id, force=False)
+            persist_request = self._prepare_persist_locked(task, force=False)
+        if persist_request:
+            self._persist_task_state(*persist_request)
 
     @staticmethod
     def _task_public_payload(task: dict[str, Any]) -> dict[str, Any]:
@@ -698,39 +733,46 @@ class ChaoxingLearningManager:
             "video_progress": None,
         }
 
-    def _should_persist_now(self, task_id: str | None, force: bool) -> bool:
-        """Throttle high-frequency (force=False) progress persistence.
-
-        Returns True if the caller should write to the store now. For throttled
-        callers we only allow a write once every PROGRESS_PERSIST_INTERVAL
-        seconds per task; intermediate ticks are dropped because the next forced
-        write (status change / terminal) carries the latest progress anyway.
-        """
-        if force or not task_id:
-            return True
-        now = time.monotonic()
-        with self._lock:
-            task = self._tasks.get(task_id)
-            if task is None:
-                return True
+    def _prepare_persist_locked(
+        self,
+        task: dict[str, Any],
+        *,
+        force: bool = True,
+    ) -> tuple[dict[str, Any], _TaskPersistSequencer, int] | None:
+        """Capture and order a snapshot while ``self._lock`` is held."""
+        if not force:
+            now = time.monotonic()
             last = float(task.get("_last_progress_persist_ts") or 0.0)
             if now - last < PROGRESS_PERSIST_INTERVAL:
-                return False
+                return None
             task["_last_progress_persist_ts"] = now
-        return True
+
+        snapshot = self._task_public_payload(task)
+        sequencer = task.get("_persist_sequencer")
+        if not isinstance(sequencer, _TaskPersistSequencer):
+            sequencer = _TaskPersistSequencer()
+            task["_persist_sequencer"] = sequencer
+        revision = sequencer.reserve()
+        return snapshot, sequencer, revision
 
     def _persist_task_state(
         self,
         task_state_public: dict[str, Any],
-        task_id: str | None = None,
-        force: bool = True,
+        sequencer: _TaskPersistSequencer | None = None,
+        revision: int | None = None,
     ) -> None:
-        if not self._should_persist_now(task_id, force):
+        def write() -> None:
+            try:
+                task_store.upsert_task(LEARNING_TASK_KIND, task_state_public)
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger.warning("persist learning task failed: %s", exc)
+
+        if sequencer is None or revision is None:
+            # Keep direct private callers compatible; manager-generated snapshots
+            # always carry a reservation and therefore use the ordered path.
+            write()
             return
-        try:
-            task_store.upsert_task(LEARNING_TASK_KIND, task_state_public)
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            logger.warning("persist learning task failed: %s", exc)
+        sequencer.run(revision, write)
 
     def _ensure_tasks_loaded_for_user(self, user_id: str) -> None:
         normalized_user_id = str(user_id or "").strip()
@@ -833,7 +875,10 @@ class ChaoxingLearningManager:
             self._tasks[task_id] = task
 
         if interrupted:
-            self._persist_task_state(self._task_public_payload(task))
+            with self._lock:
+                persist_request = self._prepare_persist_locked(task)
+            if persist_request:
+                self._persist_task_state(*persist_request)
         return True
 
     def _restore_tasks_from_store(self) -> None:
