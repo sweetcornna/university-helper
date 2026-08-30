@@ -725,7 +725,10 @@ export default function Zhihuishu() {
           method: 'POST',
           body: JSON.stringify(payload)
         })
-      } catch (_) {
+      } catch (err) {
+        if (err?.status !== 404 && err?.status !== 405) {
+          throw err
+        }
         resp = await api(`${ZHIHUISHU_API_BASE}/course/start`, {
           method: 'POST',
           body: JSON.stringify(payload)
