@@ -2,12 +2,17 @@
 # Local bootstrap for university-helper. Idempotent.
 set -euo pipefail
 
-# Release this one-click installer targets. Bump alongside backend/app/main.py
-# and frontend/package.json when cutting a new version.
-APP_VERSION="1.3.0"
-
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
+
+# The frontend manifest is stamped by scripts/set_version.sh and is the local
+# source of the release version. Parse it with POSIX tooling so setup does not
+# require jq or Node just to print its banner.
+APP_VERSION="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)"[[:space:]]*,?[[:space:]]*$/\1/p' frontend/package.json | head -n 1)"
+if [[ -z "$APP_VERSION" ]]; then
+    echo "error: could not read release version from frontend/package.json" >&2
+    exit 1
+fi
 
 echo "=== university-helper · local setup (v${APP_VERSION}) ==="
 case "$(uname -s)" in
