@@ -200,6 +200,85 @@ describe('useTaskExecution task generations', () => {
   })
 
 
+  test('clears A status immediately and shows only B after its delayed snapshot succeeds', async () => {
+    const bStatus = deferred()
+    const callApi = vi.fn((path) => {
+      if (path === '/course/tasks') return Promise.resolve([])
+      if (path === '/course/status/A') return Promise.resolve(status('A'))
+      if (path === '/course/logs/A?cursor=0') return Promise.resolve(logs('A'))
+      if (path === '/course/status/B') return bStatus.promise
+      if (path === '/course/logs/B?cursor=0') return Promise.resolve(logs('B'))
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const rendered = renderTaskExecution(callApi)
+
+
+    try {
+      act(() => rendered.current.setTaskId('A'))
+      await flush()
+      expect(rendered.current.taskStatus.task_id).toBe('A')
+
+
+      act(() => rendered.current.selectTaskFromHistory('B'))
+      expect(rendered.current.taskId).toBe('B')
+      expect(rendered.current.taskStatus).toBeNull()
+      expect(callApi.mock.calls.filter(([path]) => path === '/course/status/B')).toHaveLength(1)
+
+
+      await act(async () => {
+        bStatus.resolve(status('B'))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      await flush()
+
+
+      expect(rendered.current.taskStatus.task_id).toBe('B')
+      expect(rendered.current.logs.map((item) => item.message)).toEqual(['B'])
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+
+  test('does not retain A status when the selected B snapshot fails', async () => {
+    const bStatus = deferred()
+    const callApi = vi.fn((path) => {
+      if (path === '/course/tasks') return Promise.resolve([])
+      if (path === '/course/status/A') return Promise.resolve(status('A'))
+      if (path === '/course/logs/A?cursor=0') return Promise.resolve(logs('A'))
+      if (path === '/course/status/B') return bStatus.promise
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const rendered = renderTaskExecution(callApi)
+
+
+    try {
+      act(() => rendered.current.setTaskId('A'))
+      await flush()
+      expect(rendered.current.taskStatus.task_id).toBe('A')
+
+
+      act(() => rendered.current.selectTaskFromHistory('B'))
+      expect(rendered.current.taskStatus).toBeNull()
+
+
+      await act(async () => {
+        bStatus.reject(new Error('B failed'))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      await flush()
+
+
+      expect(rendered.current.taskStatus).toBeNull()
+      expect(rendered.setError).toHaveBeenCalledWith('B failed')
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+
   test('restoring a task uses the taskId effect as its only initial load', async () => {
     const callApi = vi.fn((path) => {
       if (path === '/course/tasks') return Promise.resolve({ tasks: [status('B')] })

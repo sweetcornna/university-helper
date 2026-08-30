@@ -65,6 +65,7 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     if (normalizedId !== taskIdRef.current) {
       taskGenerationRef.current += 1
       taskIdRef.current = normalizedId
+      setTaskStatus(null)
       setLogs([])
       setLogCursor(0)
       logCursorRef.current = 0
