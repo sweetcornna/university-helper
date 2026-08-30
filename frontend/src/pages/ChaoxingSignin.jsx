@@ -505,13 +505,28 @@ export default function ChaoxingSignin() {
 
   setTodayStatsRef.current = autoSigninHook.setTodayStats
 
+  const qrDecodeGenerationRef = useRef(0)
+
+  useEffect(
+    () => () => {
+      qrDecodeGenerationRef.current += 1
+    },
+    []
+  )
+
   const handleQrCodeFileUpload = useCallback(async (file) => {
     if (!file) return
+
+    const requestId = qrDecodeGenerationRef.current + 1
+    qrDecodeGenerationRef.current = requestId
+
     setForm((prev) => ({ ...prev, qrCodeFile: file, qrDecodeStatus: '解码中...' }))
     try {
       const decoded = await decodeQrCodeFromFile(file)
+      if (qrDecodeGenerationRef.current !== requestId) return
       setForm((prev) => ({ ...prev, qrCode: decoded, qrDecodeStatus: `解码成功` }))
     } catch (err) {
+      if (qrDecodeGenerationRef.current !== requestId) return
       setForm((prev) => ({ ...prev, qrDecodeStatus: err.message }))
     }
   }, [])
