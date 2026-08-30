@@ -402,6 +402,122 @@ describe('useTaskExecution task generations', () => {
   })
 
 
+  test('stops polling as soon as a terminal status is known even when logs fail', async () => {
+    const completedStatus = deferred()
+    const logsRequest = deferred()
+    let statusCalls = 0
+    const callApi = vi.fn((path) => {
+      if (path === '/course/tasks') return Promise.resolve([])
+      if (path === '/course/status/B') {
+        statusCalls += 1
+        return completedStatus.promise
+      }
+      if (path === '/course/logs/B?cursor=0') return logsRequest.promise
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const rendered = renderTaskExecution(callApi)
+
+
+    try {
+      act(() => {
+        rendered.current.setLoading(true)
+        rendered.current.setTaskId('B')
+      })
+      expect(statusCalls).toBe(1)
+      expect(vi.getTimerCount()).toBe(1)
+
+
+      await act(async () => {
+        completedStatus.resolve(status('B', 'completed'))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+
+      expect(callApi).toHaveBeenCalledWith('/course/logs/B?cursor=0')
+      expect(rendered.current.taskStatus.status).toBe('completed')
+      expect(rendered.current.loading).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+
+
+      await act(async () => {
+        logsRequest.reject(new Error('logs unavailable'))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      await flush()
+
+
+      expect(rendered.current.taskStatus.status).toBe('completed')
+      expect(rendered.current.loading).toBe(false)
+      expect(rendered.setError).toHaveBeenCalledWith('logs unavailable')
+
+
+      act(() => {
+        vi.advanceTimersByTime(2500)
+      })
+      await flush()
+      expect(statusCalls).toBe(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+
+  test('does not let a stale terminal response stop the newly selected task polling', async () => {
+    const aStatus = deferred()
+    let bStatusCalls = 0
+    const callApi = vi.fn((path) => {
+      if (path === '/course/tasks') return Promise.resolve([])
+      if (path === '/course/status/A') return aStatus.promise
+      if (path === '/course/status/B') {
+        bStatusCalls += 1
+        return Promise.resolve(status('B'))
+      }
+      if (path.startsWith('/course/logs/B?cursor=')) return Promise.resolve(logs('B'))
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const rendered = renderTaskExecution(callApi)
+
+
+    try {
+      act(() => rendered.current.setTaskId('A'))
+      expect(vi.getTimerCount()).toBe(1)
+
+
+      act(() => rendered.current.setTaskId('B'))
+      await flush()
+      expect(rendered.current.taskId).toBe('B')
+      expect(bStatusCalls).toBe(1)
+      expect(vi.getTimerCount()).toBe(1)
+
+
+      await act(async () => {
+        aStatus.resolve(status('A', 'completed'))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      await flush()
+
+
+      expect(rendered.current.taskStatus.task_id).toBe('B')
+      expect(rendered.current.taskStatus.status).toBe('running')
+      expect(vi.getTimerCount()).toBe(1)
+
+
+      act(() => {
+        vi.advanceTimersByTime(2500)
+      })
+      await flush()
+      expect(bStatusCalls).toBe(2)
+      expect(vi.getTimerCount()).toBe(1)
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+
   test('does not overlap polling requests and stops after B reaches a terminal state', async () => {
     const bStatusFirst = deferred()
     const bLogsFirst = deferred()

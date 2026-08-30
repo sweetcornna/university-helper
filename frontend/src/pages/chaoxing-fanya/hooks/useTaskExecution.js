@@ -228,6 +228,21 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       )
 
 
+      const statusText = String(statusResp?.status || '').toLowerCase()
+
+
+      if (DONE_STATUSES.has(statusText) && isCurrentTask(generation, targetId)) {
+
+
+        setLoading((prev) => (isCurrentTask(generation, targetId) ? false : prev))
+
+
+        stopPolling()
+
+
+      }
+
+
       const logsResp = await callApi(`/course/logs/${targetId}?cursor=${cursor}`)
 
 
@@ -254,21 +269,6 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
 
         const nextCursor = toNum(logsResp.cursor, cursor + items.length)
         setLogCursor((prev) => (isCurrentTask(generation, targetId) ? nextCursor : prev))
-
-
-      }
-
-
-      const statusText = String(statusResp?.status || '').toLowerCase()
-
-
-      if (DONE_STATUSES.has(statusText) && isCurrentTask(generation, targetId)) {
-
-
-        setLoading((prev) => (isCurrentTask(generation, targetId) ? false : prev))
-
-
-        stopPolling()
 
 
       }
