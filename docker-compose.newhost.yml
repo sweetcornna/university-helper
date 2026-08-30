@@ -17,6 +17,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/proxy_params.conf:/etc/nginx/proxy_params.conf:ro
+      - ./nginx/snippets/security_headers.conf:/etc/nginx/snippets/security_headers.conf:ro
       - ./frontend/dist:/usr/share/nginx/html:ro
     networks:
       - shuake-net

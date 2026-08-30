@@ -264,7 +264,7 @@ for index in "${!validated_rel_paths[@]}"; do
   case "$rel_path" in
     Dockerfile.server|backend/requirements.txt|backend/pyproject.toml|docker-compose*.yml)
       needs_app_rebuild=true ;;
-    frontend/*|nginx/nginx.conf|nginx/proxy_params.conf)
+    frontend/*|nginx/nginx.conf|nginx/proxy_params.conf|nginx/snippets/*)
       needs_web_reload=true ;;
   esac
 done
