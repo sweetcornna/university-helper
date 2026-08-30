@@ -2,10 +2,11 @@ name: release
 
 # Fan-out from one v* tag (the single source of truth for the version):
 #   create-release  → makes a DRAFT GitHub Release, stamps version, extracts notes
-#   app-image       → multi-arch server image to GHCR (:version + :latest)
-#   web-image       → multi-arch web image to GHCR (:version + :latest)
+#   app-image       → multi-arch server image to GHCR (:version, digest output)
+#   web-image       → multi-arch web image to GHCR (:version, digest output)
 #   desktop         → Win/macOS(x2)/Linux installers + updater artifacts (Tauri)
-#   publish         → flips the draft to published once images + every desktop leg pass
+#   promote-images  → after every build gate, retags those exact digests as :latest
+#   publish         → flips the draft to published after promotion succeeds
 #
 # First-run prerequisite: Settings → Actions → General → Workflow permissions =
 # "Read and write". GHCR packages default to PRIVATE — make
@@ -123,6 +124,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: create-release
     timeout-minutes: 45
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image_version: ${{ steps.meta.outputs.image_version }}
     permissions:
       contents: read
       packages: write
@@ -168,6 +172,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push app image
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -180,13 +185,15 @@ jobs:
             PIP_INDEX_URL=https://pypi.org/simple
           tags: |
             ${{ env.APP_IMAGE }}:${{ steps.meta.outputs.image_version }}
-            ${{ env.APP_IMAGE }}:latest
 
   # ───────────────────────── 2b. web image ──────────────────────────────────
   web-image:
     runs-on: ubuntu-latest
     needs: create-release
     timeout-minutes: 30
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image_version: ${{ steps.meta.outputs.image_version }}
     permissions:
       contents: read
       packages: write
@@ -232,6 +239,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push web image
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -240,7 +248,6 @@ jobs:
           push: true
           tags: |
             ${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.image_version }}
-            ${{ env.WEB_IMAGE }}:latest
 
   # ───────────────────────── 3. desktop installers + updater ─────────────────
   desktop:
@@ -382,10 +389,56 @@ jobs:
           [ -x "$BIN" ] || { echo "missing signed sidecar: $BIN" >&2; exit 1; }
           bash scripts/smoke_sidecar.sh "$BIN"
 
-  # ───────────────────────── 4. publish (gate on everything) ─────────────────
-  publish:
+  # ───────────────────────── 4. promote (gate on everything) ────────────────
+  promote-images:
     runs-on: ubuntu-latest
     needs: [create-release, app-image, web-image, desktop]
+    permissions:
+      packages: write
+    env:
+      APP_DIGEST: ${{ needs.app-image.outputs.digest }}
+      APP_VERSION: ${{ needs.app-image.outputs.image_version }}
+      WEB_DIGEST: ${{ needs.web-image.outputs.digest }}
+      WEB_VERSION: ${{ needs.web-image.outputs.image_version }}
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR for immutable promotion
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote immutable image digests to latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_pattern='^[0-9]+\.[0-9]+\.[0-9]+([-_][0-9A-Za-z.-]+)?$'
+          digest_pattern='^sha256:[0-9a-f]{64}$'
+          if [[ ! "$APP_VERSION" =~ $version_pattern || ! "$WEB_VERSION" =~ $version_pattern ]]; then
+            echo "error: image version output is not a validated immutable tag" >&2
+            exit 2
+          fi
+          if [[ ! "$APP_DIGEST" =~ $digest_pattern || ! "$WEB_DIGEST" =~ $digest_pattern ]]; then
+            echo "error: image jobs did not produce valid content digests" >&2
+            exit 2
+          fi
+
+          # Each registry update names the exact build digest; no mutable tag,
+          # source checkout, pull, or rebuild participates in promotion. With
+          # set -e, a failed second update fails this job and blocks publish.
+          docker buildx imagetools create \
+            --tag "${APP_IMAGE}:latest" \
+            "${APP_IMAGE}@${APP_DIGEST}"
+          docker buildx imagetools create \
+            --tag "${WEB_IMAGE}:latest" \
+            "${WEB_IMAGE}@${WEB_DIGEST}"
+
+  # ───────────────────────── 5. publish (gate on everything) ─────────────────
+  publish:
+    runs-on: ubuntu-latest
+    needs: [create-release, app-image, web-image, desktop, promote-images]
     permissions:
       contents: write
     steps:

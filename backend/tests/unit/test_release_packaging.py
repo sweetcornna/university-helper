@@ -403,7 +403,13 @@ def test_release_workflow_builds_release_images_in_independent_timeout_bounded_j
 
 
 def test_release_publish_job_waits_for_both_release_image_jobs():
-    assert _job_needs("publish") == {"create-release", "app-image", "web-image", "desktop"}
+    assert _job_needs("publish") == {
+        "create-release",
+        "app-image",
+        "web-image",
+        "desktop",
+        "promote-images",
+    }
 
 
 def test_release_image_builds_use_docker_safe_image_version_tags():
@@ -412,20 +418,75 @@ def test_release_image_builds_use_docker_safe_image_version_tags():
 
     assert "${{ env.APP_IMAGE }}:${{ steps.meta.outputs.image_version }}" in app_step
     assert "${{ env.APP_IMAGE }}:${{ steps.meta.outputs.version }}" not in app_step
-    assert "${{ env.APP_IMAGE }}:latest" in app_step
+    assert ":latest" not in app_step
     assert "${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.image_version }}" in web_step
     assert "${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.version }}" not in web_step
-    assert "${{ env.WEB_IMAGE }}:latest" in web_step
+    assert ":latest" not in web_step
     assert "cache-to: type=gha" not in web_step
 
 
-def test_release_workflow_grants_package_write_only_to_image_jobs():
+def test_release_image_jobs_expose_the_build_digest_for_later_promotion():
+    app_job = _job_block("app-image")
+    web_job = _job_block("web-image")
+
+    for job in (app_job, web_job):
+        assert "digest: ${{ steps.build.outputs.digest }}" in job
+        assert "image_version: ${{ steps.meta.outputs.image_version }}" in job
+        assert "id: build" in job
+
+
+def test_release_promotion_waits_for_every_build_gate_and_uses_only_digests():
+    promotion_job = _job_block("promote-images")
+    promotion_script = _workflow_run_block("promote-images", "Promote immutable image digests to latest")
+
+    assert _job_needs("promote-images") == {"create-release", "app-image", "web-image", "desktop"}
+    assert "APP_DIGEST: ${{ needs.app-image.outputs.digest }}" in promotion_job
+    assert "WEB_DIGEST: ${{ needs.web-image.outputs.digest }}" in promotion_job
+    assert "APP_VERSION: ${{ needs.app-image.outputs.image_version }}" in promotion_job
+    assert "WEB_VERSION: ${{ needs.web-image.outputs.image_version }}" in promotion_job
+    assert "packages: write" in promotion_job
+    assert "docker buildx imagetools create" in promotion_script
+    assert promotion_script.count("docker buildx imagetools create") == 2
+    assert "${APP_IMAGE}@${APP_DIGEST}" in promotion_script
+    assert "${WEB_IMAGE}@${WEB_DIGEST}" in promotion_script
+    assert "docker build-push-action" not in promotion_job
+    assert "docker build " not in promotion_script
+    assert "docker pull" not in promotion_script
+    assert "${{" not in promotion_script
+
+
+def test_release_gate_does_not_run_promotion_or_publish_after_desktop_failure():
+    promotion_needs = _job_needs("promote-images")
+    publish_needs = _job_needs("publish")
+    failed_jobs = {"desktop"}
+
+    assert failed_jobs & promotion_needs
+    assert "promote-images" in publish_needs
+    assert failed_jobs & publish_needs
+    assert "if: always()" not in _job_block("promote-images")
+    assert "if: always()" not in _job_block("publish")
+
+
+def test_release_publish_requires_both_immutable_promotions_to_finish():
+    promotion_script = _workflow_run_block("promote-images", "Promote immutable image digests to latest")
+    app_promotion = promotion_script.index('"${APP_IMAGE}@${APP_DIGEST}"')
+    web_promotion = promotion_script.index('"${WEB_IMAGE}@${WEB_DIGEST}"')
+
+    assert "set -euo pipefail" in promotion_script
+    assert app_promotion < web_promotion
+    assert _job_needs("publish") >= {"promote-images", "app-image", "web-image", "desktop"}
+
+
+def test_release_workflow_grants_package_write_only_to_image_or_promotion_jobs():
     workflow = _workflow_text()
 
     assert "permissions:\n  contents: read" in workflow
     assert "permissions:\n  contents: write\n  packages: write" not in workflow
     assert "packages: write" in _job_block("app-image")
     assert "packages: write" in _job_block("web-image")
+    promotion_job = _job_block("promote-images")
+    assert "packages: write" in promotion_job
+    assert "contents: read" not in promotion_job
     assert "packages: write" not in _job_block("create-release")
     assert "packages: write" not in _job_block("desktop")
     assert "packages: write" not in _job_block("publish")
@@ -440,7 +501,7 @@ def test_release_workflow_dispatch_checkouts_use_requested_release_ref():
 def test_release_workflow_run_blocks_do_not_interpolate_github_expressions():
     blocks = _workflow_run_blocks()
 
-    assert len(blocks) == 16
+    assert len(blocks) == 17
     for job_name, step_name, script in blocks:
         assert "${{" not in script, f"direct GitHub expression in {job_name}/{step_name}"
 
