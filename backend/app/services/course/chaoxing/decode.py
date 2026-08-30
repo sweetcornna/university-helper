@@ -19,11 +19,12 @@ from typing import Any
 import requests
 from bs4 import BeautifulSoup, NavigableString
 
-from api.config import GlobalConst as gc
-from api.cookies import use_cookies
-from api.font_decoder import FontDecoder
 from api.logger import logger
-from api.vision_ocr import is_vision_ocr_enabled, vision_ocr
+
+from ..common.ocr import is_vision_ocr_enabled, vision_ocr
+from .config import GlobalConst as gc
+from .cookies import use_cookies
+from .font_decoder import FontDecoder
 
 try:
     from PIL import Image, ImageEnhance, ImageFilter

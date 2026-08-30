@@ -1,7 +1,8 @@
 import asyncio
 
-from api.live import Live
 from api.logger import logger
+
+from .live import Live
 
 
 class LiveProcessor:

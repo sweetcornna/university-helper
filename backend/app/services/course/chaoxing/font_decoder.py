@@ -2,9 +2,10 @@ import re
 
 from bs4 import BeautifulSoup
 
-import api.cxsecret_font as cxfont
-from api.exceptions import FontDecodeError
 from api.logger import logger
+
+from . import cxsecret_font as cxfont
+from .exceptions import FontDecodeError
 
 
 class FontDecoder:

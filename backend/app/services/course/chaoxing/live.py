@@ -1,9 +1,10 @@
 import json
 import time
 
-from api.base import SessionManager
-from api.config import GlobalConst as gc
 from api.logger import logger
+
+from .config import GlobalConst as gc
+from .session_manager import SessionManager
 
 
 class Live:
