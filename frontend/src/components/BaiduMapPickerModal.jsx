@@ -35,6 +35,14 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
   const mapContainerRef = useRef(null)
   const mapRef = useRef(null)
   const markerRef = useRef(null)
+  const openRef = useRef(open)
+  const reverseGenerationRef = useRef(0)
+  const searchGenerationRef = useRef(0)
+  const searchLoadingRef = useRef(false)
+
+  // Keep async callbacks from writing after a close has been rendered, even
+  // before the close effect gets a chance to run.
+  openRef.current = open
 
   const [draft, setDraft] = useState(null)
   const [reverseLoading, setReverseLoading] = useState(false)
@@ -108,11 +116,23 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
   // effect above so its cleanup also handles parent/router unmounts.
   useEffect(() => {
     if (!open) {
+      reverseGenerationRef.current += 1
+      searchGenerationRef.current += 1
+      searchLoadingRef.current = false
       markerRef.current = null
       setDraft(null)
+      setReverseLoading(false)
       setSearchQuery('')
       setSearchResults([])
+      setSearchLoading(false)
       setSearchError('')
+    }
+
+    return () => {
+      openRef.current = false
+      reverseGenerationRef.current += 1
+      searchGenerationRef.current += 1
+      searchLoadingRef.current = false
     }
   }, [open])
 
@@ -137,31 +157,54 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
   }, [])
 
   const reverseGeocode = useCallback(async (lat, lng) => {
+    const generation = reverseGenerationRef.current + 1
+    reverseGenerationRef.current = generation
+    if (!openRef.current) return
+
+    const isCurrent = () =>
+      openRef.current && reverseGenerationRef.current === generation
+
     setReverseLoading(true)
     try {
       const data = await fetchJson(
         `${REVERSE_GEOCODE_URL}?lat=${lat}&lng=${lng}`
       )
+      if (!isCurrent()) return
       const address = data?.data?.address || '未解析到详细地址'
       setDraft((prev) =>
-        prev && prev.latitude === String(lat) && prev.longitude === String(lng)
+        isCurrent() &&
+        prev &&
+        prev.latitude === String(lat) &&
+        prev.longitude === String(lng)
           ? { ...prev, address }
           : prev
       )
     } catch {
+      if (!isCurrent()) return
       setDraft((prev) =>
-        prev && prev.latitude === String(lat) && prev.longitude === String(lng)
+        isCurrent() &&
+        prev &&
+        prev.latitude === String(lat) &&
+        prev.longitude === String(lng)
           ? { ...prev, address: '未解析到详细地址' }
           : prev
       )
     } finally {
-      setReverseLoading(false)
+      if (isCurrent()) setReverseLoading(false)
     }
   }, [])
 
   const handleSearch = useCallback(async () => {
     const q = searchQuery.trim()
-    if (!q) return
+    if (!q || !openRef.current || searchLoadingRef.current) return
+
+    const generation = searchGenerationRef.current + 1
+    searchGenerationRef.current = generation
+    searchLoadingRef.current = true
+
+    const isCurrent = () =>
+      openRef.current && searchGenerationRef.current === generation
+
     setSearchLoading(true)
     setSearchError('')
     setSearchResults([])
@@ -169,6 +212,7 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
       const data = await fetchJson(
         `${PLACE_SEARCH_URL}?query=${encodeURIComponent(q)}`
       )
+      if (!isCurrent()) return
       const results = data?.data?.results || []
       if (results.length === 0) {
         setSearchError('未找到相关地点')
@@ -176,9 +220,12 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
         setSearchResults(results)
       }
     } catch {
-      setSearchError('搜索失败，请稍后重试')
+      if (isCurrent()) setSearchError('搜索失败，请稍后重试')
     } finally {
-      setSearchLoading(false)
+      if (isCurrent()) {
+        searchLoadingRef.current = false
+        setSearchLoading(false)
+      }
     }
   }, [searchQuery])
 
