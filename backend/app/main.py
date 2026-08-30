@@ -314,6 +314,8 @@ def _mount_spa(application: FastAPI, dist: Path) -> None:
     @application.get("/{full_path:path}", include_in_schema=False, name="spa")
     async def spa(full_path: str):
         candidate = (dist / full_path).resolve()
+        if full_path == "api" or full_path == "metrics" or full_path.startswith(("api/", "metrics/")):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
         # Serve a real in-tree static file (favicon.svg, sw.js, robots.txt, ...).
         # `dist.resolve() in candidate.parents` blocks traversal escapes such as
         # '../../etc/passwd' (candidate would resolve outside dist).
