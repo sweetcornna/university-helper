@@ -43,8 +43,10 @@ class _TenantPoolEntry:
 
 
 # tenant_pools is LRU-ordered; `_tenant_lock` guards the map itself plus the
-# `in_use` refcounts. ThreadedConnectionPool already serializes its own
-# internal state so the outer lock only covers the map mutation window.
+# `in_use` refcounts. A ref is held for the whole checkout lifecycle: from
+# before getconn() starts until putconn() (or its failure cleanup) finishes.
+# ThreadedConnectionPool serializes its own internal state, so slow pool calls
+# stay outside this outer lock without exposing an entry as idle prematurely.
 tenant_pools: OrderedDict[str, _TenantPoolEntry] = OrderedDict()
 _tenant_lock = threading.Lock()
 MAX_TENANT_POOLS = 100
@@ -162,19 +164,35 @@ def _checkout_tenant(name: str):
 def _release_tenant(name: str, conn) -> None:
     with _tenant_lock:
         entry = tenant_pools.get(name)
-        if entry is None:
-            # Pool was evicted while we held the connection — close directly.
-            try:
-                conn.close()
-            except Exception:  # pragma: no cover
-                pass
-            return
-        entry.in_use = max(0, entry.in_use - 1)
-        pool = entry.pool
+
+    if entry is None:
+        # Defensive fallback for callers returning a connection whose tenant
+        # entry is unknown (for example, external test/process cleanup).
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover
+            logger.exception("Failed to close connection for unknown tenant %s", name)
+        return
+
+    pool = entry.pool
     try:
         pool.putconn(conn)
-    except Exception:  # pragma: no cover
+    except Exception:
         logger.exception("putconn failed for tenant %s", name)
+        # The pool did not accept ownership. Close the connection directly so
+        # a return failure cannot leak a live socket. Preserve the established
+        # release contract by logging rather than surfacing this cleanup error.
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover
+            logger.exception("Failed to close unreturned connection for tenant %s", name)
+    finally:
+        # Keep the reference until putconn (and failure cleanup) is complete.
+        # Otherwise eviction can observe zero, closeall(), and race the return.
+        with _tenant_lock:
+            current = tenant_pools.get(name)
+            if current is entry:
+                current.in_use = max(0, current.in_use - 1)
 
 
 def get_tenant_db_connection(tenant_db_name: str):
