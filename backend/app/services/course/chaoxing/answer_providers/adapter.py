@@ -4,6 +4,7 @@ import requests
 from loguru import logger
 
 from ..answer_base import Tiku
+from ..endpoint_security import assert_public_endpoint, is_public_endpoint
 
 
 class TikuAdapter(Tiku):
@@ -12,6 +13,7 @@ class TikuAdapter(Tiku):
         super().__init__()
         self.name = "TikuAdapter题库"
         self.api = ""
+        self.http_proxy = None
 
     def _query(self, q_info: dict):
         # 判断题目类型
@@ -26,6 +28,10 @@ class TikuAdapter(Tiku):
         else:
             type = 4
 
+        if not is_public_endpoint(self.api) or (self.http_proxy and not is_public_endpoint(self.http_proxy)):
+            logger.error(f"{self.name}请求地址校验失败")
+            return None
+
         options = q_info["options"]
         try:
             res = requests.post(
@@ -36,6 +42,8 @@ class TikuAdapter(Tiku):
                     "type": type,
                 },
                 timeout=30,
+                allow_redirects=False,
+                **({"proxies": {"http": self.http_proxy, "https": self.http_proxy}} if self.http_proxy else {}),
             )
         except requests.exceptions.Timeout as exc:
             logger.error(f"{self.name}查询超时: {exc.__class__.__name__}")
@@ -77,4 +85,6 @@ class TikuAdapter(Tiku):
 
     def _init_tiku(self):
         # self.load_token()
-        self.api = self._conf["url"]
+        self.api = assert_public_endpoint(self._conf["url"])
+        raw_proxy = self._conf.get("http_proxy")
+        self.http_proxy = assert_public_endpoint(raw_proxy) if raw_proxy else None

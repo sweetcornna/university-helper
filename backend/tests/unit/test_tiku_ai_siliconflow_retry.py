@@ -28,7 +28,7 @@ def _build_ai(**config):
     provider.config_set(
         {
             "provider": "AI",
-            "endpoint": "https://ai.example.invalid/v1/chat/completions",
+            "endpoint": "https://93.184.216.34/v1/chat/completions",
             "key": "test-key",
             "model": "test-model",
             "min_interval_seconds": 0,
@@ -47,6 +47,7 @@ def _build_siliconflow(**config):
         {
             "provider": "SiliconFlow",
             "siliconflow_key": "test-key",
+            "siliconflow_endpoint": "https://93.184.216.34/v1/chat/completions",
             "min_interval_seconds": 0,
             **config,
         }

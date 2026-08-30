@@ -3,6 +3,7 @@ import math
 import re
 import threading
 import time
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -14,6 +15,7 @@ from ..answer_utils import (
     _prepare_option_lines,
     _strip_json_block,
 )
+from ..endpoint_security import assert_public_endpoint, is_public_endpoint
 
 _DEFAULT_MAX_RETRIES = 3
 _DEFAULT_MIN_INTERVAL_SECONDS = 3.0
@@ -51,6 +53,13 @@ def _parse_non_negative_finite(value, default: float) -> float:
     if not math.isfinite(parsed) or parsed < 0:
         return default
     return parsed
+
+
+def _safe_status_code(value: object) -> int | None:
+    """Return an HTTP status suitable for diagnostics, without user data."""
+    if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599:
+        return value
+    return None
 
 
 class AI(Tiku):
@@ -97,7 +106,8 @@ class AI(Tiku):
         }
 
     def _build_client(self):
-        httpx_kwargs = {"timeout": self.timeout}
+        httpx_kwargs: dict[str, Any] = {"timeout": self.timeout}
+        httpx_kwargs["follow_redirects"] = False
         if self.http_proxy:
             httpx_kwargs["proxy"] = self.http_proxy
         if self.disable_ssl_verify:
@@ -106,7 +116,7 @@ class AI(Tiku):
             try:
                 self._httpx_client.close()
             except Exception:
-                pass
+                logger.debug("AI题库旧 HTTP 客户端关闭失败")
         self._httpx_client = httpx.Client(**httpx_kwargs)
 
     def _respect_interval(self):
@@ -138,7 +148,7 @@ class AI(Tiku):
         if not self._httpx_client:
             logger.error("AI题库 HTTP 客户端未初始化")
             return None
-        last_error = None
+        last_error_type: str | None = None
         max_attempts = _parse_attempt_count(self.max_retries)
         retry_delay = _parse_non_negative_finite(self.retry_delay, _DEFAULT_RETRY_DELAY)
         min_interval_seconds = _parse_non_negative_finite(
@@ -148,7 +158,13 @@ class AI(Tiku):
         for attempt in range(1, max_attempts + 1):
             sem = self._request_semaphore
             acquired = False
+            attempt_status_code: int | None = None
             try:
+                if not is_public_endpoint(getattr(self, "endpoint", "")) or (
+                    self.http_proxy and not is_public_endpoint(self.http_proxy)
+                ):
+                    logger.error("AI题库请求地址校验失败")
+                    return None
                 if sem is not None:
                     sem.acquire()
                     acquired = True
@@ -165,16 +181,15 @@ class AI(Tiku):
                     self.endpoint,
                     headers=headers,
                     json=payload,
+                    follow_redirects=False,
                 )
                 if acquired:
                     sem.release()
                     acquired = False
-                if response.status_code != 200:
-                    try:
-                        err_body = response.json()
-                    except Exception:
-                        err_body = response.text[:200]
-                    raise RuntimeError(f"Error code: {response.status_code} - {err_body}")
+                attempt_status_code = _safe_status_code(response.status_code)
+                if attempt_status_code != 200:
+                    safe_status = attempt_status_code if attempt_status_code is not None else "unknown"
+                    raise RuntimeError(f"HTTP status {safe_status}")
 
                 data = response.json()
                 raw_content = data["choices"][0]["message"]["content"] or ""
@@ -208,7 +223,7 @@ class AI(Tiku):
                     try:
                         payload = json.loads(json_candidate_stripped)
                         answers = _ensure_answer_list(payload.get("Answer") or payload.get("answer"))
-                    except json.JSONDecodeError as json_exc:
+                    except json.JSONDecodeError:
                         payload = None
                         candidate_fixed = json_candidate_stripped
                         # 针对形如 {'Answer': ['输入/输出']} 的内容，尝试将单引号替换为双引号后再次解析
@@ -221,9 +236,7 @@ class AI(Tiku):
                         if payload is not None:
                             answers = _ensure_answer_list(payload.get("Answer") or payload.get("answer"))
                         else:
-                            logger.warning(
-                                f"AI大模型返回内容不是标准JSON，将按纯文本处理: {json_exc}; candidate={json_candidate_stripped[:200]!r}"
-                            )
+                            logger.warning("AI大模型返回内容不是标准JSON，将按纯文本处理")
                             answers = _ensure_answer_list(base_text)
                 # 没有可用的 JSON 片段，直接按纯文本处理
                 elif base_text:
@@ -237,23 +250,27 @@ class AI(Tiku):
                     return None
                 return "\n".join(answers).strip()
             except Exception as exc:
-                last_error = exc
-                msg = str(exc)
-                if "429" in msg or "rate limit" in msg.lower():
+                last_error_type = type(exc).__name__
+                if attempt_status_code == 429:
                     cool_down = max(min_interval_seconds * 2, 5)
                     logger.warning(
-                        f"AI大模型请求失败 ({attempt}/{max_attempts}) 且触发限流，将休眠 {cool_down:.2f} 秒: {exc}"
+                        f"AI大模型请求失败 ({attempt}/{max_attempts}) 且触发限流 [{last_error_type}]，"
+                        f"HTTP {attempt_status_code}，将休眠 {cool_down:.2f} 秒"
                     )
                     if attempt < max_attempts:
                         time.sleep(cool_down)
                 else:
-                    logger.warning(f"AI大模型请求失败 ({attempt}/{max_attempts}): {exc}")
+                    status_suffix = f"，HTTP {attempt_status_code}" if attempt_status_code is not None else ""
+                    logger.warning(f"AI大模型请求失败 ({attempt}/{max_attempts}) [{last_error_type}]{status_suffix}")
                     if attempt < max_attempts:
                         time.sleep(retry_delay * attempt)
             finally:
                 if acquired and sem is not None:
                     sem.release()
-        logger.error(f"AI大模型连续失败，最后错误: {last_error}")
+        if last_error_type:
+            logger.error(f"AI大模型连续失败 [{last_error_type}]")
+        else:
+            logger.error("AI大模型连续失败")
         return None
 
     def _query(self, q_info: dict):
@@ -261,10 +278,11 @@ class AI(Tiku):
         return self._invoke_completion(messages)
 
     def _init_tiku(self):
-        self.endpoint = self._conf["endpoint"]
+        self.endpoint = assert_public_endpoint(self._conf["endpoint"])
         self.key = self._conf["key"]
         self.model = self._conf["model"]
-        self.http_proxy = self._conf.get("http_proxy")
+        raw_proxy = self._conf.get("http_proxy")
+        self.http_proxy = assert_public_endpoint(raw_proxy) if raw_proxy else None
         self.min_interval_seconds = _parse_non_negative_finite(
             self._conf.get("min_interval_seconds", _DEFAULT_MIN_INTERVAL_SECONDS),
             _DEFAULT_MIN_INTERVAL_SECONDS,

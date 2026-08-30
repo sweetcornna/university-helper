@@ -12,6 +12,7 @@ from ..answer_utils import (
     _prepare_option_lines,
     _strip_json_block,
 )
+from ..endpoint_security import assert_public_endpoint, is_public_endpoint
 
 _DEFAULT_MAX_RETRIES = 3
 _DEFAULT_MIN_INTERVAL = 3.0
@@ -51,6 +52,13 @@ def _parse_non_negative_finite(value, default: float) -> float:
     return parsed
 
 
+def _safe_status_code(value: object) -> int | None:
+    """Return an HTTP status suitable for diagnostics, without user data."""
+    if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599:
+        return value
+    return None
+
+
 class SiliconFlow(Tiku):
     """硅基流动大模型答题实现"""
 
@@ -62,6 +70,7 @@ class SiliconFlow(Tiku):
         self.timeout = 30
         self.max_retries = _DEFAULT_MAX_RETRIES
         self.retry_delay = _DEFAULT_RETRY_DELAY
+        self.http_proxy = None
 
     def _query(self, q_info: dict):
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
@@ -92,22 +101,36 @@ class SiliconFlow(Tiku):
             "response_format": {"type": "text"},
         }
 
-        last_error = None
+        last_error_type: str | None = None
         max_attempts = _parse_attempt_count(self.max_retries)
         retry_delay = _parse_non_negative_finite(self.retry_delay, _DEFAULT_RETRY_DELAY)
         min_interval = _parse_non_negative_finite(self.min_interval, _DEFAULT_MIN_INTERVAL)
         for attempt in range(1, max_attempts + 1):
+            attempt_status_code: int | None = None
             try:
+                if not is_public_endpoint(getattr(self, "api_endpoint", "")) or (
+                    self.http_proxy and not is_public_endpoint(self.http_proxy)
+                ):
+                    logger.error("硅基流动题库请求地址校验失败")
+                    return None
                 if self.last_request_time:
                     interval = time.time() - self.last_request_time
                     if interval < min_interval:
                         time.sleep(min_interval - interval)
 
-                response = self._session.post(self.api_endpoint, headers=headers, json=payload, timeout=self.timeout)
+                response = self._session.post(
+                    self.api_endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=self.timeout,
+                    allow_redirects=False,
+                )
                 self.last_request_time = time.time()
 
-                if response.status_code != 200:
-                    raise RuntimeError(f"HTTP {response.status_code}: {response.text[:200]}")
+                attempt_status_code = _safe_status_code(response.status_code)
+                if attempt_status_code != 200:
+                    safe_status = attempt_status_code if attempt_status_code is not None else "unknown"
+                    raise RuntimeError(f"HTTP status {safe_status}")
 
                 result = response.json()
                 content = result["choices"][0]["message"]["content"]
@@ -117,19 +140,27 @@ class SiliconFlow(Tiku):
                     raise ValueError("硅基流动返回答案为空")
                 return "\n".join(answers).strip()
             except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError, RuntimeError) as exc:
-                last_error = exc
-                logger.warning(f"硅基流动API调用失败 ({attempt}/{max_attempts}): {exc}")
+                last_error_type = type(exc).__name__
+                status_suffix = f"，HTTP {attempt_status_code}" if attempt_status_code is not None else ""
+                logger.warning(f"硅基流动API调用失败 ({attempt}/{max_attempts}) [{last_error_type}]{status_suffix}")
                 if attempt < max_attempts:
                     time.sleep(retry_delay * attempt)
 
-        logger.error(f"硅基流动API连续失败，最后错误: {last_error}")
+        if last_error_type:
+            logger.error(f"硅基流动API连续失败 [{last_error_type}]")
+        else:
+            logger.error("硅基流动API连续失败")
         return None
 
     def _init_tiku(self):
         # 从配置文件读取参数
-        self.api_endpoint = self._conf.get("siliconflow_endpoint", "https://api.siliconflow.cn/v1/chat/completions")
+        self.api_endpoint = assert_public_endpoint(
+            self._conf.get("siliconflow_endpoint", "https://api.siliconflow.cn/v1/chat/completions")
+        )
         self.api_key = self._conf["siliconflow_key"]
         self.model_name = self._conf.get("siliconflow_model", "deepseek-ai/DeepSeek-V3")
+        raw_proxy = self._conf.get("http_proxy")
+        self.http_proxy = assert_public_endpoint(raw_proxy) if raw_proxy else None
         self.min_interval = _parse_non_negative_finite(
             self._conf.get("min_interval_seconds", _DEFAULT_MIN_INTERVAL),
             _DEFAULT_MIN_INTERVAL,
@@ -141,3 +172,5 @@ class SiliconFlow(Tiku):
             _DEFAULT_RETRY_DELAY,
         )
         self._session = requests.Session()
+        if self.http_proxy:
+            self._session.proxies.update({"http": self.http_proxy, "https": self.http_proxy})

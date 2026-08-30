@@ -10,6 +10,7 @@ from app.services.notification import NotificationFactory
 from app.services.notification.providers import validate_notification_url
 
 from ..task_store import task_store
+from .endpoint_security import validate_tiku_config
 from .learning import ChapterTask, JobProcessor, init_chaoxing
 from .payload_mapper import normalize_tiku_config
 
@@ -113,6 +114,12 @@ class ChaoxingLearningManager:
         self._restore_tasks_from_store()
 
     def start_task(self, user_id: str, payload: dict[str, Any]) -> str:
+        # Validate user-controlled answer-provider destinations before creating
+        # persistent state or a worker thread.  The API maps the safe,
+        # detail-free exception to a 4xx response; direct callers get the same
+        # fail-closed behavior.
+        validate_tiku_config((payload or {}).get("tiku_config"))
+
         task_id = uuid4().hex
         pause_event = threading.Event()
         pause_event.set()

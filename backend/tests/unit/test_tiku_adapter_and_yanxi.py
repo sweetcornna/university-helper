@@ -31,7 +31,7 @@ def _logs(mock_logger):
 
 def _adapter():
     provider = TikuAdapter()
-    provider.api = f"https://adapter.example.invalid/query?token={_TOKEN_SENTINEL}"
+    provider.api = f"https://93.184.216.34/query?token={_TOKEN_SENTINEL}"
     return provider
 
 

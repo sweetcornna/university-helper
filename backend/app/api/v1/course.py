@@ -11,6 +11,11 @@ from pydantic import BaseModel
 
 from app.dependencies import get_current_user
 from app.services.course.chaoxing.course_portal_service import chaoxing_course_portal_service
+from app.services.course.chaoxing.endpoint_security import (
+    INVALID_ENDPOINT_CONFIG_DETAIL,
+    UnsafeEndpointError,
+    validate_tiku_config,
+)
 from app.services.course.chaoxing.signin import signin_manager
 from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
 from app.services.notification import NotificationFactory
@@ -126,6 +131,11 @@ async def start_course_learning(
 
     user_id = _current_user_id(current_user)
     try:
+        await _run_blocking(validate_tiku_config, request.tiku_config or {})
+    except UnsafeEndpointError as exc:
+        raise HTTPException(status_code=422, detail=INVALID_ENDPOINT_CONFIG_DETAIL) from exc
+
+    try:
         learning_manager = _get_learning_manager()
         task_id = await _run_blocking(
             learning_manager.start_task,
@@ -155,6 +165,8 @@ async def start_course_learning(
             task_id=task_id,
             current_task="preparing",
         )
+    except UnsafeEndpointError as exc:
+        raise HTTPException(status_code=422, detail=INVALID_ENDPOINT_CONFIG_DETAIL) from exc
     except Exception as exc:
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start course learning task", exc) from exc
