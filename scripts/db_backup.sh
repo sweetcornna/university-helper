@@ -46,6 +46,18 @@ run_age() {
     age "${age_args[@]}"
 }
 
+# Keep the in-progress output separate from the published backup.  A failed
+# producer in a pipe can still leave bytes in its downstream output, so the
+# final filename must not be opened until every producer has succeeded and
+# the result has passed the basic non-empty check.
+TMP_OUT=""
+cleanup_tmp() {
+    if [[ -n "$TMP_OUT" ]]; then
+        rm -f -- "$TMP_OUT"
+    fi
+}
+trap cleanup_tmp EXIT
+
 if [[ "$encryption" == "disabled" && "${ALLOW_UNENCRYPTED:-0}" != "1" ]]; then
     echo "$LOG_PREFIX WARNING: no AGE_RECIPIENT(_FILE) set. Backup will be plaintext on disk." >&2
 fi
@@ -54,16 +66,25 @@ fi
 if [[ "$encryption" != "disabled" ]]; then
     OUT="$BACKUP_DIR/uh-$STAMP.sql.gz.age"
     echo "$LOG_PREFIX backing up $CONTAINER (encrypted) -> $OUT"
+    TMP_OUT="$(mktemp "$BACKUP_DIR/.uh-$STAMP.sql.gz.age.XXXXXX")"
     docker exec "$CONTAINER" pg_dumpall -U "${POSTGRES_USER:-easylearning}" \
         | gzip \
         | run_age \
-        > "$OUT"
+        > "$TMP_OUT"
 else
     OUT="$BACKUP_DIR/uh-$STAMP.sql.gz"
     echo "$LOG_PREFIX backing up $CONTAINER -> $OUT"
-    docker exec "$CONTAINER" pg_dumpall -U "${POSTGRES_USER:-easylearning}" | gzip > "$OUT"
+    TMP_OUT="$(mktemp "$BACKUP_DIR/.uh-$STAMP.sql.gz.XXXXXX")"
+    docker exec "$CONTAINER" pg_dumpall -U "${POSTGRES_USER:-easylearning}" | gzip > "$TMP_OUT"
 fi
-chmod 600 "$OUT"
+
+if [[ ! -s "$TMP_OUT" ]]; then
+    echo "$LOG_PREFIX ERROR: backup output is empty" >&2
+    exit 1
+fi
+chmod 600 "$TMP_OUT"
+mv -f -- "$TMP_OUT" "$OUT"
+TMP_OUT=""
 SIZE=$(du -h "$OUT" | cut -f1)
 echo "$LOG_PREFIX backup ok ($SIZE, encryption=$encryption)"
 
@@ -72,12 +93,23 @@ ENV_PATH="${ENV_PATH:-/opt/university-helper/.env}"
 if [[ -f "$ENV_PATH" ]]; then
     if [[ "$encryption" != "disabled" ]]; then
         ENV_OUT="$BACKUP_DIR/.env.$STAMP.age"
-        run_age < "$ENV_PATH" > "$ENV_OUT"
-        chmod 600 "$ENV_OUT"
+        TMP_OUT="$(mktemp "$BACKUP_DIR/.env.$STAMP.age.XXXXXX")"
+        run_age < "$ENV_PATH" > "$TMP_OUT"
+        if [[ ! -s "$TMP_OUT" ]]; then
+            echo "$LOG_PREFIX ERROR: env snapshot output is empty" >&2
+            exit 1
+        fi
+        chmod 600 "$TMP_OUT"
+        mv -f -- "$TMP_OUT" "$ENV_OUT"
+        TMP_OUT=""
         echo "$LOG_PREFIX env snapshotted (encrypted)"
     elif [[ "${ALLOW_UNENCRYPTED:-0}" == "1" ]]; then
-        cp "$ENV_PATH" "$BACKUP_DIR/.env.$STAMP"
-        chmod 600 "$BACKUP_DIR/.env.$STAMP"
+        ENV_OUT="$BACKUP_DIR/.env.$STAMP"
+        TMP_OUT="$(mktemp "$BACKUP_DIR/.env.$STAMP.XXXXXX")"
+        cp "$ENV_PATH" "$TMP_OUT"
+        chmod 600 "$TMP_OUT"
+        mv -f -- "$TMP_OUT" "$ENV_OUT"
+        TMP_OUT=""
         echo "$LOG_PREFIX env snapshotted (plaintext — ALLOW_UNENCRYPTED=1)"
     else
         echo "$LOG_PREFIX SKIPPING env snapshot: no AGE_RECIPIENT; refusing to write plaintext secrets"
