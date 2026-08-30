@@ -42,10 +42,23 @@ export default function useBackgroundTasks(requestChaoxingApi) {
     setStatusLoading(true)
 
     try {
-      const [statusResp, logsResp] = await Promise.all([
-        requestChaoxingApi(`/task/${currentTaskId}`),
-        requestChaoxingApi(`/logs/${currentTaskId}?cursor=${logCursorRef.current}`)
-      ])
+      // Start both requests together, but keep status as the primary chain.
+      // Convert the log rejection immediately so a status failure can finish
+      // without leaving an unhandled log rejection behind.
+      const statusPromise = Promise.resolve(requestChaoxingApi(`/task/${currentTaskId}`))
+      let logsPromise
+      try {
+        logsPromise = Promise.resolve(
+          requestChaoxingApi(`/logs/${currentTaskId}?cursor=${logCursorRef.current}`)
+        ).then(
+          (value) => ({ ok: true, value }),
+          (error) => ({ ok: false, error })
+        )
+      } catch (error) {
+        logsPromise = Promise.resolve({ ok: false, error })
+      }
+
+      const statusResp = await statusPromise
 
       // The open task changed while this request was in flight — discard the
       // stale result so it can't overwrite the new task's view or cursor.
@@ -61,16 +74,31 @@ export default function useBackgroundTasks(requestChaoxingApi) {
           })
         )
       }
-      if (Array.isArray(logsResp?.data) && logsResp.data.length > 0) {
-        setLogs((prev) => [...prev, ...logsResp.data].slice(-200))
-      }
-      // Advance to the server-reported cursor so the next poll only fetches new lines.
-      if (typeof logsResp?.cursor === 'number') {
-        logCursorRef.current = logsResp.cursor
-      }
 
       if (statusData.status === 'completed' || statusData.status === 'error') {
         stopPolling()
+      }
+
+      const logsResult = await logsPromise
+
+      // The open task or in-flight generation changed while logs were
+      // loading — discard the stale result so it can't overwrite the new
+      // task's logs or cursor.
+      if (openTaskRef.current !== currentTaskId || inFlightRef.current !== currentTaskId) return
+
+      if (!logsResult.ok) {
+        // Logs are supplementary to status. Keep the current task alive and
+        // make the log-only failure visible without reporting task failure.
+        console.error(`Failed to fetch background task logs for ${currentTaskId}:`, logsResult.error)
+      } else {
+        const logsResp = logsResult.value
+        if (Array.isArray(logsResp?.data) && logsResp.data.length > 0) {
+          setLogs((prev) => [...prev, ...logsResp.data].slice(-200))
+        }
+        // Advance to the server-reported cursor so the next poll only fetches new lines.
+        if (typeof logsResp?.cursor === 'number') {
+          logCursorRef.current = logsResp.cursor
+        }
       }
     } catch (err) {
       if (openTaskRef.current !== currentTaskId || inFlightRef.current !== currentTaskId) return

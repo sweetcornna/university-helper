@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import useBackgroundTasks from './useBackgroundTasks'
+import { POLL_INTERVAL_MS } from '../utils'
 
 const deferred = () => {
   let resolve
@@ -139,12 +140,89 @@ describe('useBackgroundTasks polling races', () => {
 
       await act(async () => {
         status.reject(new Error('current task failed'))
-        logs.resolve({ data: [], cursor: 0 })
         await openPromise
       })
 
       expect(setResultType).toHaveBeenCalledWith('error')
       expect(setResultMessage).toHaveBeenCalledWith('current task failed')
+      expect(rendered.current.statusLoading).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+
+      // The status failure must finish without waiting for logs. Rejecting the
+      // still-pending logs request afterwards must remain handled.
+      await act(async () => {
+        logs.reject(new Error('logs also failed'))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+  test('keeps status and polling alive when logs fail', async () => {
+    const firstStatus = deferred()
+    const firstLogs = deferred()
+    const secondStatus = deferred()
+    const secondLogs = deferred()
+    let statusCalls = 0
+    let logsCalls = 0
+    const requestChaoxingApi = vi.fn((path) => {
+      if (path === '/task/current') {
+        statusCalls += 1
+        return (statusCalls === 1 ? firstStatus : secondStatus).promise
+      }
+      if (path === '/logs/current?cursor=0') {
+        logsCalls += 1
+        return (logsCalls === 1 ? firstLogs : secondLogs).promise
+      }
+      return Promise.reject(new Error(`Unexpected path: ${path}`))
+    })
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rendered = renderBackgroundTasks(requestChaoxingApi)
+    let openPromise
+
+    try {
+      await act(async () => {
+        openPromise = rendered.current.openBackgroundTask('current')
+      })
+
+      expect(statusCalls).toBe(1)
+      expect(logsCalls).toBe(1)
+      expect(rendered.current.statusLoading).toBe(true)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await act(async () => {
+        firstStatus.resolve({ data: { status: 'running', task_id: 'current' } })
+        firstLogs.reject(new Error('logs unavailable'))
+        await openPromise
+      })
+
+      expect(rendered.current.taskStatus).toEqual({ status: 'running', task_id: 'current' })
+      expect(rendered.current.statusLoading).toBe(false)
+      expect(logError).toHaveBeenCalledWith(
+        'Failed to fetch background task logs for current:',
+        expect.any(Error)
+      )
+      expect(vi.getTimerCount()).toBe(1)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+      })
+
+      expect(statusCalls).toBe(2)
+      expect(logsCalls).toBe(2)
+      expect(rendered.current.statusLoading).toBe(true)
+
+      await act(async () => {
+        secondStatus.resolve({ data: { status: 'completed', task_id: 'current' } })
+        secondLogs.resolve({ data: [{ message: 'finished' }], cursor: 1 })
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(rendered.current.taskStatus).toEqual({ status: 'completed', task_id: 'current' })
+      expect(rendered.current.logs).toEqual([{ message: 'finished' }])
       expect(rendered.current.statusLoading).toBe(false)
       expect(vi.getTimerCount()).toBe(0)
     } finally {
