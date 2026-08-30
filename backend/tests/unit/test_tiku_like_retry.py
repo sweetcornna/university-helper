@@ -112,3 +112,58 @@ def test_invalid_retry_flag_falls_back_to_enabled():
 
     assert like._retry is True
     assert post.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("config_key", "attribute", "payload_key"),
+    [
+        ("likeapi_search", "_search", "search"),
+        ("likeapi_vision", "_vision", "vision"),
+    ],
+)
+@pytest.mark.parametrize("value", [False, "false", 0, "0", "no", "off"])
+def test_likeapi_false_values_disable_request_flags(config_key, attribute, payload_key, value):
+    like = _build_like(**{config_key: value})
+
+    with patch(
+        "app.services.course.chaoxing.answer_providers.like.requests.post",
+        return_value=_hit_response(),
+    ) as post:
+        assert like._query(_question()) == "A"
+
+    assert getattr(like, attribute) is False
+    assert post.call_args.kwargs["json"][payload_key] is False
+
+
+@pytest.mark.parametrize(
+    ("config_key", "attribute", "payload_key"),
+    [
+        ("likeapi_search", "_search", "search"),
+        ("likeapi_vision", "_vision", "vision"),
+    ],
+)
+@pytest.mark.parametrize("value", [True, "true", "yes", "y", "on", 1, "1"])
+def test_likeapi_true_values_enable_request_flags(config_key, attribute, payload_key, value):
+    like = _build_like(**{config_key: value})
+
+    with patch(
+        "app.services.course.chaoxing.answer_providers.like.requests.post",
+        return_value=_hit_response(),
+    ) as post:
+        assert like._query(_question()) == "A"
+
+    assert getattr(like, attribute) is True
+    assert post.call_args.kwargs["json"][payload_key] is True
+
+
+@pytest.mark.parametrize(
+    ("config_key", "attribute", "default"),
+    [
+        ("likeapi_search", "_search", False),
+        ("likeapi_vision", "_vision", True),
+    ],
+)
+def test_likeapi_invalid_values_keep_safe_defaults(config_key, attribute, default):
+    like = _build_like(**{config_key: "not-a-bool"})
+
+    assert getattr(like, attribute) is default

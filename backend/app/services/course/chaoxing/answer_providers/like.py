@@ -379,9 +379,9 @@ class TikuLike(Tiku):
 
     def load_config(self) -> None:
         # 从配置中获取参数，提供默认值
-        self._search = self._conf.get("likeapi_search", False)
+        self._search = _parse_bool(self._conf.get("likeapi_search", False), False)
         self._model = self._conf.get("likeapi_model", None)
-        self._vision = self._conf.get("likeapi_vision", True)
+        self._vision = _parse_bool(self._conf.get("likeapi_vision", True), True)
         self._retry = _parse_bool(self._conf.get("likeapi_retry", _DEFAULT_RETRY), _DEFAULT_RETRY)
         self._retry_times = _parse_non_negative_int(
             self._conf.get("likeapi_retry_times", _DEFAULT_RETRY_TIMES),
