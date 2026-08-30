@@ -5,9 +5,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Set test environment variables before any imports
+# Set test environment variables before any application imports.
 os.environ.setdefault("SECRET_KEY", "test_secret_key_for_testing_only_min_32_chars")
 os.environ.setdefault("CORS_ORIGINS", '["http://localhost:3000"]')
+os.environ.setdefault("MAIN_DB_USER", "test_user")
+os.environ.setdefault("MAIN_DB_PASSWORD", "test_password")
+os.environ.setdefault("ENFORCE_HTTPS", "false")
 
 
 @pytest.fixture
