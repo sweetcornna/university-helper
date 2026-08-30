@@ -242,6 +242,11 @@ class ChaoxingSigninClient:
 
     @staticmethod
     def _safe_json(resp: requests.Response) -> dict[str, Any]:
+        data = ChaoxingSigninClient._safe_json_value(resp)
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _safe_json_value(resp: requests.Response) -> Any:
         try:
             return resp.json()
         except Exception:
@@ -772,10 +777,15 @@ class ChaoxingSigninClient:
         except ValueError as exc:
             # Not JSON → an error/redirect page, NOT an empty activeList.
             raise requests.RequestException("activelist returned a non-JSON response") from exc
+        if not isinstance(data, dict):
+            return []
         # `data.get("data", {})` does NOT guard an explicit ``"data": null`` (common
         # when a per-course session/cookie is invalid) — `None.get(...)` would raise
-        # AttributeError and crash discovery; use `or {}`.
-        active_list = (data.get("data") or {}).get("activeList", [])
+        # AttributeError and crash discovery; require the expected object envelope.
+        envelope = data.get("data")
+        if not isinstance(envelope, dict):
+            return []
+        active_list = envelope.get("activeList", [])
         return active_list if isinstance(active_list, list) else []
 
     def _resolve_sign_type(
@@ -861,7 +871,8 @@ class ChaoxingSigninClient:
         except requests.RequestException:
             return {}
         data = self._safe_json(resp)
-        return data.get("data") or {}
+        detail = data.get("data")
+        return detail if isinstance(detail, dict) else {}
 
     def _pre_sign(self, task: dict[str, Any]) -> None:
         params = {
@@ -1146,7 +1157,10 @@ class ChaoxingSigninClient:
             return ""
 
         object_id = ""
-        data = self._safe_json(upload_resp)
+        # Unlike the other response consumers, the upload object-id extractor
+        # intentionally supports nested list payloads. Keep this one call site
+        # on the raw JSON path while _safe_json protects object-shaped callers.
+        data = self._safe_json_value(upload_resp)
         if data:
             object_id = self._extract_object_id(data)
         if not object_id:

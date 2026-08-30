@@ -1,5 +1,9 @@
-﻿import time
+﻿import base64
+import time
 from unittest.mock import Mock, patch
+
+import pytest
+import requests
 
 from app.services.course.chaoxing.signin import ChaoxingSigninClient, build_remote_sign_endpoints
 
@@ -32,6 +36,131 @@ def test_chaoxing_signin_client_login_failure():
 
     assert result["status"] is False
     assert "invalid" in result["message"]
+
+
+@pytest.mark.parametrize("payload", [[], None, "unexpected", 42])
+def test_chaoxing_signin_login_ignores_non_object_json(payload):
+    client = ChaoxingSigninClient()
+    mock_response = Mock()
+    mock_response.json.return_value = payload
+
+    with patch.object(client.session, "post", return_value=mock_response):
+        result = client.login("user", "bad")
+
+    assert result == {"status": False, "message": "Login failed"}
+
+
+@pytest.mark.parametrize("payload", [[], None, "unexpected", 42])
+def test_chaoxing_signin_get_ppt_active_info_ignores_non_object_json(payload):
+    client = ChaoxingSigninClient()
+    mock_response = Mock()
+    mock_response.json.return_value = payload
+
+    with patch.object(client.session, "get", return_value=mock_response):
+        assert client.get_ppt_active_info("active-1") == {}
+
+
+def test_chaoxing_signin_get_ppt_active_info_keeps_object_payload():
+    client = ChaoxingSigninClient()
+    mock_response = Mock()
+    mock_response.json.return_value = {"data": {"ifphoto": 1}}
+
+    with patch.object(client.session, "get", return_value=mock_response):
+        assert client.get_ppt_active_info("active-1") == {"ifphoto": 1}
+
+
+@pytest.mark.parametrize("payload", [[], None, "unexpected", 42])
+def test_chaoxing_signin_photo_token_ignores_non_object_json(payload):
+    client = ChaoxingSigninClient()
+    token_response = Mock(status_code=200, text="")
+    token_response.json.return_value = payload
+    photo = base64.b64encode(b"x" * 100).decode()
+
+    with (
+        patch.object(client.session, "get", return_value=token_response),
+        patch.object(client.session, "post") as upload,
+    ):
+        assert client._upload_photo_and_get_object_id(photo) == ""
+
+    upload.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [[], None, "unexpected", 42])
+def test_chaoxing_signin_activity_list_ignores_non_object_json(payload):
+    client = ChaoxingSigninClient()
+    mock_response = Mock()
+    mock_response.json.return_value = payload
+    mock_response.raise_for_status.return_value = None
+
+    with patch.object(client.session, "get", return_value=mock_response):
+        assert client._get_course_activity_list("course-1", "class-1") == []
+
+
+def test_chaoxing_signin_activity_list_keeps_object_payload():
+    client = ChaoxingSigninClient()
+    mock_response = Mock()
+    mock_response.json.return_value = {"data": {"activeList": [{"id": "active-1"}]}}
+    mock_response.raise_for_status.return_value = None
+
+    with patch.object(client.session, "get", return_value=mock_response):
+        assert client._get_course_activity_list("course-1", "class-1") == [{"id": "active-1"}]
+
+
+def test_chaoxing_signin_safe_json_preserves_object_payload():
+    client = ChaoxingSigninClient()
+    payload = {"status": True, "data": {"value": "kept"}}
+    mock_response = Mock()
+    mock_response.json.return_value = payload
+
+    assert client._safe_json(mock_response) == payload
+
+
+def test_chaoxing_signin_safe_json_keeps_decode_error_fallback():
+    client = ChaoxingSigninClient()
+    mock_response = Mock()
+    mock_response.json.side_effect = ValueError("invalid JSON")
+
+    assert client._safe_json(mock_response) == {}
+
+
+def test_chaoxing_signin_activity_list_keeps_http_error_semantics():
+    client = ChaoxingSigninClient()
+    mock_response = Mock()
+    mock_response.raise_for_status.side_effect = requests.HTTPError("upstream failure")
+
+    with (
+        patch.object(client.session, "get", return_value=mock_response),
+        pytest.raises(requests.HTTPError, match="upstream failure"),
+    ):
+        client._get_course_activity_list("course-1", "class-1")
+
+
+def test_chaoxing_signin_activity_list_keeps_decode_error_semantics():
+    client = ChaoxingSigninClient()
+    mock_response = Mock()
+    mock_response.raise_for_status.return_value = None
+    mock_response.json.side_effect = ValueError("invalid JSON")
+
+    with (
+        patch.object(client.session, "get", return_value=mock_response),
+        pytest.raises(requests.RequestException, match="non-JSON"),
+    ):
+        client._get_course_activity_list("course-1", "class-1")
+
+
+def test_chaoxing_signin_upload_keeps_list_object_id_payloads():
+    client = ChaoxingSigninClient()
+    token_response = Mock(status_code=200, text="")
+    token_response.json.return_value = {"token": "token-1"}
+    upload_response = Mock(status_code=200, text="")
+    upload_response.json.return_value = [{"objectId": "object-1"}]
+    photo = base64.b64encode(b"x" * 100).decode()
+
+    with (
+        patch.object(client.session, "get", return_value=token_response),
+        patch.object(client.session, "post", return_value=upload_response),
+    ):
+        assert client._upload_photo_and_get_object_id(photo) == "object-1"
 
 
 def test_chaoxing_signin_get_active_tasks_location_filter():
