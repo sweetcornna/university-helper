@@ -204,13 +204,19 @@ deploy() {
 
 # ---- health ---------------------------------------------------------------
 http_ok() {
-  if command -v curl >/dev/null 2>&1; then curl -fsS -o /dev/null "$1"; else wget -q -O /dev/null "$1"; fi
+  if command -v curl >/dev/null 2>&1; then
+    local status
+    status="$(curl -fsS -o /dev/null -w '%{http_code}' "$1")" || return 1
+    [[ "$status" =~ ^2[0-9]{2}$ ]]
+  else
+    wget -q -O /dev/null "$1"
+  fi
 }
 wait_health() {
   local url="http://127.0.0.1:${HTTP_PORT}/health"
   info "Waiting for health at ${url} …"
-  local i
-  for i in $(seq 1 60); do
+  local _
+  for _ in $(seq 1 60); do
     if http_ok "$url"; then ok "App is healthy."; return 0; fi
     sleep 2
   done
@@ -256,7 +262,7 @@ EOF
 ensure_docker
 ensure_env
 deploy
-wait_health || true
+wait_health
 scaffold_tls
 
 echo

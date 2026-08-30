@@ -127,11 +127,17 @@ Info "Waiting for health at $healthUrl …"
 $healthy = $false
 foreach ($i in 1..60) {
   try {
-    Invoke-WebRequest -UseBasicParsing -TimeoutSec 4 $healthUrl *> $null
-    $healthy = $true; break
+    $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 4 $healthUrl
+    if ($response -and $response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
+      $healthy = $true; break
+    }
   } catch { Start-Sleep -Seconds 2 }
 }
-if ($healthy) { Ok "App is healthy." } else { Warn "Health check timed out. Check: docker compose -p $Project -f $ComposeFile logs --tail=80 app" }
+if ($healthy) {
+  Ok "App is healthy."
+} else {
+  Die "Health check timed out or never returned a 2xx response. Check: docker compose -p $Project -f $ComposeFile logs --tail=80 app"
+}
 
 # ---- summary --------------------------------------------------------------
 Write-Host ""
