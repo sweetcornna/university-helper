@@ -12,6 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && echo "${PIP_INDEX_URL}" | grep -q tsinghua; then \
         sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
+        printf '%s\n' tsinghua > /tmp/apt-mirror-selection; \
+    else \
+        printf '%s\n' debian > /tmp/apt-mirror-selection; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
         build-essential libpq-dev \
@@ -25,20 +28,18 @@ RUN pip wheel --wheel-dir=/wheels --default-timeout=1000 \
 # ---------- runtime ----------
 FROM python:3.11-slim AS runtime
 
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_INDEX=1
 
-RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && echo "${PIP_INDEX_URL}" | grep -q tsinghua; then \
+COPY --from=builder /tmp/apt-mirror-selection /tmp/apt-mirror-selection
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && [ "$(cat /tmp/apt-mirror-selection)" = tsinghua ]; then \
         sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
         libpq5 tini \
-    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/lib/apt/lists/* /tmp/apt-mirror-selection \
     && groupadd -r app --gid 10001 \
     && useradd -r -g app --uid 10001 --home-dir /srv/backend --shell /usr/sbin/nologin app
 

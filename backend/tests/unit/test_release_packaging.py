@@ -47,6 +47,16 @@ def test_active_pip_build_configs_keep_tls_verification_enabled():
         assert all(url.startswith("https://") for url in index_urls), config_path
 
 
+def test_server_runtime_does_not_persist_pip_index_url():
+    dockerfile = (REPO_ROOT / "Dockerfile.server").read_text()
+    runtime = dockerfile.split("# ---------- runtime ----------", 1)[1]
+
+    assert "PIP_INDEX_URL" not in runtime
+    assert "PIP_NO_INDEX=1" in runtime
+    assert "--no-index" in runtime
+    assert "apt-mirror-selection" in runtime
+
+
 def _workflow_lines() -> list[str]:
     return _workflow_text().splitlines()
 
