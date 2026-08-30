@@ -73,13 +73,16 @@ export default function useBackgroundTasks(requestChaoxingApi) {
         stopPolling()
       }
     } catch (err) {
+      if (openTaskRef.current !== currentTaskId || inFlightRef.current !== currentTaskId) return
       if (setResultType) setResultType('error')
       if (setResultMessage) setResultMessage(err.message || '查询任务状态失败。')
       stopPolling()
     } finally {
       // Only clear if still ours — a newer task's poll may have taken the slot.
-      if (inFlightRef.current === currentTaskId) inFlightRef.current = ''
-      setStatusLoading(false)
+      if (inFlightRef.current === currentTaskId) {
+        inFlightRef.current = ''
+        if (openTaskRef.current === currentTaskId) setStatusLoading(false)
+      }
     }
   }, [requestChaoxingApi, stopPolling])
 
