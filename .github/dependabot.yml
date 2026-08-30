@@ -22,6 +22,28 @@ updates:
         update-types: [minor, patch]
     labels: [dependencies, frontend]
 
+  - package-ecosystem: npm
+    directory: /promo
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      js-minor:
+        update-types: [minor, patch]
+    labels: [dependencies, promo]
+
+  - package-ecosystem: cargo
+    directory: /frontend/src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      rust-minor:
+        update-types: [minor, patch]
+    labels: [dependencies, desktop]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
