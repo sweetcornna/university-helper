@@ -89,6 +89,14 @@ def validate_notification_url(url: str | None) -> bool:
     return True
 
 
+def _is_redirect_response(response) -> bool:
+    """Return True when a notification response is any HTTP redirect."""
+    status_code = getattr(response, "status_code", None)
+    # Real requests responses always expose an integer status code. The type
+    # guard also keeps lightweight requests mocks (without status_code) usable.
+    return isinstance(status_code, int) and 300 <= status_code < 400
+
+
 class NotificationService(ABC):
     """
     通知服务基类，定义通知服务的公共接口和实现。
@@ -285,7 +293,16 @@ class ServerChan(NotificationService):
         headers = {"Content-Type": "application/json;charset=utf-8"}
 
         try:
-            response = requests.post(self.url, json=params, headers=headers, timeout=10)
+            response = requests.post(
+                self.url,
+                json=params,
+                headers=headers,
+                timeout=10,
+                allow_redirects=False,
+            )
+            if _is_redirect_response(response):
+                logger.error(f"Server酱通知发送失败：服务返回重定向状态 {response.status_code}")
+                return False
             response.raise_for_status()
             result = response.json()
             logger.info(f"Server酱通知发送成功: {result}")
@@ -326,7 +343,16 @@ class Qmsg(NotificationService):
         headers = {"Content-Type": "application/json;charset=utf-8"}
 
         try:
-            response = requests.post(self.url, params=params, headers=headers, timeout=10)
+            response = requests.post(
+                self.url,
+                params=params,
+                headers=headers,
+                timeout=10,
+                allow_redirects=False,
+            )
+            if _is_redirect_response(response):
+                logger.error(f"Qmsg酱通知发送失败：服务返回重定向状态 {response.status_code}")
+                return False
             response.raise_for_status()
             result = response.json()
             logger.info(f"Qmsg酱通知发送成功: {result}")
@@ -366,7 +392,15 @@ class Bark(NotificationService):
         params = {"body": message}
 
         try:
-            response = requests.post(self.url, params=params, timeout=10)
+            response = requests.post(
+                self.url,
+                params=params,
+                timeout=10,
+                allow_redirects=False,
+            )
+            if _is_redirect_response(response):
+                logger.error(f"Bark通知发送失败：服务返回重定向状态 {response.status_code}")
+                return False
             response.raise_for_status()
             result = response.json()
             logger.info(f"Bark通知发送成功: {result}")
@@ -406,7 +440,15 @@ class Telegram(NotificationService):
         params = {"chat_id": self.tg_chat_id, "text": message, "parse_mode": "HTML"}
 
         try:
-            response = requests.post(self.url, data=params, timeout=10)
+            response = requests.post(
+                self.url,
+                data=params,
+                timeout=10,
+                allow_redirects=False,
+            )
+            if _is_redirect_response(response):
+                logger.error(f"Telegram通知发送失败：服务返回重定向状态 {response.status_code}")
+                return False
             response.raise_for_status()
             result = response.json()
             if result.get("ok"):

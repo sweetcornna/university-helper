@@ -1,5 +1,6 @@
 """Tests for notification provider SSRF guarding (F55) and public interface stability."""
 
+import inspect
 import socket
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +15,6 @@ from app.services.notification.providers import (
     Telegram,
     validate_notification_url,
 )
-
 
 _PUBLIC_NOTIFICATION_HOSTS = {
     "api.day.app",
@@ -89,12 +89,28 @@ def test_providers_post_to_public_url(public_notification_dns, provider_cls):
     """A valid public URL must still be delivered (interface unchanged)."""
     svc = _build(provider_cls, "https://api.day.app/token")
     response = MagicMock()
+    response.status_code = 200
     response.json.return_value = {"ok": True}
-    with patch(
-        "app.services.notification.providers.requests.post", return_value=response
-    ) as mock_post:
-        svc.send("hello")
+    with patch("app.services.notification.providers.requests.post", return_value=response) as mock_post:
+        assert svc.send("hello") is True
     assert mock_post.called, f"{provider_cls.__name__} did not deliver to a public URL"
+    assert mock_post.call_args.kwargs["allow_redirects"] is False
+
+
+@pytest.mark.parametrize("provider_cls", [ServerChan, Qmsg, Bark, Telegram])
+def test_providers_reject_redirect_without_following(public_notification_dns, provider_cls):
+    """A public webhook redirect must fail without a second request."""
+    svc = _build(provider_cls, "https://api.day.app/token")
+    response = MagicMock()
+    response.status_code = 302
+    response.headers = {"Location": "http://127.0.0.1/latest/meta-data/"}
+
+    with patch("app.services.notification.providers.requests.post", return_value=response) as mock_post:
+        assert svc.send("hello") is False
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["allow_redirects"] is False
+    response.json.assert_not_called()
 
 
 def test_public_interface_is_stable():
@@ -103,7 +119,5 @@ def test_public_interface_is_stable():
     assert issubclass(ServerChan, NotificationService)
     # send(message) signature stays a single positional message arg.
     svc = ServerChan()
-    import inspect
-
     params = list(inspect.signature(svc.send).parameters)
     assert params == ["message"]
