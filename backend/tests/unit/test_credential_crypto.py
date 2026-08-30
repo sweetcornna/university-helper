@@ -9,13 +9,15 @@ from cryptography.fernet import Fernet
 
 
 @pytest.fixture
-def crypto_with_key(monkeypatch):
+def crypto_with_key(monkeypatch, tmp_path):
     """Fresh module bound to a real Fernet key."""
+    monkeypatch.chdir(tmp_path)
     key = Fernet.generate_key().decode("ascii")
     monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", key)
     monkeypatch.delenv("ENV", raising=False)
 
     import app.core.credential_crypto as cc
+
     importlib.reload(cc)
     cc._reset_for_tests()
     yield cc
@@ -23,12 +25,14 @@ def crypto_with_key(monkeypatch):
 
 
 @pytest.fixture
-def crypto_dev_no_key(monkeypatch):
+def crypto_dev_no_key(monkeypatch, tmp_path):
     """Fresh module with no key configured and ENV!=production (dev fallback)."""
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
     monkeypatch.delenv("ENV", raising=False)
 
     import app.core.credential_crypto as cc
+
     importlib.reload(cc)
     cc._reset_for_tests()
     yield cc
@@ -132,10 +136,30 @@ def test_production_without_key_raises(monkeypatch):
     monkeypatch.setenv("ENV", "production")
 
     import app.core.credential_crypto as cc
+
     importlib.reload(cc)
     cc._reset_for_tests()
     try:
         with pytest.raises(cc.CredentialCryptoError):
             cc.encrypt_str("anything")
+    finally:
+        cc._reset_for_tests()
+
+
+def test_production_from_env_file_without_key_raises(monkeypatch, tmp_path):
+    """A dotenv-only production profile must fail closed like Settings does."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("ENV=production\n", encoding="utf-8")
+    monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    import app.core.credential_crypto as cc
+
+    importlib.reload(cc)
+    cc._reset_for_tests()
+    try:
+        with pytest.raises(cc.CredentialCryptoError, match="CREDENTIAL_ENCRYPTION_KEY is not set"):
+            cc.init_cipher()
     finally:
         cc._reset_for_tests()
