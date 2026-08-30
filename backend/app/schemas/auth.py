@@ -1,6 +1,6 @@
 import re
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 # Must align with _validate_tenant_db_name in app/db/session.py, which builds
 # tenant database names as `tenant_{username}` and only accepts [a-z0-9]+.
@@ -39,7 +39,7 @@ class RegisterRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(max_length=128)
 
 
 class TokenResponse(BaseModel):
