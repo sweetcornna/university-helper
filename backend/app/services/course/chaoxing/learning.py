@@ -957,18 +957,21 @@ def process_course(chaoxing: Chaoxing, course: dict[str, Any], config: dict):
     # 为了支持课程任务回滚, 采用下标方式遍历任务点
 
     _old_format_sizeof = tqdm.format_sizeof
-    tqdm.format_sizeof = format_time
-    tqdm.set_lock(RLock())
+    _old_tqdm_lock = tqdm.get_lock()
+    try:
+        tqdm.format_sizeof = format_time
+        tqdm.set_lock(RLock())
 
-    tasks = []
+        tasks = []
 
-    for i, point in enumerate(point_list["points"]):
-        task = ChapterTask(point=point, index=i)
-        tasks.append(task)
-    p = JobProcessor(chaoxing, course, tasks, config)
-    p.run()
-
-    tqdm.format_sizeof = _old_format_sizeof
+        for i, point in enumerate(point_list["points"]):
+            task = ChapterTask(point=point, index=i)
+            tasks.append(task)
+        p = JobProcessor(chaoxing, course, tasks, config)
+        p.run()
+    finally:
+        tqdm.format_sizeof = _old_format_sizeof
+        tqdm.set_lock(_old_tqdm_lock)
 
 
 def filter_courses(all_course, course_list):
