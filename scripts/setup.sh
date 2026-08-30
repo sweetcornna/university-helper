@@ -36,7 +36,11 @@ docker compose version >/dev/null 2>&1 || { echo "docker compose v2 is required"
 
 if [[ ! -f .env ]]; then
     echo "Creating .env from .env.example…"
-    cp .env.example .env
+    (
+        umask 077
+        cp .env.example .env
+        chmod 600 .env
+    )
     echo "  -> edit .env (SECRET_KEY, POSTGRES_PASSWORD, CORS_ORIGINS, CREDENTIAL_ENCRYPTION_KEY) before 'make start'"
 fi
 

@@ -150,7 +150,7 @@ See [Platform Support](./docs/PLATFORMS.md) for platform-specific steps.
 
 ```bash
 cd backend
-cp .env.example .env         # then edit SECRET_KEY / CORS_ORIGINS / DB creds
+install -m 600 .env.example .env  # then edit SECRET_KEY / CORS_ORIGINS / DB creds
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -244,7 +244,7 @@ For this host-nginx/source-Compose path, install Docker Compose and Node.js 20
 SPA must be built on the host before nginx serves it.
 
 ```bash
-cp .env.example .env       # fill SECRET_KEY, POSTGRES_PASSWORD, CREDENTIAL_ENCRYPTION_KEY, CORS_ORIGINS
+install -m 600 .env.example .env  # fill SECRET_KEY, POSTGRES_PASSWORD, CREDENTIAL_ENCRYPTION_KEY, CORS_ORIGINS
 node --version              # must report 20.x
 cd frontend && npm ci && npm run build
 cd ..                       # return to the repository root

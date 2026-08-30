@@ -162,7 +162,7 @@ University Helper 是 Web 应用。Linux 是生产服务器目标；macOS、Linu
 
 ```bash
 cd backend
-cp .env.example .env         # 然后编辑 SECRET_KEY / CORS_ORIGINS / 数据库配置
+install -m 600 .env.example .env  # 然后编辑 SECRET_KEY / CORS_ORIGINS / 数据库配置
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -195,7 +195,7 @@ Release 镜像 tag 不带前缀 `v`（例如 `1.4.5`，不是 `v1.4.5`）。部�
 静态文件，再让 nginx 提供服务。
 
 ```bash
-cp .env.example .env
+install -m 600 .env.example .env
 node --version              # 必须是 20.x
 cd frontend && npm ci && npm run build
 cd ..                       # 回到仓库根目录
