@@ -56,8 +56,12 @@ jobs:
             exit 2
           fi
           VERSION="${REF#v}"
+          # Docker tags disallow '+'. The validated SemVer grammar forbids '_',
+          # so this remains a collision-free representation of build metadata.
+          IMAGE_VERSION="${VERSION//+/_}"
           printf 'tag=%s\n' "$REF" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'image_version=%s\n' "$IMAGE_VERSION" >> "$GITHUB_OUTPUT"
 
       # Validates set_version.sh runs against the real tree on every release.
       # (The build jobs below re-stamp their own fresh checkouts.)
@@ -139,8 +143,12 @@ jobs:
             exit 2
           fi
           VERSION="${REF#v}"
+          # Docker tags disallow '+'. The validated SemVer grammar forbids '_',
+          # so this remains a collision-free representation of build metadata.
+          IMAGE_VERSION="${VERSION//+/_}"
           printf 'tag=%s\n' "$REF" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'image_version=%s\n' "$IMAGE_VERSION" >> "$GITHUB_OUTPUT"
 
       # Re-stamp this fresh checkout so the image bakes the tag's version even if
       # the tagged commit was not pre-stamped (robust to the human runbook step).
@@ -171,7 +179,7 @@ jobs:
           build-args: |
             PIP_INDEX_URL=https://pypi.org/simple
           tags: |
-            ${{ env.APP_IMAGE }}:${{ steps.meta.outputs.version }}
+            ${{ env.APP_IMAGE }}:${{ steps.meta.outputs.image_version }}
             ${{ env.APP_IMAGE }}:latest
 
   # ───────────────────────── 2b. web image ──────────────────────────────────
@@ -199,8 +207,12 @@ jobs:
             exit 2
           fi
           VERSION="${REF#v}"
+          # Docker tags disallow '+'. The validated SemVer grammar forbids '_',
+          # so this remains a collision-free representation of build metadata.
+          IMAGE_VERSION="${VERSION//+/_}"
           printf 'tag=%s\n' "$REF" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'image_version=%s\n' "$IMAGE_VERSION" >> "$GITHUB_OUTPUT"
 
       # Re-stamp this fresh checkout so the image bakes the tag's version even if
       # the tagged commit was not pre-stamped (robust to the human runbook step).
@@ -227,7 +239,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           push: true
           tags: |
-            ${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.version }}
+            ${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.image_version }}
             ${{ env.WEB_IMAGE }}:latest
 
   # ───────────────────────── 3. desktop installers + updater ─────────────────

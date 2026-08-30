@@ -406,12 +406,17 @@ def test_release_publish_job_waits_for_both_release_image_jobs():
     assert _job_needs("publish") == {"create-release", "app-image", "web-image", "desktop"}
 
 
-def test_web_release_image_build_does_not_export_github_actions_cache():
+def test_release_image_builds_use_docker_safe_image_version_tags():
+    app_step = _step_block("app-image", "Build & push app image")
     web_step = _step_block("web-image", "Build & push web image")
 
-    assert "cache-to: type=gha" not in web_step
-    assert "${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.version }}" in web_step
+    assert "${{ env.APP_IMAGE }}:${{ steps.meta.outputs.image_version }}" in app_step
+    assert "${{ env.APP_IMAGE }}:${{ steps.meta.outputs.version }}" not in app_step
+    assert "${{ env.APP_IMAGE }}:latest" in app_step
+    assert "${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.image_version }}" in web_step
+    assert "${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.version }}" not in web_step
     assert "${{ env.WEB_IMAGE }}:latest" in web_step
+    assert "cache-to: type=gha" not in web_step
 
 
 def test_release_workflow_grants_package_write_only_to_image_jobs():
@@ -454,7 +459,17 @@ def test_mutable_workflow_action_refs_are_rejected(mutable_ref):
         _assert_pinned_external_use(f"actions/checkout@{mutable_ref}", "fixture")
 
 
-def test_release_tag_is_env_mapped_and_shell_metacharacters_are_rejected(tmp_path):
+@pytest.mark.parametrize(
+    ("release_ref", "expected_version", "expected_image_version"),
+    [
+        ("v1.2.3", "1.2.3", "1.2.3"),
+        ("v1.2.3-rc.1", "1.2.3-rc.1", "1.2.3-rc.1"),
+        ("v1.2.3+build.1", "1.2.3+build.1", "1.2.3_build.1"),
+    ],
+)
+def test_release_tag_is_env_mapped_and_shell_metacharacters_are_rejected(
+    tmp_path, release_ref, expected_version, expected_image_version
+):
     resolver_steps = (
         ("create-release", "Resolve version from tag"),
         ("app-image", "Resolve version"),
@@ -471,12 +486,12 @@ def test_release_tag_is_env_mapped_and_shell_metacharacters_are_rejected(tmp_pat
 
         valid_output = tmp_path / f"{job_name}-valid-output"
         valid_env = os.environ.copy()
-        valid_env.update(RELEASE_REF="v1.4.5-rc.1", GITHUB_OUTPUT=str(valid_output))
-        valid = subprocess.run(
-            ["bash"], input=script, text=True, capture_output=True, env=valid_env
-        )
+        valid_env.update(RELEASE_REF=release_ref, GITHUB_OUTPUT=str(valid_output))
+        valid = subprocess.run(["bash"], input=script, text=True, capture_output=True, env=valid_env, check=False)
         assert valid.returncode == 0, valid.stderr
-        assert valid_output.read_text() == "tag=v1.4.5-rc.1\nversion=1.4.5-rc.1\n"
+        assert valid_output.read_text() == (
+            f"tag={release_ref}\nversion={expected_version}\nimage_version={expected_image_version}\n"
+        )
 
         marker = tmp_path / f"{job_name}-injected"
         malicious_output = tmp_path / f"{job_name}-malicious-output"
@@ -484,8 +499,35 @@ def test_release_tag_is_env_mapped_and_shell_metacharacters_are_rejected(tmp_pat
         malicious_env = os.environ.copy()
         malicious_env.update(RELEASE_REF=malicious, GITHUB_OUTPUT=str(malicious_output))
         rejected = subprocess.run(
-            ["bash"], input=script, text=True, capture_output=True, env=malicious_env
+            ["bash"], input=script, text=True, capture_output=True, env=malicious_env, check=False
         )
         assert rejected.returncode == 2, rejected.stderr
         assert not marker.exists()
         assert not malicious_output.exists()
+
+
+def test_release_tag_rejects_prerelease_build_combination_consistently(tmp_path):
+    resolver_steps = (
+        ("create-release", "Resolve version from tag"),
+        ("app-image", "Resolve version"),
+        ("web-image", "Resolve version"),
+    )
+    expected_env = "RELEASE_REF: ${{ github.event.inputs.tag || github.ref_name }}"
+    release_pattern = r"^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$"
+    stamp_pattern = r"^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$"
+
+    assert release_pattern in _workflow_text()
+    assert stamp_pattern in (REPO_ROOT / "scripts" / "set_version.sh").read_text()
+
+    for job_name, step_name in resolver_steps:
+        step = _step_block(job_name, step_name)
+        assert expected_env in step
+        script = _workflow_run_block(job_name, step_name)
+        output = tmp_path / f"{job_name}-unsupported-output"
+        env = os.environ.copy()
+        env.update(RELEASE_REF="v1.2.3-rc.1+build.2", GITHUB_OUTPUT=str(output))
+
+        rejected = subprocess.run(["bash"], input=script, text=True, capture_output=True, env=env, check=False)
+
+        assert rejected.returncode == 2, rejected.stderr
+        assert not output.exists()
