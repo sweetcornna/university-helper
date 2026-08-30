@@ -157,6 +157,65 @@ describe('BaiduMapPickerModal map lifecycle', () => {
     expect(screen.queryByText('解析地址中...')).not.toBeInTheDocument()
   })
 
+  test('times out a never-settling reverse geocode and clears its loading state', async () => {
+    let requestSignal
+    globalThis.fetch.mockImplementation((_url, options) => {
+      requestSignal = options.signal
+      return new Promise(() => {})
+    })
+
+    render(<BaiduMapPickerModal {...props} open />)
+    const clickHandler = maps[0].on.mock.calls.find(
+      ([eventName]) => eventName === 'click'
+    )[1]
+    act(() => {
+      clickHandler({ latlng: { lat: 10, lng: 20 } })
+      vi.advanceTimersByTime(100)
+    })
+
+    expect(screen.getByText('解析地址中...')).toBeInTheDocument()
+    expect(vi.getTimerCount()).toBe(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000)
+      await flushPromises()
+    })
+
+    expect(requestSignal.aborted).toBe(true)
+    expect(screen.getByText('未解析到详细地址')).toBeInTheDocument()
+    expect(screen.queryByText('解析地址中...')).not.toBeInTheDocument()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  test('times out a never-settling place search and clears its loading state', async () => {
+    let requestSignal
+    globalThis.fetch.mockImplementation((_url, options) => {
+      requestSignal = options.signal
+      return new Promise(() => {})
+    })
+
+    render(<BaiduMapPickerModal {...props} open />)
+    const input = screen.getByPlaceholderText('搜索地点名称...')
+    fireEvent.change(input, { target: { value: '地点' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+
+    expect(input.nextElementSibling).toBeDisabled()
+    expect(vi.getTimerCount()).toBe(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000)
+      await flushPromises()
+    })
+
+    expect(requestSignal.aborted).toBe(true)
+    expect(screen.getByText('搜索失败，请稍后重试')).toBeInTheDocument()
+    expect(input.nextElementSibling).not.toBeDisabled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   test('ignores an old search after close and keeps the new modal loading state', async () => {
     const first = deferred()
     const second = deferred()
@@ -207,6 +266,85 @@ describe('BaiduMapPickerModal map lifecycle', () => {
     expect(searchButton).not.toBeDisabled()
   })
 
+  test('accepts immediate requests after reopen without adopting closed results', async () => {
+    const oldReverse = deferred()
+    const oldSearch = deferred()
+    const newReverse = deferred()
+    const newSearch = deferred()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    globalThis.fetch.mockImplementation((url) => {
+      if (url.includes('lat=10&lng=20')) return oldReverse.promise
+      if (url.includes('lat=30&lng=40')) return newReverse.promise
+      if (url.includes('query=%E6%97%A7%E5%9C%B0%E7%82%B9')) return oldSearch.promise
+      if (url.includes('query=%E6%96%B0%E5%9C%B0%E7%82%B9')) return newSearch.promise
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+
+    const view = render(<BaiduMapPickerModal {...props} open />)
+    const firstClickHandler = maps[0].on.mock.calls.find(
+      ([eventName]) => eventName === 'click'
+    )[1]
+    act(() => {
+      firstClickHandler({ latlng: { lat: 10, lng: 20 } })
+    })
+    const firstInput = screen.getByPlaceholderText('搜索地点名称...')
+    fireEvent.change(firstInput, { target: { value: '旧地点' } })
+    fireEvent.keyDown(firstInput, { key: 'Enter' })
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+
+    view.rerender(<BaiduMapPickerModal {...props} open={false} />)
+    expect(vi.getTimerCount()).toBe(0)
+
+    view.rerender(<BaiduMapPickerModal {...props} open />)
+    const secondClickHandler = maps[1].on.mock.calls.find(
+      ([eventName]) => eventName === 'click'
+    )[1]
+    act(() => {
+      secondClickHandler({ latlng: { lat: 30, lng: 40 } })
+    })
+    const secondInput = screen.getByPlaceholderText('搜索地点名称...')
+    fireEvent.change(secondInput, { target: { value: '新地点' } })
+    fireEvent.keyDown(secondInput, { key: 'Enter' })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(4)
+
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+
+    await act(async () => {
+      oldReverse.resolve(jsonResponse({ data: { address: '关闭后旧地址' } }))
+      oldSearch.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: { results: [{ id: 'old', name: '关闭后旧结果' }] },
+          }),
+      })
+      await flushPromises()
+    })
+    expect(screen.queryByText('关闭后旧地址')).not.toBeInTheDocument()
+    expect(screen.queryByText('关闭后旧结果')).not.toBeInTheDocument()
+
+    await act(async () => {
+      newReverse.resolve(jsonResponse({ data: { address: '重开后新地址' } }))
+      newSearch.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: { results: [{ id: 'new', name: '重开后新结果' }] },
+          }),
+      })
+      await flushPromises()
+    })
+    expect(screen.getByText('重开后新地址')).toBeInTheDocument()
+    expect(screen.getByText('重开后新结果')).toBeInTheDocument()
+    expect(secondInput.nextElementSibling).not.toBeDisabled()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
   test('does not submit a second search while the first one is loading', async () => {
     const pending = deferred()
     globalThis.fetch.mockReturnValue(pending.promise)
@@ -244,7 +382,12 @@ describe('BaiduMapPickerModal map lifecycle', () => {
     const input = screen.getByPlaceholderText('搜索地点名称...')
     fireEvent.change(input, { target: { value: '地点' } })
     fireEvent.keyDown(input, { key: 'Enter' })
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    expect(vi.getTimerCount()).toBe(2)
     view.rerender(<BaiduMapPickerModal {...props} open={false} />)
+    expect(vi.getTimerCount()).toBe(0)
 
     await act(async () => {
       reverse.resolve(jsonResponse({ data: { address: '关闭后地址' } }))
