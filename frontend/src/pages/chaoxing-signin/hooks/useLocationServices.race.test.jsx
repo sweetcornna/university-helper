@@ -47,11 +47,10 @@ function LocationServicesHarness({ requestChaoxingApi, setForm, onReady }) {
   )
 }
 
-const renderLocationServices = (requestChaoxingApi) => {
+const renderLocationServices = (requestChaoxingApi, setForm = vi.fn()) => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-  const setForm = vi.fn()
   let current
 
   act(() => {
@@ -82,6 +81,14 @@ const renderLocationServices = (requestChaoxingApi) => {
 const setAddress = async (rendered, value) => {
   await act(async () => {
     fireEvent.change(rendered.container.querySelector('#cx-address'), { target: { value } })
+  })
+}
+
+const editAddress = async (rendered, value) => {
+  await act(async () => {
+    const input = rendered.container.querySelector('#cx-address')
+    input.value = value
+    rendered.current.handleAddressChange(value)
   })
 }
 
@@ -195,6 +202,65 @@ describe('useLocationServices overlapping request loading', () => {
 
       expect(rendered.container.querySelector(`[data-testid="${loadingTestId}"]`)).toHaveTextContent('false')
       expect(rendered.container.querySelector(`[data-testid="${messageTestId}"]`)).toHaveTextContent(successMessage)
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+  test.each(cases)('$label ignores a response after the address is edited', async ({
+    label,
+    method,
+    response,
+  }) => {
+    const first = deferred()
+    const requestChaoxingApi = vi.fn(() => first.promise)
+    const rendered = renderLocationServices(requestChaoxingApi)
+
+    try {
+      const firstPromise = await startRequest(rendered, method, '地址 A')
+      await editAddress(rendered, '地址 B')
+      const setFormCallsAfterEdit = rendered.setForm.mock.calls.length
+
+      await settleRequest(firstPromise.promise, () => first.resolve(response('地址 A')))
+
+      expect(rendered.setForm).toHaveBeenCalledTimes(setFormCallsAfterEdit)
+      expect(rendered.container.querySelector('[data-testid="place-search-results"]')).toHaveTextContent('[]')
+      expect(rendered.container.querySelector(`[data-testid="${label === 'geocode' ? 'geocode-message' : 'place-search-message'}"]`)).not.toHaveTextContent('地址 A')
+      expect(rendered.container.querySelector(`[data-testid="${label === 'geocode' ? 'geocode-loading' : 'place-search-loading'}"]`)).toHaveTextContent('false')
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+  test('address edits clear derived fields and existing place candidates', async () => {
+    const form = {
+      address: '地址 A',
+      latitude: '39.9',
+      longitude: '116.4',
+      altitude: '100',
+    }
+    const setForm = vi.fn((update) => Object.assign(form, update(form)))
+    const requestChaoxingApi = vi.fn(() => Promise.resolve(placeSearchResponse('地址 A')))
+    const rendered = renderLocationServices(requestChaoxingApi, setForm)
+
+    try {
+      const searchPromise = await startRequest(rendered, 'searchLocationCandidates', '地址 A')
+      await settleRequest(searchPromise.promise, () => {})
+      expect(rendered.container.querySelector('[data-testid="place-search-results"]')).not.toHaveTextContent('[]')
+
+      await editAddress(rendered, '地址 B')
+
+      expect(form).toMatchObject({
+        address: '地址 B',
+        latitude: '',
+        longitude: '',
+        altitude: '',
+      })
+      expect(rendered.container.querySelector('[data-testid="place-search-results"]')).toHaveTextContent('[]')
+      expect(rendered.container.querySelector('[data-testid="place-search-message"]').textContent).toBe('')
+      expect(rendered.container.querySelector('[data-testid="geocode-message"]')).toHaveTextContent(
+        '地址已变更，请重新解析坐标。'
+      )
     } finally {
       rendered.cleanup()
     }

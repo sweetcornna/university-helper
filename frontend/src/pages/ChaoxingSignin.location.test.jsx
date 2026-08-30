@@ -217,4 +217,5 @@ describe('ChaoxingSignin location flow', () => {
       return true
     })
   })
+
 })

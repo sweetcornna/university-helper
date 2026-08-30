@@ -16,6 +16,29 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
   const [placeSearchMessage, setPlaceSearchMessage] = useState('')
   const [isMapPickerOpen, setIsMapPickerOpen] = useState(false)
 
+  const handleAddressChange = useCallback((value) => {
+    const nextAddress = String(value ?? '')
+
+    latestAddressRef.current = nextAddress
+    // Invalidate both request types on every edit, even when the user changes
+    // back to the original text before an older request resolves.
+    geocodeRequestIdRef.current += 1
+    placeSearchRequestIdRef.current += 1
+    setGeocodeLoading(false)
+    setPlaceSearchLoading(false)
+    setGeocodeStatus('info')
+    setGeocodeMessage(nextAddress.trim() ? '地址已变更，请重新解析坐标。' : '')
+    setPlaceSearchResults([])
+    setPlaceSearchMessage('')
+    setForm((prev) => ({
+      ...prev,
+      address: nextAddress,
+      latitude: '',
+      longitude: '',
+      altitude: '',
+    }))
+  }, [setForm])
+
   // Inputs arrive as WGS-84 (from the Photon-backed API and the OSM map picker).
   // Chaoxing expects Baidu BD-09 coordinates, so convert once at this boundary.
   const applyResolvedLocation = useCallback((location) => {
@@ -179,6 +202,7 @@ export default function useLocationServices(requestChaoxingApi, setForm) {
     geocodeStatus,
     setGeocodeStatus,
     setGeocodeMessage,
+    handleAddressChange,
     placeSearchLoading,
     placeSearchResults,
     placeSearchMessage,

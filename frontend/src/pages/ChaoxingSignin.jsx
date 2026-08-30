@@ -232,12 +232,12 @@ export default function ChaoxingSignin() {
 
   const locationServices = useLocationServices(requestChaoxingApi, setForm)
   const {
-    latestAddressRef,
     geocodeLoading,
     geocodeMessage,
     geocodeStatus,
     setGeocodeStatus,
     setGeocodeMessage,
+    handleAddressChange,
     placeSearchLoading,
     placeSearchResults,
     placeSearchMessage,
@@ -1505,10 +1505,7 @@ export default function ChaoxingSignin() {
                       label="地址 / 地点名称"
                       type="text"
                       value={form.address}
-                      onChange={(e) => {
-                        latestAddressRef.current = e.target.value
-                        setForm((prev) => ({ ...prev, address: e.target.value }))
-                      }}
+                      onChange={(e) => handleAddressChange(e.target.value)}
                       placeholder="例如：北京市朝阳区"
                     />
 
