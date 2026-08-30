@@ -143,8 +143,15 @@ AGE_RECIPIENT=age1xxxxxx... ./scripts/db_backup.sh
 # - dumps pg_dumpall through age → /opt/backups/university-helper/uh-<stamp>.sql.gz.age
 # - refuses to write plaintext .env snapshots unless ALLOW_UNENCRYPTED=1
 
-# Alembic migrations (idempotent baselines)
-docker compose -f docker-compose.server.yml exec app alembic upgrade head
+# Alembic migrations (idempotent baselines; the heads are independent)
+# Shared users/rate-limit schema in main_db:
+docker compose -f docker-compose.server.yml exec app alembic upgrade main_db@head
+
+# Tenant schemas: mount the repository helper into the app context and run it
+# from the app's /srv/backend working directory so it can reach postgres:
+docker compose -f docker-compose.server.yml run --rm \
+  -v "$PWD/scripts:/srv/backend/scripts:ro" app \
+  python scripts/migrate_tenants.py
 ```
 
 ## Staging on the same host

@@ -36,8 +36,8 @@ pytest --cov=app --cov-report=term-missing  # coverage
 ruff check app/
 ruff format app/
 
-# Database migrations
-alembic upgrade head
+# Database migrations (shared main_db branch; run from backend/)
+alembic upgrade main_db@head
 alembic revision -m "describe change"  # write SQL via op.execute(...)
 ```
 
@@ -76,9 +76,18 @@ Init SQL lives in `database/`:
 - `00-schema.sql` and `01-create_tenant.sql` run against `main_db`.
 - `02-bootstrap-tenant-template.sh` creates `tenant_template` and applies `templates/tenant_template.sql` against it.
 
-Migrations are tracked in `backend/alembic/versions/`. New migrations should
-use idempotent DDL (`CREATE … IF NOT EXISTS`) to stay safe against the
-ad-hoc-baselined production DB.
+Migrations are tracked in `backend/alembic/versions/` on two independent
+heads. The shared `main_db` branch is applied from `backend/` with
+`alembic upgrade main_db@head`. To apply the `tenant_db` branch to every
+existing tenant database, run the helper from the repository root (with the
+backend virtual environment active):
+
+```bash
+python scripts/migrate_tenants.py
+```
+
+New migrations should use idempotent DDL (`CREATE … IF NOT EXISTS`) to stay
+safe against the ad-hoc-baselined production DB.
 
 ## Project structure (real layout)
 

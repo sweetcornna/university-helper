@@ -65,7 +65,11 @@ also proxies the API.
 - **`tenant_template`** is the prototype DB that every per-user tenant DB clones from (`CREATE DATABASE … TEMPLATE tenant_template`).
 - **`tenant_<username>`** — one database per user, holding that user's todos/sessions/attachments. Cross-tenant data leaks are physically impossible because each request reconnects to the user's own DB.
 - Connection pools: a main-DB pool (5–30) + an LRU map of tenant pools (2–10 each, max 100 pools). Eviction is refcounted, so a pool with checked-out conns is never closed.
-- Migrations: Alembic wired (`backend/alembic`), idempotent baselines using `IF NOT EXISTS`. `alembic upgrade head` is safe to run repeatedly.
+- Migrations: Alembic wired (`backend/alembic`) with independent `main_db` and
+  `tenant_db` heads. Apply the shared database branch from `backend/` with
+  `alembic upgrade main_db@head`; apply the tenant branch to all tenant
+  databases from the repository root with `python scripts/migrate_tenants.py`.
+  Baselines use `IF NOT EXISTS` and are safe to run repeatedly.
 
 ### Reverse proxy — nginx
 
@@ -96,7 +100,9 @@ JWT in `Authorization: Bearer …`, signed HS256. Claims: `user_id`, `tenant_db_
 
 ### Foundations already in place
 - **`app/core/session_store.py`** — pluggable key/value store with `InMemorySessionStore` (default) and `RedisSessionStore` (selected via `REDIS_URL`). To unlock `--workers >1`, port `ChaoxingSigninManager._clients`/`_qr_sessions` to read/write through `get_session_store()`. The compose stack already ships a profile-gated `redis` service.
-- **`scripts/migrate_tenants.py`** — `alembic upgrade head` per tenant DB. Run on every deploy that touches `templates/tenant_template.sql`.
+- **`scripts/migrate_tenants.py`** — runs the `tenant_db` head per tenant DB.
+  Run `python scripts/migrate_tenants.py` on every deploy that touches
+  `templates/tenant_template.sql`.
 - **OpenTelemetry** — `app/core/tracing.py` activates when `OTEL_EXPORTER_OTLP_ENDPOINT` is set and the SDK is installed. Wires FastAPI + psycopg2 + requests + httpx instrumentors.
 - **TypeScript migration** — `frontend/tsconfig.json` with `allowJs: true` lets new files land as `.tsx`/`.ts` alongside the existing `.jsx`. Shared API types live in `frontend/src/types/api.d.ts`.
 - **PWA** — `vite-plugin-pwa` generates the service worker; `/api/*` is `NetworkOnly` so tenant-scoped data is never cached.

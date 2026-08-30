@@ -169,8 +169,20 @@ npm run dev          # http://localhost:3000 (proxies /api to :8000)
 
 Postgres 15+. The schema files in [`database/`](./database) are picked up
 automatically by the docker entrypoint. Alembic migrations live in
-[`backend/alembic/versions/`](./backend/alembic/versions); apply with
-`alembic upgrade head`.
+[`backend/alembic/versions/`](./backend/alembic/versions) and have independent
+`main_db` and `tenant_db` heads. From `backend/`, apply the shared main database
+branch with:
+
+```bash
+alembic upgrade main_db@head
+```
+
+From the repository root, apply the tenant branch to all existing tenant
+databases with:
+
+```bash
+python scripts/migrate_tenants.py
+```
 
 ## Main API areas
 
