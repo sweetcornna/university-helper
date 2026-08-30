@@ -125,6 +125,66 @@ def test_run_terminates_when_error_exhausts_retries(monkeypatch):
     assert len(processor.failed_tasks) == 1
 
 
+def test_inline_not_open_exhausts_retry_budget(monkeypatch):
+    """An always-NOT_OPEN chapter must terminate when the inline fallback exhausts retries."""
+    calls = 0
+
+    def fake_process_chapter(_chaoxing, _course, _point, _speed, _config=None):
+        nonlocal calls
+        calls += 1
+        return ChapterResult.NOT_OPEN
+
+    class FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(learning, "process_chapter", fake_process_chapter)
+    monkeypatch.setattr(learning.threading, "Thread", FailingThread)
+
+    task = ChapterTask(point={"title": "always-not-open-inline", "has_finished": False}, index=0)
+    config = _base_config(should_stop=lambda: calls >= 2)
+    processor = JobProcessor(chaoxing=object(), course={"title": "c"}, tasks=[task], config=config)
+    processor.max_tries = 2
+
+    processor.run()
+
+    assert calls == 2
+    assert task.tries == 2
+    assert task.result == ChapterResult.NOT_OPEN
+    assert processor.failed_tasks == [task]
+
+
+def test_worker_not_open_exhausts_retry_budget_and_stops(monkeypatch):
+    """An always-NOT_OPEN chapter must stop its worker after max retries."""
+    calls = 0
+
+    def fake_process_chapter(_chaoxing, _course, _point, _speed, _config=None):
+        nonlocal calls
+        calls += 1
+        return ChapterResult.NOT_OPEN
+
+    monkeypatch.setattr(learning, "process_chapter", fake_process_chapter)
+
+    task = ChapterTask(point={"title": "always-not-open-worker", "has_finished": False}, index=0)
+    config = _base_config(should_stop=lambda: calls >= 2)
+    processor = JobProcessor(chaoxing=object(), course={"title": "c"}, tasks=[task], config=config)
+    processor.max_tries = 2
+
+    processor.run()
+
+    assert calls == 2
+    assert task.tries == 2
+    assert task.result == ChapterResult.NOT_OPEN
+    assert processor.failed_tasks == [task]
+    assert processor.threads
+    assert all(not thread.is_alive() for thread in processor.threads)
+    assert processor.task_queue.unfinished_tasks == 0
+    assert processor.retry_queue.unfinished_tasks == 0
+
+
 def test_run_processes_chapters_inline_when_worker_thread_cannot_start(monkeypatch):
     """Production thread exhaustion should degrade to inline chapter processing."""
     processed: list[str] = []

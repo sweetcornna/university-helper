@@ -619,12 +619,14 @@ class JobProcessor:
                             logger.warning("章节未开启: {}, 正在跳过", task.point["title"])
                             break
 
+                        task.tries += 1
                         if task.tries >= self.max_tries:
                             logger.error(
                                 "章节未开启: {} 可能由于上一章节的章节检测未完成, 也可能由于该章节因为时效已关闭，"
                                 "请手动检查完成并提交再重试。或者在配置中配置(自动跳过关闭章节/开启题库并启用提交)",
                                 task.point["title"],
                             )
+                            self.failed_tasks.append(task)
                             break
                         time.sleep(1)
 
@@ -716,17 +718,18 @@ class JobProcessor:
                         logger.debug(f"unfinished task: {self.task_queue.unfinished_tasks}")
 
                     case ChapterResult.NOT_OPEN:
-                        # task.tries += 1
                         if self.config["notopen_action"] == "continue":
                             logger.warning("章节未开启: {}, 正在跳过", task.point["title"])
                             continue
 
+                        task.tries += 1
                         if task.tries >= self.max_tries:
                             logger.error(
                                 "章节未开启: {} 可能由于上一章节的章节检测未完成, 也可能由于该章节因为时效已关闭，"
                                 "请手动检查完成并提交再重试。或者在配置中配置(自动跳过关闭章节/开启题库并启用提交)",
                                 task.point["title"],
                             )
+                            self.failed_tasks.append(task)
                             continue
 
                         # Hand the task to the retry pipeline and mark THIS
