@@ -5,7 +5,10 @@ raw DDL through `op.execute`/`op.create_index`. So `target_metadata` stays
 None and autogenerate is disabled by design.
 
 DB URL is built from the same env vars the app reads (app/config.py),
-so `alembic upgrade head` works inside the container without duplicating config.
+so the shared main database can use `alembic upgrade main_db@head` inside the
+container without duplicating config. Tenant databases have a separate head;
+run `python scripts/migrate_tenants.py` from the repository root for them.
+The bare `head` target must not be used because the two heads are ambiguous.
 """
 
 from __future__ import annotations

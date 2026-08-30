@@ -16,6 +16,7 @@ ACTIVE_MIGRATION_DOCS = (
 UNQUALIFIED_HEAD = re.compile(r"\balembic\s+upgrade\s+head\b")
 MAIN_DB_COMMAND = "alembic upgrade main_db@head"
 TENANT_MIGRATION_COMMAND = "python scripts/migrate_tenants.py"
+ALEMBIC_ENV = REPO_ROOT / "backend" / "alembic" / "env.py"
 
 
 def test_active_docs_use_explicit_migration_branches():
@@ -26,3 +27,11 @@ def test_active_docs_use_explicit_migration_branches():
         assert not UNQUALIFIED_HEAD.search(text), f"{relative_path} must not suggest an unqualified Alembic head"
         assert MAIN_DB_COMMAND in text, f"{relative_path} must name the main_db head"
         assert TENANT_MIGRATION_COMMAND in text, f"{relative_path} must name the tenant helper"
+
+
+def test_alembic_env_documents_explicit_migration_branches():
+    text = ALEMBIC_ENV.read_text(encoding="utf-8")
+
+    assert not UNQUALIFIED_HEAD.search(text), "env.py must not suggest an unqualified Alembic head"
+    assert MAIN_DB_COMMAND in text
+    assert TENANT_MIGRATION_COMMAND in text
