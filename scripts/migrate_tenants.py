@@ -173,18 +173,34 @@ def main(argv: Iterable[str] | None = None) -> int:
         logger.warning("no tenants found — nothing to migrate")
         return 0
 
+    migrated: list[str] = []
+    skipped: list[str] = []
     failed: list[str] = []
     for name in targets:
         if not _db_exists(name):
             logger.warning("[%s] database missing in postgres — skipping", name)
+            skipped.append(name)
             continue
-        if not _migrate_one(name, dry_run=args.dry_run):
+        if _migrate_one(name, dry_run=args.dry_run):
+            migrated.append(name)
+        else:
             failed.append(name)
 
     if failed:
         logger.error("FAILED tenants (%d): %s", len(failed), ", ".join(failed))
+        logger.info(
+            "migration summary: migrated=%d skipped=%d failed=%d",
+            len(migrated),
+            len(skipped),
+            len(failed),
+        )
         return 1
-    logger.info("ok: %d tenant(s) migrated", len(targets) - len(failed))
+    logger.info("ok: %d tenant(s) migrated", len(migrated))
+    logger.info(
+        "migration summary: migrated=%d skipped=%d failed=0",
+        len(migrated),
+        len(skipped),
+    )
     return 0
 
 
