@@ -290,7 +290,7 @@ def cleanup_expired_entries() -> None:
             task_id
             for task_id, task in _course_tasks.items()
             if now - task.get("updated_at", task.get("created_at", now)) > _COURSE_TASK_TTL_SECONDS
-            and task.get("status") in ("completed", "failed", "cancelled", None)
+            and (task.get("status") in _TERMINAL_TASK_STATUSES or task.get("status") is None)
         ]
         for task_id in expired_tasks:
             _course_tasks.pop(task_id, None)
