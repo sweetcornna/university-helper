@@ -21,7 +21,7 @@ help:
 	@echo ""
 	@echo "Quality:"
 	@echo "  make test           Run all tests (backend + frontend)"
-	@echo "  make test-backend   Backend pytest"
+	@echo "  make test-backend   Backend + scripts pytest"
 	@echo "  make test-frontend  Frontend vitest"
 	@echo "  make lint           Run all linters (ruff + eslint)"
 	@echo ""
@@ -62,7 +62,7 @@ logs-db:
 test: test-backend test-frontend
 
 test-backend:
-	cd backend && pytest -q
+	cd backend && pytest -q tests ../scripts/tests
 
 test-frontend:
 	cd frontend && npm run test -- --run

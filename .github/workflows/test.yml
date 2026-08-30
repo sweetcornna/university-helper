@@ -87,7 +87,7 @@ jobs:
           # latency/concurrency benchmarks (e.g. `assert duration < 1.0`) that are
           # inherently flaky on shared CI runners and have been failing here
           # independently of correctness. Run them manually/locally when profiling.
-          pytest --ignore=tests/performance --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml
+          pytest --ignore=tests/performance --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml tests ../scripts/tests
 
       - name: Upload coverage artifact
         if: always()

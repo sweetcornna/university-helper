@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test.yml"
+MAKEFILE = REPO_ROOT / "Makefile"
+SCRIPT_TESTS_DIR = REPO_ROOT / "scripts" / "tests"
 ACTIVE_DOCS = (
     REPO_ROOT / "CONTRIBUTING.md",
     REPO_ROOT / "README.md",
@@ -38,6 +43,61 @@ def test_active_workflow_exposes_only_the_actual_backend_checks():
     run_scripts = [str(step["run"]) for step in backend["steps"] if "run" in step]
     assert run_scripts
     assert not any(MYPY_TOKEN.search(script) for script in run_scripts)
+
+
+def test_backend_gates_explicitly_include_scripts_tests_and_only_skip_performance():
+    workflow = _workflow()
+    backend = workflow["jobs"]["backend"]
+    pytest_steps = [step for step in backend["steps"] if step.get("name") == "Pytest with coverage"]
+
+    assert len(pytest_steps) == 1
+    pytest_command = str(pytest_steps[0]["run"])
+    assert " tests ../scripts/tests" in pytest_command
+    assert re.findall(r"--ignore(?:=|\s+)([^\s]+)", pytest_command) == ["tests/performance"]
+
+    makefile_lines = MAKEFILE.read_text(encoding="utf-8").splitlines()
+    target_start = makefile_lines.index("test-backend:")
+    target_body = []
+    for line in makefile_lines[target_start + 1 :]:
+        if line and not line[0].isspace():
+            break
+        target_body.append(line)
+    make_command = "\n".join(target_body)
+    assert "cd backend && pytest -q tests ../scripts/tests" in make_command
+
+
+def test_all_script_test_files_are_collected_by_the_backend_invocation():
+    script_test_files = sorted(SCRIPT_TESTS_DIR.glob("test_*.py"))
+    assert script_test_files
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--ignore=tests/performance",
+            "-p",
+            "no:cacheprovider",
+            "-o",
+            "addopts=",
+            "tests",
+            "../scripts/tests",
+        ],
+        cwd=REPO_ROOT / "backend",
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    collected = result.stdout + result.stderr
+    for path in script_test_files:
+        # Pytest normalizes ../scripts/tests modules to their basename when
+        # invoked from backend/, so assert each dynamically discovered file's
+        # node id rather than hard-coding a test count or path prefix.
+        assert f"{path.name}::" in collected, f"{path.name} was not collected"
 
 
 def test_active_workflow_marks_report_only_security_checks_precisely():
