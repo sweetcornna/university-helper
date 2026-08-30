@@ -63,6 +63,7 @@ def _compose_config(
         *COMPOSE_ENV,
         "APP_PORT",
         "HTTP_PORT",
+        "HTTP_BIND_HOST",
         "UH_TAG",
         "COMPOSE_FILE",
         "COMPOSE_PROJECT_NAME",
@@ -118,7 +119,17 @@ def test_release_compose_uses_http_port_for_web(tmp_path: Path) -> None:
     )
 
     assert _published_ports(config, "app") == {("127.0.0.1", "8000", 8000)}
-    assert _published_ports(config, "web") == {("", "19090", 80)}
+    assert _published_ports(config, "web") == {("127.0.0.1", "19090", 80)}
+
+
+def test_release_compose_explicit_public_bind_host(tmp_path: Path) -> None:
+    config = _compose_config(
+        tmp_path,
+        "docker-compose.release.yml",
+        overrides={"HTTP_PORT": "19090", "HTTP_BIND_HOST": "0.0.0.0"},
+    )
+
+    assert _published_ports(config, "web") == {("0.0.0.0", "19090", 80)}
 
 
 @pytest.mark.parametrize("overlay", ["docker-compose.staging.yml", "docker-compose.newhost.yml"])

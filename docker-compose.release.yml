@@ -69,11 +69,11 @@ services:
     depends_on:
       app:
         condition: service_healthy
-    # Public entrypoint. Reachable at http://<host>:${HTTP_PORT}. Put a
-    # TLS-terminating reverse proxy in front for production (deploy_server.sh
-    # --domain can scaffold host nginx + certbot).
+    # Loopback by default; deploy_server.sh / deploy_server.ps1 select 0.0.0.0
+    # only for an explicit --host/-HostIp plain-http deployment. Put a
+    # TLS-terminating reverse proxy in front for production.
     ports:
-      - "${HTTP_PORT:-8080}:80"
+      - "${HTTP_BIND_HOST:-127.0.0.1}:${HTTP_PORT:-8080}:80"
     networks:
       - shuake-net
     deploy:

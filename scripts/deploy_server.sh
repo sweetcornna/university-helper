@@ -36,6 +36,7 @@ DOMAIN=""
 HOST_IP=""
 HTTP_PORT="8080"
 APP_PORT="8000"
+HTTP_BIND_HOST="127.0.0.1"
 TAG="latest"
 MODE="pull"   # pull | build
 DO_TLS="1"
@@ -77,6 +78,10 @@ while [[ $# -gt 0 ]]; do
     *) die "Unknown option: $1 (try --help)" ;;
   esac
 done
+
+if [[ -n "$HOST_IP" && -z "$DOMAIN" ]]; then
+  HTTP_BIND_HOST="0.0.0.0"
+fi
 
 normalize_image_tag() {
   local raw="${1:-latest}"
@@ -176,6 +181,7 @@ CORS_ORIGINS=${cors}
 ENV=${env_tag}
 APP_PORT=${APP_PORT}
 HTTP_PORT=${HTTP_PORT}
+HTTP_BIND_HOST=${HTTP_BIND_HOST}
 EOF
   chmod 600 .env
   ok ".env written (ENV=${env_tag}, CORS=${cors})"
@@ -199,7 +205,7 @@ deploy() {
     fi
   fi
   info "Starting stack…"
-  HTTP_PORT="$HTTP_PORT" APP_PORT="$APP_PORT" dc up -d
+  HTTP_BIND_HOST="$HTTP_BIND_HOST" HTTP_PORT="$HTTP_PORT" APP_PORT="$APP_PORT" dc up -d
 }
 
 # ---- health ---------------------------------------------------------------

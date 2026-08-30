@@ -64,6 +64,8 @@ if ($ImageTag -ne $RawTag) {
 
 Info "University Helper guided deploy (Windows) — mode: $(if ($Build) {'build'} else {'pull'}), tag: $ImageTag"
 
+$HttpBindHost = if ($HostIp -and -not $Domain) { "0.0.0.0" } else { "127.0.0.1" }
+
 # ---- docker + compose -----------------------------------------------------
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   Die "Docker not found. Install Docker Desktop (https://docs.docker.com/desktop/windows/) and re-run."
@@ -100,6 +102,7 @@ CORS_ORIGINS=$Cors
 ENV=$EnvTag
 APP_PORT=8000
 HTTP_PORT=$Port
+HTTP_BIND_HOST=$HttpBindHost
 "@
   Set-Content -Path ".env" -Value $envBody -NoNewline -Encoding ascii
   Ok ".env written (ENV=$EnvTag, CORS=$Cors)"
@@ -108,6 +111,7 @@ HTTP_PORT=$Port
 # ---- bring up the stack ---------------------------------------------------
 $env:HTTP_PORT = "$Port"
 $env:APP_PORT  = "8000"
+$env:HTTP_BIND_HOST = $HttpBindHost
 if ($Build) {
   Info "Building images from source (this can take a few minutes)…"
   docker build -f Dockerfile.server -t "$ImageNs/university-helper-app:local" .
