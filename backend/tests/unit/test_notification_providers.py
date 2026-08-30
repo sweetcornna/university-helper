@@ -5,6 +5,7 @@ import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from app.services.notification.providers import (
     Bark,
@@ -22,6 +23,11 @@ _PUBLIC_NOTIFICATION_HOSTS = {
     "qmsg.zendee.cn",
     "api.telegram.org",
 }
+
+_SENSITIVE_WEBHOOK_URL = (
+    "https://notify-user:NOTIFICATION_SENTINEL@api.day.app/webhook/NOTIFICATION_SENTINEL?token=NOTIFICATION_SENTINEL"
+)
+_NOTIFICATION_SENTINEL = "NOTIFICATION_SENTINEL"
 
 
 @pytest.fixture
@@ -75,6 +81,10 @@ def _build(provider_cls, url):
     return svc
 
 
+def _log_text(logger_mock):
+    return "\n".join(str(call.args[0]) for call in logger_mock.mock_calls if call.args)
+
+
 @pytest.mark.parametrize("provider_cls", [ServerChan, Qmsg, Bark, Telegram])
 def test_providers_do_not_post_to_internal_url(provider_cls):
     """A configured internal URL must never reach requests.post."""
@@ -111,6 +121,80 @@ def test_providers_reject_redirect_without_following(public_notification_dns, pr
     mock_post.assert_called_once()
     assert mock_post.call_args.kwargs["allow_redirects"] is False
     response.json.assert_not_called()
+
+
+@pytest.mark.parametrize("provider_cls", [ServerChan, Qmsg, Bark, Telegram])
+def test_provider_init_logs_do_not_include_webhook_credentials(provider_cls):
+    svc = provider_cls()
+    svc.config_set({"url": _SENSITIVE_WEBHOOK_URL, "tg_chat_id": _NOTIFICATION_SENTINEL})
+
+    with patch("app.services.notification.providers.logger") as mock_logger:
+        svc.init_notification()
+
+    logs = _log_text(mock_logger)
+    assert svc.name in logs
+    assert _NOTIFICATION_SENTINEL not in logs
+    assert "?token=" not in logs
+    assert "notify-user:" not in logs
+
+
+@pytest.mark.parametrize("provider_cls", [ServerChan, Qmsg, Bark, Telegram])
+def test_validation_failure_log_does_not_include_webhook_credentials(provider_cls):
+    svc = _build(provider_cls, _SENSITIVE_WEBHOOK_URL)
+
+    with (
+        patch("app.services.notification.providers.validate_notification_url", return_value=False),
+        patch("app.services.notification.providers.logger") as mock_logger,
+    ):
+        assert svc.send("hello") is False
+
+    logs = _log_text(mock_logger)
+    assert svc.name in logs
+    assert "校验失败" in logs
+    assert _NOTIFICATION_SENTINEL not in logs
+    assert "?token=" not in logs
+    assert "notify-user:" not in logs
+
+
+@pytest.mark.parametrize("provider_cls", [ServerChan, Qmsg, Bark, Telegram])
+@pytest.mark.parametrize("exception_cls", [requests.exceptions.HTTPError, requests.exceptions.Timeout])
+def test_request_error_logs_do_not_include_webhook_credentials(provider_cls, exception_cls):
+    svc = _build(provider_cls, _SENSITIVE_WEBHOOK_URL)
+    request_error = exception_cls(f"request failed for {_SENSITIVE_WEBHOOK_URL}")
+
+    with (
+        patch.object(svc, "_url_allowed", return_value=True),
+        patch("app.services.notification.providers.requests.post", side_effect=request_error),
+        patch("app.services.notification.providers.logger") as mock_logger,
+    ):
+        assert svc.send("hello") is False
+
+    logs = _log_text(mock_logger)
+    assert svc.name in logs
+    assert exception_cls.__name__ in logs
+    assert _NOTIFICATION_SENTINEL not in logs
+    assert "?token=" not in logs
+    assert "notify-user:" not in logs
+
+
+@pytest.mark.parametrize("provider_cls", [ServerChan, Qmsg, Bark, Telegram])
+def test_success_log_does_not_include_webhook_credentials(public_notification_dns, provider_cls):
+    svc = _build(provider_cls, _SENSITIVE_WEBHOOK_URL)
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {"ok": True, "webhook": _SENSITIVE_WEBHOOK_URL}
+
+    with (
+        patch("app.services.notification.providers.requests.post", return_value=response),
+        patch("app.services.notification.providers.logger") as mock_logger,
+    ):
+        assert svc.send("hello") is True
+
+    logs = _log_text(mock_logger)
+    assert svc.name in logs
+    assert _NOTIFICATION_SENTINEL not in logs
+    assert "?token=" not in logs
+    assert "notify-user:" not in logs
 
 
 def test_public_interface_is_stable():

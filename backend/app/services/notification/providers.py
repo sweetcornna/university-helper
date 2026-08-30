@@ -167,7 +167,7 @@ class NotificationService(ABC):
     def _url_allowed(self) -> bool:
         """Reject outbound POSTs to unvalidated/internal URLs (F55 SSRF guard)."""
         if not validate_notification_url(self.url):
-            logger.error(f"拒绝向不被允许的通知地址发送请求: {self.url!r}")
+            logger.error(f"{self.name} 通知地址校验失败")
             return False
         return True
 
@@ -274,7 +274,7 @@ class ServerChan(NotificationService):
             return
 
         self.url = self._conf["url"]
-        logger.info(f"已初始化Server酱通知服务，URL: {self.url}")
+        logger.info(f"已初始化{self.name}通知服务")
 
     def _send(self, message: str) -> bool:
         """
@@ -304,13 +304,13 @@ class ServerChan(NotificationService):
                 logger.error(f"Server酱通知发送失败：服务返回重定向状态 {response.status_code}")
                 return False
             response.raise_for_status()
-            result = response.json()
-            logger.info(f"Server酱通知发送成功: {result}")
+            response.json()
+            logger.info(f"{self.name}通知发送成功")
             return True
         except requests.RequestException as e:
-            logger.error(f"Server酱通知发送失败: {e}")
+            logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         except ValueError as e:
-            logger.error(f"Server酱返回数据解析失败: {e}")
+            logger.error(f"{self.name}返回数据解析失败: {type(e).__name__}")
         return False
 
 
@@ -327,7 +327,7 @@ class Qmsg(NotificationService):
             return
 
         self.url = self._conf["url"]
-        logger.info(f"已初始化Qmsg酱通知服务，URL: {self.url}")
+        logger.info(f"已初始化{self.name}通知服务")
 
     def _send(self, message: str) -> bool:
         """
@@ -354,13 +354,13 @@ class Qmsg(NotificationService):
                 logger.error(f"Qmsg酱通知发送失败：服务返回重定向状态 {response.status_code}")
                 return False
             response.raise_for_status()
-            result = response.json()
-            logger.info(f"Qmsg酱通知发送成功: {result}")
+            response.json()
+            logger.info(f"{self.name}通知发送成功")
             return True
         except requests.RequestException as e:
-            logger.error(f"Qmsg酱通知发送失败: {e}")
+            logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         except ValueError as e:
-            logger.error(f"Qmsg酱返回数据解析失败: {e}")
+            logger.error(f"{self.name}返回数据解析失败: {type(e).__name__}")
         return False
 
 
@@ -377,7 +377,7 @@ class Bark(NotificationService):
             return
 
         self.url = self._conf["url"]
-        logger.info(f"已初始化Bark通知服务，URL: {self.url}")
+        logger.info(f"已初始化{self.name}通知服务")
 
     def _send(self, message: str) -> bool:
         """
@@ -402,13 +402,13 @@ class Bark(NotificationService):
                 logger.error(f"Bark通知发送失败：服务返回重定向状态 {response.status_code}")
                 return False
             response.raise_for_status()
-            result = response.json()
-            logger.info(f"Bark通知发送成功: {result}")
+            response.json()
+            logger.info(f"{self.name}通知发送成功")
             return True
         except requests.RequestException as e:
-            logger.error(f"Bark通知发送失败: {e}")
+            logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         except ValueError as e:
-            logger.error(f"Bark返回数据解析失败: {e}")
+            logger.error(f"{self.name}返回数据解析失败: {type(e).__name__}")
         return False
 
 
@@ -425,7 +425,7 @@ class Telegram(NotificationService):
             return
         self.tg_chat_id = self._conf["tg_chat_id"]
         self.url = self._conf["url"]
-        logger.info(f"已初始化Telegram通知服务，Chat_id: {self.tg_chat_id} URL: {self.url}")
+        logger.info(f"已初始化{self.name}通知服务")
 
     def _send(self, message: str) -> bool:
         """
@@ -452,13 +452,13 @@ class Telegram(NotificationService):
             response.raise_for_status()
             result = response.json()
             if result.get("ok"):
-                logger.info(f"Telegram通知发送成功: {result}")
+                logger.info(f"{self.name}通知发送成功")
                 return True
-            logger.error(f"Telegram通知发送失败: {result}")
+            logger.error(f"{self.name}通知发送失败: provider response rejected")
         except requests.RequestException as e:
-            logger.error(f"Telegram通知发送失败: {e}")
+            logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         except ValueError as e:
-            logger.error(f"Telegram返回数据解析失败: {e}")
+            logger.error(f"{self.name}返回数据解析失败: {type(e).__name__}")
         return False
 
 
