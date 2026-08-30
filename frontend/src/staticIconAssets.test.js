@@ -19,16 +19,26 @@ async function loadIconReferences() {
   const manifest = JSON.parse(await readFile(join(publicRoot, 'site.webmanifest'), 'utf8'))
   const manifestIcons = manifest.icons.map((icon) => icon.src)
 
-  return { indexIcons, manifestIcons }
+  const viteConfig = await readFile(join(frontendRoot, 'vite.config.js'), 'utf8')
+  const includeAssetsMatch = viteConfig.match(/includeAssets:\s*\[([\s\S]*?)\]/)
+  if (!includeAssetsMatch) {
+    throw new Error('vite.config.js must declare VitePWA includeAssets')
+  }
+  const includeAssets = [...includeAssetsMatch[1].matchAll(/['"]([^'"]+)['"]/g)].map(
+    ([, asset]) => `/${asset}`,
+  )
+
+  return { indexIcons, manifestIcons, includeAssets }
 }
 
-describe('static icon declarations', () => {
+describe('static public asset declarations', () => {
   test('reference non-empty files from the public directory', async () => {
-    const { indexIcons, manifestIcons } = await loadIconReferences()
+    const { indexIcons, manifestIcons, includeAssets } = await loadIconReferences()
     expect(indexIcons).toContain('/favicon.svg')
     expect(manifestIcons).toContain('/favicon.svg')
+    expect(includeAssets).toContain('/favicon.svg')
 
-    for (const reference of [...indexIcons, ...manifestIcons]) {
+    for (const reference of [...indexIcons, ...manifestIcons, ...includeAssets]) {
       expect(reference).toMatch(/^\/(?!\/)/)
       const stats = statSync(join(publicRoot, reference.slice(1)))
       expect(stats.isFile(), `${reference} must be a file`).toBe(true)

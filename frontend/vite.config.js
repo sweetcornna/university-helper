@@ -13,7 +13,7 @@ export default defineConfig({
       // generate the service worker + workbox runtime, not inject anything.
       injectRegister: 'auto',
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'favicon.ico', 'robots.txt'],
+      includeAssets: ['favicon.svg', 'robots.txt'],
       manifest: false, // public/site.webmanifest is the source of truth
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,ico,png,woff2}'],
