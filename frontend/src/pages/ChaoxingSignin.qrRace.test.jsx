@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
+import { fireEvent } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import ChaoxingSignin from './ChaoxingSignin'
@@ -104,6 +105,12 @@ describe('ChaoxingSignin QR upload race handling', () => {
     })
   }
 
+  const enterQrCode = async (input, value) => {
+    await act(async () => {
+      fireEvent.change(input, { target: { value } })
+    })
+  }
+
   const settle = async (deferred, action) => {
     await act(async () => {
       action()
@@ -174,6 +181,39 @@ describe('ChaoxingSignin QR upload race handling', () => {
     await settle(decodeA, () => decodeA.resolve('stale decoded-a'))
     expect(container.querySelector('#cx-qrcode').value).toBe('')
     expect(container.textContent).toContain('current decode failed')
+  })
+
+  test('keeps manual QR text when an earlier decode succeeds later', async () => {
+    const decodeA = createDeferred()
+    decodeQrCodeFromFile.mockReturnValue(decodeA.promise)
+
+    const fileInput = await renderQrForm()
+    await chooseFile(fileInput, createFile('a.png'))
+
+    const qrInput = container.querySelector('#cx-qrcode')
+    await enterQrCode(qrInput, 'manual-qr-value')
+    expect(qrInput.value).toBe('manual-qr-value')
+
+    await settle(decodeA, () => decodeA.resolve('stale-decoded-a'))
+    expect(container.querySelector('#cx-qrcode').value).toBe('manual-qr-value')
+    expect(container.textContent).toContain('解码中...')
+  })
+
+  test('keeps manual QR text and status when an earlier decode fails later', async () => {
+    const decodeA = createDeferred()
+    decodeQrCodeFromFile.mockReturnValue(decodeA.promise)
+
+    const fileInput = await renderQrForm()
+    await chooseFile(fileInput, createFile('a.png'))
+
+    const qrInput = container.querySelector('#cx-qrcode')
+    await enterQrCode(qrInput, 'manual-qr-value')
+    expect(qrInput.value).toBe('manual-qr-value')
+
+    await settle(decodeA, () => decodeA.reject(new Error('stale decode failed')))
+    expect(container.querySelector('#cx-qrcode').value).toBe('manual-qr-value')
+    expect(container.textContent).toContain('解码中...')
+    expect(container.textContent).not.toContain('stale decode failed')
   })
 
   test('does not update state when a pending decode completes after unmount', async () => {

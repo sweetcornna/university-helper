@@ -1664,7 +1664,10 @@ export default function ChaoxingSignin() {
                       label="二维码内容（上传图片后自动填充，也可手动输入）"
                       type="text"
                       value={form.qrCode}
-                      onChange={(e) => setForm((prev) => ({ ...prev, qrCode: e.target.value }))}
+                      onChange={(e) => {
+                        qrDecodeGenerationRef.current += 1
+                        setForm((prev) => ({ ...prev, qrCode: e.target.value }))
+                      }}
                       placeholder="上传二维码图片后自动解析，或手动粘贴二维码链接"
                     />
 
