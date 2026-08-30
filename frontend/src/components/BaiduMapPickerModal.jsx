@@ -92,20 +92,22 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
     })
 
     // Leaflet needs a resize nudge after the container becomes visible
-    setTimeout(() => map.invalidateSize(), 100)
+    const resizeTimer = setTimeout(() => map.invalidateSize(), 100)
 
     return () => {
-      // will be cleaned up by the close effect
+      clearTimeout(resizeTimer)
+      map.remove()
+      if (mapRef.current === map) {
+        mapRef.current = null
+        markerRef.current = null
+      }
     }
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cleanup map on modal close
+  // Reset modal state on close; map resources are owned by the initialization
+  // effect above so its cleanup also handles parent/router unmounts.
   useEffect(() => {
     if (!open) {
-      if (mapRef.current) {
-        mapRef.current.remove()
-        mapRef.current = null
-      }
       markerRef.current = null
       setDraft(null)
       setSearchQuery('')
