@@ -5,6 +5,8 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import ChaoxingSignin from './ChaoxingSignin'
+import { RuntimeProfileContext } from '../components/runtimeProfileContext'
+import { ToastProvider } from '../components/Toast'
 import { wgs84ToBd09 } from '../utils/coordTransform'
 
 vi.mock('../components/BaiduMapPickerModal', () => ({

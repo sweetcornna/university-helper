@@ -5,6 +5,11 @@ const API_BASE =
   import.meta.env.VITE_API_BASE_URL ||
   '/api/v1'
 const DEFAULT_TIMEOUT_MS = 20000
+let runtimeProfile = 'server'
+
+export const setApiRuntimeProfile = (profile) => {
+  runtimeProfile = profile === 'local' ? 'local' : 'server'
+}
 
 // Custom event that the app shell (App.jsx / a top-level effect) can listen
 // to in order to navigate to /login on session expiry — keeps api.js free of
@@ -122,7 +127,7 @@ export class ApiError extends Error {
 }
 
 export const api = async (endpoint, options = {}) => {
-  const token = getToken()
+  const token = runtimeProfile === 'local' ? null : getToken()
   const timeoutMs = Number(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   const hasCustomSignal = Boolean(options.signal)
   const controller = hasCustomSignal ? null : new AbortController()

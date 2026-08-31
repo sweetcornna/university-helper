@@ -1296,9 +1296,9 @@ export default function Zhihuishu() {
 
     void (async () => {
       try {
-        await loadConfigFromBackend(true)
         const statusPayload = await loadZhihuishuStatus(true)
         if (statusPayload?.logged_in) {
+          await loadConfigFromBackend(true)
           const [, loadedTasks] = await Promise.all([
             loadCourses(true),
             fetchTaskList({ silent: true, preferredTaskId: storedActiveTaskId })
