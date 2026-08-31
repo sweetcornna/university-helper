@@ -74,16 +74,16 @@ git clone https://github.com/sweetcornna/university-helper.git
 cd university-helper
 
 # Linux / macOS / WSL2
-bash scripts/deploy_server.sh --tag 1.4.5 -y                 # local: http://localhost:8080
-bash scripts/deploy_server.sh --tag 1.4.5 --host 203.0.113.10 -y
-bash scripts/deploy_server.sh --tag 1.4.5 --domain your.domain -y
+bash scripts/deploy_server.sh --tag 1.4.6 -y                 # local: http://localhost:8080
+bash scripts/deploy_server.sh --tag 1.4.6 --host 203.0.113.10 -y
+bash scripts/deploy_server.sh --tag 1.4.6 --domain your.domain -y
 
 # Windows (PowerShell + Docker Desktop)
-pwsh scripts/deploy_server.ps1 -Tag 1.4.5 -Port 8080 -Yes
+pwsh scripts/deploy_server.ps1 -Tag 1.4.6 -Port 8080 -Yes
 ```
 
-The scripts also accept `v1.4.5` and normalize it to the GHCR image tag
-`1.4.5`. Add `--build` (`-Build` on Windows) to build from source instead of
+The scripts also accept `v1.4.6` and normalize it to the GHCR image tag
+`1.4.6`. Add `--build` (`-Build` on Windows) to build from source instead of
 pulling release images.
 
 ### Local development
@@ -237,7 +237,7 @@ release, so there is nothing to compile:
 - `ghcr.io/sweetcornna/university-helper-app` — FastAPI backend
 - `ghcr.io/sweetcornna/university-helper-web` — nginx + the built SPA
 
-Release image tags omit the leading `v` (`1.4.5`, not `v1.4.5`). The deploy
+Release image tags omit the leading `v` (`1.4.6`, not `v1.4.6`). The deploy
 scripts accept either form.
 
 ### Manual (build from source)

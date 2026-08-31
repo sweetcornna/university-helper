@@ -6,6 +6,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.6] - 2026-08-30
+
+### Security
+- Fixed the explicitly identified high-risk paths across request handling,
+  notifications, OCR, backups, deployment helpers, and selected logs: targeted
+  sensitive tokens and response bodies are redacted, unsafe URLs and redirects
+  are rejected, and remote release/deploy inputs are validated and constrained.
+- Added targeted integrity and supply-chain guardrails for shipped web assets,
+  package ecosystems, container builds, and GitHub Actions dependencies.
+- Audit follow-up remains for R10: 10 files and 21 log points (15 body/card,
+  4 token-suffix, and 2 OTEL-endpoint points) are pending remediation.
+
+### Reliability
+- Bounded stalled network, OCR, map, QR, sign-in, and background-task work;
+  stale asynchronous generations and concurrent course operations are isolated
+  or cancelled instead of overwriting current state.
+- Made task persistence, worker startup/shutdown, database-pool lifecycle, and
+  backup publication failure-safe so errors become visible terminal outcomes.
+
+### Release
+- Hardened release promotion and deployment readiness gates, deterministic
+  desktop packaging/locks, version stamping, health checks, and safe bind modes.
+
+### Tests
+- Added and tightened regression, audit, packaging, deployment, and release
+  guardrails covering the security and reliability boundaries above.
+
 ## [1.4.5] - 2026-06-28
 
 ### Fixed
