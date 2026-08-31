@@ -336,6 +336,16 @@ export default function Zhihuishu() {
     return generation
   }, [stopQrPolling])
 
+  const abandonQrLoginIntent = useCallback(() => {
+    invalidateQrGeneration()
+    setQrSessionId('')
+    setQrCode('')
+    setQrStatus('idle')
+    setQrMessage('')
+    setQrError('')
+    setQrLoading(false)
+  }, [invalidateQrGeneration])
+
   const ownsQrSession = useCallback((generation, sessionId) => {
     const owner = qrSessionOwnerRef.current
     return mountedRef.current
@@ -1152,6 +1162,8 @@ export default function Zhihuishu() {
     event.preventDefault()
     if (passwordLoading) return
 
+    abandonQrLoginIntent()
+
     const username = passwordForm.username.trim()
     const password = passwordForm.password
     if (!username || !password) {
@@ -1501,7 +1513,10 @@ export default function Zhihuishu() {
                   type="button"
                   role="radio"
                   aria-checked={loginMethod === opt.value}
-                  onClick={() => setLoginMethod(opt.value)}
+                  onClick={() => {
+                    if (opt.value === 'password') abandonQrLoginIntent()
+                    setLoginMethod(opt.value)
+                  }}
                   className={`min-h-[40px] rounded-full px-4 text-sm font-medium transition-colors ${
                     loginMethod === opt.value
                       ? 'bg-primary text-white'

@@ -813,6 +813,112 @@ describe('Zhihuishu request race guards', () => {
     expect(screen.getByText('B 仍在等待')).toBeInTheDocument()
   })
 
+  test('switching to password login prevents an old QR success from overwriting password login', async () => {
+    vi.useFakeTimers()
+    const oldPollRequest = deferred()
+    api.mockImplementation((path) => {
+      if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+      if (path === `${API_BASE}/qr-login`) {
+        return Promise.resolve(qrLoginResponse('session-a', 'qr-a', 'A 等待扫码'))
+      }
+      if (path === `${API_BASE}/login-status/session-a`) return oldPollRequest.promise
+      if (path === `${API_BASE}/password-login`) {
+        return Promise.resolve({ message: 'B 密码登录成功' })
+      }
+      if (path === `${API_BASE}/courses/grouped`) return Promise.resolve({ data: [] })
+      if (path === `${API_BASE}/config`) return Promise.resolve({ data: {} })
+      if (path === `${API_BASE}/tasks`) return Promise.resolve({ data: [] })
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+
+    renderPage()
+    await flushPromises()
+    fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+    await flushPromises()
+    await advanceTimers(2000)
+    expect(countRequests(`${API_BASE}/login-status/session-a`)).toBe(1)
+
+    fireEvent.click(screen.getByRole('radio', { name: '账号密码登录' }))
+    fireEvent.change(screen.getByLabelText('账号'), { target: { value: 'account-b' } })
+    fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'password-b' } })
+    fireEvent.click(screen.getByRole('button', { name: '密码登录' }))
+    await flushPromises()
+    expect(countRequests(`${API_BASE}/password-login`)).toBe(1)
+    expect(screen.getByText('智慧树状态：已登录')).toBeInTheDocument()
+    expect(countRequests(`${API_BASE}/tasks`)).toBe(1)
+    toast.notify.mockReset()
+
+    await settle(oldPollRequest, { status: 'success', message: 'A 旧成功' })
+
+    expect(countRequests(`${API_BASE}/courses/grouped`)).toBe(1)
+    expect(countRequests(`${API_BASE}/config`)).toBe(1)
+    expect(countRequests(`${API_BASE}/tasks`)).toBe(1)
+    expect(toast.notify).not.toHaveBeenCalled()
+    expect(screen.queryByText('A 旧成功')).not.toBeInTheDocument()
+  })
+
+  test('password form submission defensively invalidates an old QR rejection and leaves QR reusable', async () => {
+    vi.useFakeTimers()
+    const oldPollRequest = deferred()
+    let qrLoginCalls = 0
+    api.mockImplementation((path) => {
+      if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+      if (path === `${API_BASE}/qr-login`) {
+        qrLoginCalls += 1
+        return Promise.resolve(qrLoginCalls === 1
+          ? qrLoginResponse('session-a', 'qr-a', 'A 等待扫码')
+          : qrLoginResponse('session-b', 'qr-b', 'B 等待扫码'))
+      }
+      if (path === `${API_BASE}/login-status/session-a`) return oldPollRequest.promise
+      if (path === `${API_BASE}/login-status/session-b`) {
+        return Promise.resolve({ status: 'pending', message: 'B 仍在等待' })
+      }
+      if (path === `${API_BASE}/password-login`) {
+        return Promise.resolve({ message: '密码登录成功' })
+      }
+      if (path === `${API_BASE}/courses/grouped`) return Promise.resolve({ data: [] })
+      if (path === `${API_BASE}/config`) return Promise.resolve({ data: {} })
+      if (path === `${API_BASE}/tasks`) return Promise.resolve({ data: [] })
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+
+    renderPage()
+    await flushPromises()
+    fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+    await flushPromises()
+    await advanceTimers(2000)
+    expect(countRequests(`${API_BASE}/login-status/session-a`)).toBe(1)
+
+    fireEvent.click(screen.getByRole('radio', { name: '账号密码登录' }))
+    fireEvent.change(screen.getByLabelText('账号'), { target: { value: 'account-b' } })
+    fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'password-b' } })
+    fireEvent.submit(screen.getByRole('button', { name: '密码登录' }).closest('form'))
+    await flushPromises()
+    expect(countRequests(`${API_BASE}/password-login`)).toBe(1)
+    expect(countRequests(`${API_BASE}/tasks`)).toBe(1)
+    toast.notify.mockReset()
+
+    await fail(oldPollRequest, new Error('A 旧轮询失败'))
+
+    expect(toast.notify).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('账号')).toHaveValue('account-b')
+    expect(screen.getByLabelText('密码')).toHaveValue('password-b')
+    fireEvent.click(screen.getByRole('radio', { name: '二维码登录' }))
+    expect(screen.getByText('状态：未开始')).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: '智慧树二维码' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
+    await flushPromises()
+    expect(screen.getByText('B 等待扫码')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '智慧树二维码' })).toHaveAttribute(
+      'src',
+      'data:image/png;base64,qr-b',
+    )
+    await advanceTimers(2000)
+    expect(countRequests(`${API_BASE}/login-status/session-b`)).toBe(1)
+    expect(screen.getByText('B 仍在等待')).toBeInTheDocument()
+  })
+
   test('a slow poll has at most one request in flight for its generation', async () => {
     vi.useFakeTimers()
     const firstPollRequest = deferred()
