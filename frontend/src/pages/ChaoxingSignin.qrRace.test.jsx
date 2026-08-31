@@ -193,13 +193,15 @@ describe('ChaoxingSignin QR upload race handling', () => {
     const qrInput = container.querySelector('#cx-qrcode')
     await enterQrCode(qrInput, 'manual-qr-value')
     expect(qrInput.value).toBe('manual-qr-value')
+    expect(container.textContent).not.toContain('解码中...')
 
     await settle(decodeA, () => decodeA.resolve('stale-decoded-a'))
     expect(container.querySelector('#cx-qrcode').value).toBe('manual-qr-value')
-    expect(container.textContent).toContain('解码中...')
+    expect(container.textContent).not.toContain('解码中...')
+    expect(container.textContent).not.toContain('解码成功')
   })
 
-  test('keeps manual QR text and status when an earlier decode fails later', async () => {
+  test('keeps manual QR text and clears stale status when an earlier decode fails later', async () => {
     const decodeA = createDeferred()
     decodeQrCodeFromFile.mockReturnValue(decodeA.promise)
 
@@ -209,10 +211,11 @@ describe('ChaoxingSignin QR upload race handling', () => {
     const qrInput = container.querySelector('#cx-qrcode')
     await enterQrCode(qrInput, 'manual-qr-value')
     expect(qrInput.value).toBe('manual-qr-value')
+    expect(container.textContent).not.toContain('解码中...')
 
     await settle(decodeA, () => decodeA.reject(new Error('stale decode failed')))
     expect(container.querySelector('#cx-qrcode').value).toBe('manual-qr-value')
-    expect(container.textContent).toContain('解码中...')
+    expect(container.textContent).not.toContain('解码中...')
     expect(container.textContent).not.toContain('stale decode failed')
   })
 

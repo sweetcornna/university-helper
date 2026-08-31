@@ -1660,7 +1660,7 @@ export default function ChaoxingSignin() {
                       value={form.qrCode}
                       onChange={(e) => {
                         qrDecodeGenerationRef.current += 1
-                        setForm((prev) => ({ ...prev, qrCode: e.target.value }))
+                        setForm((prev) => ({ ...prev, qrCode: e.target.value, qrDecodeStatus: '' }))
                       }}
                       placeholder="上传二维码图片后自动解析，或手动粘贴二维码链接"
                     />
