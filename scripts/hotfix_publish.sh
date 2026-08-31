@@ -263,7 +263,7 @@ if [[ "$1" == "--frontend" ]]; then
   [[ -f "$ROOT_DIR/frontend/dist/index.html" ]] || { echo "frontend/dist not built — run 'npm run build' first." >&2; exit 1; }
   echo "Backing up remote dist + syncing new build"
   remote_frontend_dir_quoted="$(shell_quote "$REMOTE_DIR/frontend")"
-  remote_dist_target="${SERVER_USER}@${FILE_TRANSFER_HOST}:$(shell_quote "$REMOTE_DIR/frontend/dist/")"
+  remote_dist_target="${SERVER_USER}@${FILE_TRANSFER_HOST}:${REMOTE_DIR}/frontend/dist/"
   web_container_quoted="$(shell_quote "$WEB_CONTAINER")"
   remote_sh "cd $remote_frontend_dir_quoted && cp -r dist \"dist.bak.\$(date +%Y%m%d-%H%M%S)\" 2>/dev/null || true"
   rsync -az --delete -e "$RSYNC_RSH" "$ROOT_DIR/frontend/dist/" "$remote_dist_target"
