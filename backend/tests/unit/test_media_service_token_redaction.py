@@ -90,3 +90,48 @@ def test_refreshed_media_token_is_used_without_logging_secret(monkeypatch):
     assert "https://" not in formatted_logs
     assert "Cookie" not in formatted_logs
     assert "Authorization" not in formatted_logs
+
+
+def test_media_status_refresh_redacts_non_200_response_context(monkeypatch):
+    logger = Mock()
+    monkeypatch.setattr(media_module, "logger", logger)
+
+    body_secret = "sentinel-media-refresh-body"
+    url_secret = "sentinel-media-refresh-url"
+    cookie_secret = "sentinel-media-refresh-cookie"
+    authorization_secret = "sentinel-media-refresh-authorization"
+    token_secret = "sentinel-media-refresh-token"
+    jobid = "sentinel-media-refresh-jobid"
+    response = Mock(
+        status_code=500,
+        text=f"failure body: {body_secret} token={token_secret}",
+        url=f"https://example.invalid/status?secret={url_secret}",
+        headers={"Cookie": cookie_secret, "Authorization": authorization_secret},
+    )
+    session = Mock()
+    session.get.return_value = response
+    service = ChaoxingMediaService(
+        get_fid_func=lambda: "fid",
+        rate_limiter=Mock(),
+        video_log_limiter=Mock(),
+    )
+
+    result = service._refresh_video_status(session, {"objectid": "objectid", "jobid": jobid}, "Video")
+
+    assert result is None
+    assert session.get.call_count == 1
+    assert session.get.call_args.kwargs["timeout"] == 8
+    assert session.get.call_args.kwargs["headers"] is media_module.gc.VIDEO_HEADERS
+    assert logger.debug.call_count == 1
+    raw_args = logger.debug.call_args.args
+    raw_kwargs = logger.debug.call_args.kwargs
+    formatted_logs = _format_log_calls(logger.mock_calls)
+    assert 500 in raw_args
+    assert jobid in raw_args
+    assert raw_kwargs == {}
+    assert "500" in formatted_logs
+    assert jobid in formatted_logs
+    for secret in (body_secret, url_secret, cookie_secret, authorization_secret, token_secret):
+        assert secret not in repr(raw_args)
+        assert secret not in repr(raw_kwargs)
+        assert secret not in formatted_logs

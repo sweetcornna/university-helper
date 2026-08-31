@@ -135,7 +135,6 @@ class ChaoxingVideoService:
                 params.update({"rt": rt, "_t": get_timestamp()})
                 resp = _session.get(_url, params=params, headers=headers)
                 if resp.status_code == 200:
-                    logger.trace(resp.text)
                     return resp.json()["isPassed"], 200
                 if resp.status_code == 403:
                     logger.warning("出现403报错, 正常尝试切换rt")
@@ -148,7 +147,6 @@ class ChaoxingVideoService:
                     break
 
         if resp.status_code == 200:
-            logger.trace(resp.text)
             return resp.json()["isPassed"], 200
 
         if resp.status_code == 403:
@@ -178,8 +176,11 @@ class ChaoxingVideoService:
             return None
 
         if resp.status_code != 200:
-            logger.debug("刷新视频状态返回码异常: {}", resp.status_code)
-            logger.debug(resp.text)
+            logger.debug(
+                "刷新视频状态返回码异常: status_code={}, jobid={}",
+                resp.status_code,
+                job.get("jobid"),
+            )
             return None
 
         try:

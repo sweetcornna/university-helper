@@ -71,8 +71,11 @@ class ChaoxingMediaService:
             return None
 
         if resp.status_code != 200:
-            logger.debug("刷新视频状态返回码异常: {}", resp.status_code)
-            logger.debug(resp.text)
+            logger.debug(
+                "刷新视频状态返回码异常: status_code={}, jobid={}",
+                resp.status_code,
+                job.get("jobid"),
+            )
             return None
 
         try:
