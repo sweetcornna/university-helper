@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFENSE_DOC = REPO_ROOT / "docs" / "答辩稿.md"
 PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
 DEPLOYMENT_SCRIPTS = REPO_ROOT / "scripts"
+BASH_FRONTEND_HOTFIX = DEPLOYMENT_SCRIPTS / "hotfix_publish.sh"
+POWERSHELL_LOCAL_DEPLOY = DEPLOYMENT_SCRIPTS / "deploy_server.ps1"
 BACKEND_TESTS = REPO_ROOT / "backend" / "tests"
 E2E_TESTS_DIR = BACKEND_TESTS / "e2e"
 LANGUAGE_BY_SUFFIX = {".ps1": "PowerShell", ".py": "Python", ".sh": "Bash"}
@@ -76,6 +79,31 @@ def test_deployment_script_claim_matches_active_script_extensions():
         assert language in deployment_line
     for suffix, language in LANGUAGE_BY_SUFFIX.items():
         assert (language in deployment_line) == (suffix in suffixes)
+
+
+def test_frontend_hotfix_transport_claim_matches_active_scripts():
+    bash_script = BASH_FRONTEND_HOTFIX.read_text(encoding="utf-8")
+    powershell_script = POWERSHELL_LOCAL_DEPLOY.read_text(encoding="utf-8")
+    deployment_line = next(line for line in _document().splitlines() if "部署脚本与前端热修复" in line)
+    bash_claim, powershell_claim = deployment_line.split("；", maxsplit=1)
+
+    assert "--frontend" in bash_script
+    assert re.search(r"(?m)^\s*rsync\s+-az\s+--delete\b", bash_script)
+    assert "Bash" in bash_claim
+    assert "scripts/hotfix_publish.sh --frontend" in bash_claim
+    assert "rsync" in bash_claim
+    assert "远端服务器" in bash_claim
+
+    assert "rsync" not in powershell_script.casefold()
+    assert "$RepoRoot = Split-Path -Parent $PSScriptRoot" in powershell_script
+    assert "Docker Desktop" in powershell_script
+    assert re.search(r"(?i)\bdocker\s+compose\b", powershell_script)
+    assert "PowerShell" in powershell_claim
+    assert "scripts/deploy_server.ps1" in powershell_claim
+    assert "Windows 本机 Docker Desktop" in powershell_claim
+    assert "本机路径" in powershell_claim
+    assert "Docker Compose" in powershell_claim
+    assert "rsync" not in powershell_claim.casefold()
 
 
 def test_backend_test_claim_lists_actual_categories_and_tracks_e2e_directory():
