@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts" / "hotfix_publish.sh"
+SCRIPT_SOURCE = Path(__file__).resolve().parents[2] / "scripts" / "hotfix_publish.sh"
 SERVER_IP = "example.test"
 SERVER_USER = "deployer"
 REMOTE_DIR = "/srv/university-helper"
@@ -21,7 +21,15 @@ def _write_executable(path: Path, content: str) -> None:
 
 
 @pytest.fixture
-def frontend_fixture(tmp_path: Path) -> tuple[dict[str, str], dict[str, Path]]:
+def frontend_fixture(tmp_path: Path) -> tuple[dict[str, str], dict[str, Path], Path]:
+    repo = tmp_path / "repo"
+    script = repo / "scripts" / "hotfix_publish.sh"
+    script.parent.mkdir(parents=True)
+    shutil.copy2(SCRIPT_SOURCE, script)
+    frontend_dist = repo / "frontend" / "dist"
+    frontend_dist.mkdir(parents=True)
+    (frontend_dist / "index.html").write_text("fixture\n", encoding="utf-8")
+
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     known_hosts = tmp_path / "known_hosts"
@@ -94,16 +102,16 @@ done
             "RSYNC_ARGV_LOG": str(transport_logs["rsync"]),
         }
     )
-    return env, transport_logs
+    return env, transport_logs, script
 
 
 def test_frontend_rsync_target_has_no_literal_shell_quotes(
-    frontend_fixture: tuple[dict[str, str], dict[str, Path]],
+    frontend_fixture: tuple[dict[str, str], dict[str, Path], Path],
 ) -> None:
-    env, transport_logs = frontend_fixture
+    env, transport_logs, script = frontend_fixture
     result = subprocess.run(
-        ["bash", str(SCRIPT), "--frontend"],
-        cwd=REPO_ROOT,
+        ["bash", str(script), "--frontend"],
+        cwd=script.parents[1],
         env=env,
         text=True,
         stdout=subprocess.PIPE,
@@ -116,20 +124,20 @@ def test_frontend_rsync_target_has_no_literal_shell_quotes(
     argv = transport_logs["rsync"].read_text(encoding="utf-8").splitlines()
     assert argv[:2] == ["-az", "--delete"]
     assert argv[2] == "-e"
-    assert argv[4] == f"{REPO_ROOT}/frontend/dist/"
+    assert argv[4] == f"{script.parents[1]}/frontend/dist/"
     assert argv[5] == f"{SERVER_USER}@{SERVER_IP}:{REMOTE_DIR}/frontend/dist/"
     assert "'" not in argv[5]
 
 
 def test_frontend_rejects_unsafe_remote_dir_before_transport(
-    frontend_fixture: tuple[dict[str, str], dict[str, Path]],
+    frontend_fixture: tuple[dict[str, str], dict[str, Path], Path],
 ) -> None:
-    env, transport_logs = frontend_fixture
+    env, transport_logs, script = frontend_fixture
     env["EASY_LEARNING_REMOTE_DIR"] = "/opt/university-helper;touch"
 
     result = subprocess.run(
-        ["bash", str(SCRIPT), "--frontend"],
-        cwd=REPO_ROOT,
+        ["bash", str(script), "--frontend"],
+        cwd=script.parents[1],
         env=env,
         text=True,
         stdout=subprocess.PIPE,

@@ -399,7 +399,7 @@ def test_frontend_rsync_quotes_remote_path_and_rsh_words(publisher_fixture):
 
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
-    assert "tester@test.invalid:'/opt/university-helper/frontend/dist/'" in log
+    assert "tester@test.invalid:/opt/university-helper/frontend/dist/" in log
     assert (
         f"'ssh' '-o' 'StrictHostKeyChecking=yes' '-o' 'UserKnownHostsFile={publisher_fixture['known_hosts']}'"
     ) in log
