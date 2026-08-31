@@ -12,9 +12,11 @@ import re
 import sys
 import tempfile
 import threading
+import unicodedata
 import warnings
 from contextlib import contextmanager
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 from bs4 import BeautifulSoup, NavigableString
@@ -60,28 +62,130 @@ _OCR_ALLOWED_IMG_HOSTS = frozenset(
         "photo.chaoxing.com",
     }
 )
+_OCR_ALLOWED_IMG_SCHEMES = frozenset({"https"})
+_OCR_ALLOWED_IMG_HOST_SUFFIX = ".chaoxing.com"
+_OCR_HOST_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+_OCR_PERCENT_ENCODED_BACKSLASH_RE = re.compile(r"%(?:25)*5c", re.IGNORECASE)
+_OCR_PERCENT_ENCODED_AT_RE = re.compile(r"%(?:25)*40", re.IGNORECASE)
+
+
+def _ocr_url_has_control_chars(value: str) -> bool:
+    """Return whether *value* contains a Unicode control character.
+
+    ``urlsplit`` deliberately strips a few C0 controls before parsing.  The
+    check therefore has to happen on the caller-supplied value, before any
+    URL parser or HTTP client can normalize it.
+    """
+    return any(unicodedata.category(char) == "Cc" for char in value)
+
+
+def _ocr_url_has_encoded_backslash(value: str) -> bool:
+    """Return whether *value* contains a raw or recursively escaped backslash.
+
+    Requests and urllib disagree about how a backslash in an authority is
+    interpreted.  Rejecting nested ``%25`` encodings as well keeps the check
+    stable if another URL layer decodes the value before it reaches requests.
+    """
+    return "\\" in value or _OCR_PERCENT_ENCODED_BACKSLASH_RE.search(value) is not None
+
+
+def _ocr_hostname_is_valid(hostname: str) -> bool:
+    """Return whether *hostname* is an ASCII DNS name under our policy.
+
+    We intentionally do not IDNA-normalize this hostname.  An allowlist of
+    ASCII Chaoxing names must not accept Unicode or punycode labels that could
+    visually resemble an approved host.  A terminal dot is rejected rather
+    than stripped so the policy and the URL sent to requests remain identical.
+    """
+    try:
+        # NFKC catches full-width/delimiter lookalikes before the ASCII check;
+        # unlike IDNA this never turns an untrusted Unicode host into a valid
+        # allowlisted one.
+        if unicodedata.normalize("NFKC", hostname) != hostname:
+            return False
+        hostname.encode("ascii")
+    except (UnicodeError, TypeError):
+        return False
+
+    normalized = hostname.lower()
+    if not normalized or normalized.endswith(".") or len(normalized) > 253:
+        return False
+
+    labels = normalized.split(".")
+    if any(not _OCR_HOST_LABEL_RE.fullmatch(label) for label in labels):
+        return False
+    # Punycode is an IDNA representation.  Since this policy deliberately
+    # rejects Unicode/IDNA lookalikes, do not admit its ``xn--`` labels either.
+    if any(label.startswith("xn--") for label in labels):
+        return False
+    return True
 
 
 def _is_allowed_ocr_img_url(img_url: str) -> bool:
-    """Return True only for https URLs whose host is an allowlisted Chaoxing host.
+    """Return True only for an allowlisted Chaoxing HTTPS URL.
 
     Subdomains of chaoxing.com are also permitted (e.g. *.ananas.chaoxing.com),
-    but private/loopback/metadata hosts and non-https schemes are rejected.
+    but private/loopback/metadata hosts and non-HTTPS schemes are rejected.
+    The allowlist intentionally does not resolve Chaoxing hosts: its CDN may
+    legitimately return private-looking or changing addresses in deployments.
     """
-    from urllib.parse import urlparse
+
+    if not isinstance(img_url, str) or not img_url:
+        return False
+
+    # These checks must precede URL parsing.  In particular, requests turns
+    # ``127.0.0.1\\@approved-host`` into a request for 127.0.0.1 while
+    # urllib reports the apparent hostname as approved-host.
+    if _ocr_url_has_control_chars(img_url) or _ocr_url_has_encoded_backslash(img_url):
+        return False
 
     try:
-        parsed = urlparse(img_url)
+        parsed = urlsplit(img_url)
+        # Accessing .port validates non-numeric and out-of-range ports.  An
+        # explicit empty port (``approved-host:``) is also not a valid port,
+        # even though urllib exposes it as ``None``.
+        _ = parsed.port
+        if parsed.netloc.endswith(":"):
+            return False
+        # Never permit credentials or an authority delimiter.  Checking the
+        # raw netloc also catches an empty userinfo marker (``https://@host``).
+        if "@" in parsed.netloc or _OCR_PERCENT_ENCODED_AT_RE.search(parsed.netloc):
+            return False
+        host = parsed.hostname or ""
     except Exception:
         return False
-    if parsed.scheme != "https":
+
+    if parsed.scheme not in _OCR_ALLOWED_IMG_SCHEMES:
         return False
-    host = (parsed.hostname or "").lower()
-    if not host:
+    if not _ocr_hostname_is_valid(host):
         return False
+
+    host = host.lower()
     if host in _OCR_ALLOWED_IMG_HOSTS:
         return True
-    return host == "chaoxing.com" or host.endswith(".chaoxing.com")
+    # Keep the boundary explicit: ``evilchaoxing.com`` and
+    # ``p.ananas.chaoxing.com.attacker.test`` are not Chaoxing subdomains.
+    return host == _OCR_ALLOWED_IMG_HOST_SUFFIX[1:] or host.endswith(_OCR_ALLOWED_IMG_HOST_SUFFIX)
+
+
+def _prepare_allowed_ocr_img_url(img_url: str) -> str | None:
+    """Prepare *img_url* and revalidate the URL requests will send.
+
+    A first validation protects the parser boundary; preparing the request
+    catches requests-specific normalization (notably authority backslashes),
+    and the second validation protects the final URL.  The returned URL is the
+    exact prepared value passed to ``Session.get``.
+    """
+    if not _is_allowed_ocr_img_url(img_url):
+        return None
+    try:
+        prepared = requests.Request(method="GET", url=img_url).prepare()
+    except Exception:
+        return None
+    prepared_url = prepared.url
+    if not _is_allowed_ocr_img_url(prepared_url):
+        return None
+    return prepared_url
 
 
 _PADDLE_OCR_ENGINE = None
@@ -146,16 +250,19 @@ def _init_paddle_ocr(preferred_device: str | None = None):
                     return _PADDLE_OCR_ENGINE
                 except Exception as exc_device:
                     last_exc = exc_device
-                    logger.warning(f"PaddleOCR {device.upper()} 初始化失败: {exc_device}")
+                    logger.warning(f"PaddleOCR {device.upper()} 初始化失败（异常类型: {type(exc_device).__name__}）")
 
             if last_exc:
                 raise last_exc
         except Exception as exc:
             cause = getattr(exc, "__cause__", None)
             if cause is not None:
-                logger.warning(f"PaddleOCR 初始化失败，将不使用本地 OCR: {exc} (底层依赖错误: {cause})")
+                logger.warning(
+                    "PaddleOCR 初始化失败，将不使用本地 OCR "
+                    f"（异常类型: {type(exc).__name__}，底层依赖类型: {type(cause).__name__}）"
+                )
             else:
-                logger.warning(f"PaddleOCR 初始化失败，将不使用本地 OCR: {exc}")
+                logger.warning(f"PaddleOCR 初始化失败，将不使用本地 OCR（异常类型: {type(exc).__name__}）")
             _PADDLE_OCR_ENGINE = None
             _PADDLE_OCR_DEVICE = None
 
@@ -240,13 +347,13 @@ def _preprocess_image_for_ocr(image_bytes: bytes, enhance_mode: int = 0) -> byte
                 img.save(output, format="PNG")
                 return output.getvalue()
     except _UnsafeOCRImageError as exc:
-        logger.debug(f"拒绝超出解码限制的题目图片: {exc}")
+        logger.debug(f"拒绝超出解码限制的题目图片（异常类型: {type(exc).__name__}）")
         return None
     except Exception as exc:
         if _is_pillow_decompression_bomb(exc):
-            logger.debug(f"拒绝 Pillow 解压炸弹题目图片: {exc}")
+            logger.debug(f"拒绝 Pillow 解压炸弹题目图片（异常类型: {type(exc).__name__}）")
             return None
-        logger.debug(f"图片预处理失败: {exc}")
+        logger.debug(f"图片预处理失败（异常类型: {type(exc).__name__}）")
         return image_bytes
     finally:
         if img is not None:
@@ -268,18 +375,22 @@ def _call_http_ocr(ocr_endpoint: str, image_bytes: bytes, img_url: str) -> str:
         files = {"file": ("question.png", image_bytes, "image/png")}
         ocr_resp = requests.post(ocr_endpoint, files=files, timeout=20)
         if ocr_resp.status_code != 200:
-            logger.debug(f"HTTP OCR 服务返回异常状态码: {ocr_resp.status_code}")
+            status_code = ocr_resp.status_code
+            if type(status_code) is int and 100 <= status_code <= 599:
+                logger.debug(f"HTTP OCR 服务返回异常状态码: {status_code}")
+            else:
+                logger.debug("HTTP OCR 服务返回无效状态码")
             return ""
         data = ocr_resp.json()
     except Exception as exc:
-        logger.debug(f"调用 HTTP OCR 服务失败: {exc}")
+        logger.debug(f"调用 HTTP OCR 服务失败（异常类型: {type(exc).__name__}）")
         return ""
 
     # 尝试从常见字段中读取 LaTeX/文本结果
     for key in ("latex", "text", "result", "data"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
-            logger.debug(f"HTTP OCR 识别成功: {value[:100]}... 来自 {img_url}")
+            logger.debug("HTTP OCR 识别成功")
             return value.strip()
 
     return ""
@@ -333,11 +444,11 @@ def _response_content_length_exceeds_limit(response) -> bool:
     except (TypeError, ValueError):
         # A malformed/missing header cannot be trusted; iter_content still
         # enforces the hard byte limit below.
-        logger.debug(f"题目图片 Content-Length 无效，将按实际流大小限制: {raw_length!r}")
+        logger.debug("题目图片 Content-Length 无效，将按实际流大小限制")
         return False
 
     if content_length < 0:
-        logger.debug(f"题目图片 Content-Length 为负数: {raw_length!r}")
+        logger.debug("题目图片 Content-Length 为负数")
         return True
     return content_length > _OCR_MAX_IMAGE_BYTES
 
@@ -370,7 +481,7 @@ def _read_limited_response_content(response) -> bytes | None:
             chunks.append(chunk_bytes)
             total_bytes += chunk_size
     except Exception as exc:
-        logger.debug(f"读取题目图片响应流失败: {exc}")
+        logger.debug(f"读取题目图片响应流失败（异常类型: {type(exc).__name__}）")
         return None
 
     if not chunks:
@@ -450,13 +561,13 @@ def _validate_ocr_image(image_bytes: bytes) -> bool:
             _check_ocr_image_dimensions(image)
             image.load()
     except _UnsafeOCRImageError as exc:
-        logger.debug(f"拒绝超出解码限制的题目图片: {exc}")
+        logger.debug(f"拒绝超出解码限制的题目图片（异常类型: {type(exc).__name__}）")
         return False
     except Exception as exc:
         if _is_pillow_decompression_bomb(exc):
-            logger.debug(f"拒绝 Pillow 解压炸弹题目图片: {exc}")
+            logger.debug(f"拒绝 Pillow 解压炸弹题目图片（异常类型: {type(exc).__name__}）")
         else:
-            logger.debug(f"题目图片解码失败: {exc}")
+            logger.debug(f"题目图片解码失败（异常类型: {type(exc).__name__}）")
         return False
     finally:
         if image is not None:
@@ -484,8 +595,9 @@ def _ocr_image_to_text(img_url: str) -> str:
 
     # SSRF 防护：题干 <img src> 来自攻击者可影响的课程/题目 HTML。由于下载时会带上
     # 登录态 Cookie，必须在发起请求前限制到已知超星图片域名 + 仅 https，拒绝内网/元数据地址。
-    if not _is_allowed_ocr_img_url(img_url):
-        logger.debug(f"拒绝下载非白名单题目图片 (SSRF 防护): {img_url}")
+    request_url = _prepare_allowed_ocr_img_url(img_url)
+    if request_url is None:
+        logger.debug("拒绝下载非白名单题目图片 (SSRF 防护)")
         return ""
 
     # 判断是否配置了外部 AI 视觉 OCR
@@ -514,7 +626,7 @@ def _ocr_image_to_text(img_url: str) -> str:
         # allow_redirects=False so an allowlisted host cannot 30x-redirect the
         # cookie-bearing request to an internal/metadata endpoint (SSRF bypass).
         resp = session.get(
-            img_url,
+            request_url,
             headers=extra_headers or None,
             timeout=8,
             allow_redirects=False,
@@ -522,19 +634,22 @@ def _ocr_image_to_text(img_url: str) -> str:
         )
         status_code = getattr(resp, "status_code", None)
         if not isinstance(status_code, int) or not 200 <= status_code < 300:
-            logger.debug(f"下载题目图片失败: {img_url} -> {status_code}")
+            if type(status_code) is int and 100 <= status_code <= 599:
+                logger.debug(f"下载题目图片失败，状态码: {status_code}")
+            else:
+                logger.debug("下载题目图片失败，响应状态码无效")
             return ""
 
         content_type = _response_header(resp, "Content-Type").lower()
         if content_type and not content_type.startswith("image/"):
-            logger.debug(f"拒绝非图片类型的题目图片: {img_url} -> {content_type}")
+            logger.debug("拒绝非图片类型的题目图片")
             return ""
 
         image_bytes = _read_limited_response_content(resp)
         if image_bytes is None:
             return ""
     except Exception as exc:
-        logger.debug(f"下载题目图片异常: {exc}")
+        logger.debug(f"下载题目图片异常（异常类型: {type(exc).__name__}）")
         return ""
     finally:
         if resp is not None:
@@ -558,11 +673,11 @@ def _ocr_image_to_text(img_url: str) -> str:
         try:
             vision_result = vision_ocr(image_bytes)
             if vision_result:
-                logger.debug(f"外部 AI 视觉 OCR 识别成功: {vision_result[:100]}... 来自 {img_url}")
+                logger.debug("外部 AI 视觉 OCR 识别成功")
                 return vision_result
-            logger.debug(f"外部 AI 视觉 OCR 未识别出文本 来自 {img_url}")
+            logger.debug("外部 AI 视觉 OCR 未识别出文本")
         except Exception as exc:
-            logger.debug(f"外部 AI 视觉 OCR 调用失败: {exc}")
+            logger.debug(f"外部 AI 视觉 OCR 调用失败（异常类型: {type(exc).__name__}）")
         # 外部 OCR 失败时，不回退到本地，直接尝试 HTTP OCR 或返回空
         ocr_endpoint = os.environ.get("CHAOXING_OCR_ENDPOINT", "").strip()
         if ocr_endpoint:
@@ -643,23 +758,21 @@ def _ocr_image_to_text(img_url: str) -> str:
                     except Exception as exc:
                         global _PADDLE_OCR_DEVICE
                         if device_attempt == 0 and _PADDLE_OCR_DEVICE == "gpu":
-                            logger.debug(f"PaddleOCR GPU 推理失败，切换到 CPU: {exc}")
+                            logger.debug(f"PaddleOCR GPU 推理失败，切换到 CPU（异常类型: {type(exc).__name__}）")
                             engine = _init_paddle_ocr(preferred_device="cpu")
                             if engine is None:
                                 break
                             continue
-                        logger.debug(f"PaddleOCR 识别失败 (模式{preprocess_mode}): {exc}")
+                        logger.debug(f"PaddleOCR 识别失败 (模式{preprocess_mode})（异常类型: {type(exc).__name__}）")
                         break
 
                 if final_texts:
-                    logger.debug(
-                        f"PaddleOCR 提取文本成功 (预处理模式{preprocess_mode}): {' '.join(final_texts)} 来自 {img_url}"
-                    )
+                    logger.debug(f"PaddleOCR 提取文本成功 (预处理模式{preprocess_mode})")
                     break
                 logger.debug(f"PaddleOCR 预处理模式{preprocess_mode}未识别出文本，尝试下一模式")
 
             if not final_texts:
-                logger.debug(f"PaddleOCR 所有预处理模式均未识别出文本 来自 {img_url}")
+                logger.debug("PaddleOCR 所有预处理模式均未识别出文本")
 
             if final_texts:
                 # 将多行结果合并为一行，交给大模型进一步理解
