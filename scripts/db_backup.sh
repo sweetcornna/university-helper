@@ -323,7 +323,11 @@ retention_consider_group() {
         fi
     done
 
-    if ((newest_mtime > CUTOFF_EPOCH)); then
+    # Retain files exactly on the cutoff: they are not older than the
+    # configured window.  This also keeps a just-published backup when the
+    # clock and filesystem mtime share the same second (notably with
+    # RETAIN_DAYS=0).
+    if ((newest_mtime >= CUTOFF_EPOCH)); then
         return 0
     fi
     for path in "${members[@]}"; do

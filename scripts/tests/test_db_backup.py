@@ -335,6 +335,21 @@ def test_retention_recognizes_unique_group_names(backup_fixture):
         old_time = path.stat().st_mtime - (3 * 24 * 60 * 60)
         os.utime(path, (old_time, old_time))
 
+    _install_mktemp_stub(backup_fixture, group_suffix="DEF456")
+    # Make the current run's second-resolution mtime land exactly on the
+    # retention cutoff.  This exercises the boundary without depending on
+    # whether the subprocess crosses a wall-clock second.
+    _write_executable(
+        backup_fixture["fake_bin"] / "stat",
+        """#!/usr/bin/env bash
+if [[ "$*" == *"2099-01-02-030405.DEF456"* ]]; then
+  printf '%s\\n' "$BACKUP_EPOCH"
+else
+  /usr/bin/stat "$@"
+fi
+""",
+    )
+
     result = _run_backup(backup_fixture, RETAIN_DAYS="0")
 
     assert result.returncode == 0, result.stderr
