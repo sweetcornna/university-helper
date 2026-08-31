@@ -15,8 +15,10 @@ A release is cut by pushing a `v*` git tag. The `release` workflow
   leg succeed.
 
 The git tag is the single source of truth for the version; `scripts/set_version.sh`
-stamps it into all six manifests (`frontend/package.json`, `frontend/package-lock.json`,
-`backend/pyproject.toml`, `backend/app/main.py`, `frontend/src-tauri/{tauri.conf.json,Cargo.toml}`).
+stamps it into all eight versioned files—six manifests (`frontend/package.json`,
+`frontend/package-lock.json`, `backend/pyproject.toml`, `backend/app/main.py`,
+`frontend/src-tauri/tauri.conf.json`, `frontend/src-tauri/Cargo.toml`) plus two lockfiles
+(`backend/uv.lock`, `frontend/src-tauri/Cargo.lock`).
 The workflow's `tag`, `version`, and `release_id` outputs keep their existing contract. Only the
 Docker tag is normalized to `image_version` (a `+` in version metadata becomes `_`, because
 Docker tags do not allow `+`).
