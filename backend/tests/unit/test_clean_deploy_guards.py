@@ -240,6 +240,17 @@ def _powershell_deploy_fixture(tmp_path: Path, script_source: str) -> tuple[Path
             }
             function Start-Sleep { param([int]$Seconds) }
             & $env:FAKE_DEPLOY_SCRIPT -Yes
+            # `exit` in a script invoked with `&` sets the child status, but
+            # does not terminate this wrapper.  Preserve that status so the
+            # subprocess assertion observes the deploy CLI contract.
+            $childSucceeded = $?
+            $childExitCode = $LASTEXITCODE
+            if ($childExitCode -is [int] -and $childExitCode -ne 0) {
+              exit $childExitCode
+            }
+            if (-not $childSucceeded) {
+              exit 1
+            }
             """
         ).lstrip(),
         encoding="utf-8",
