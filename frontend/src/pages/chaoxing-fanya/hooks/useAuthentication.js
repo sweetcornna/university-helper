@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isAuthenticated, removeToken } from '../../../utils/auth'
 import { api } from '../../../utils/api'
@@ -31,10 +31,24 @@ export default function useAuthentication({ stopPolling }) {
   const [notice, setNotice] = useState('')
 
 
+  const mountedRef = useRef(true)
+  const courseRequestIdRef = useRef(0)
+  const [coursesLoading, setCoursesLoading] = useState(false)
+
+
   // Persist the account so the signin page recalls it too.
   useEffect(() => {
     saveLastUsername(username)
   }, [username])
+
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      courseRequestIdRef.current += 1
+    }
+  }, [])
 
 
   useEffect(() => {
@@ -125,41 +139,33 @@ export default function useAuthentication({ stopPolling }) {
 
 
   const loadCourses = useCallback(async () => {
+    const requestId = courseRequestIdRef.current + 1
+    courseRequestIdRef.current = requestId
+    const isCurrentRequest = () => (
+      mountedRef.current && courseRequestIdRef.current === requestId
+    )
 
+    if (!isCurrentRequest()) return
 
     setError('')
-
-
     setNotice('')
-
+    setCoursesLoading(true)
 
     try {
-
-
       const resp = await callApi('/chaoxing/courses')
 
-
-      if (!resp) return
-
+      if (!resp || !isCurrentRequest()) return
 
       const list = Array.isArray(resp?.courses) ? resp.courses : Array.isArray(resp?.data) ? resp.data : []
 
-
+      if (!isCurrentRequest()) return
       setCourses(list)
-
-
       setNotice(list.length > 0 ? `已获取 ${list.length} 门课程。` : '未查询到课程。')
-
-
     } catch (err) {
-
-
-      setError(err?.message || '获取课程失败。')
-
-
+      if (isCurrentRequest()) setError(err?.message || '获取课程失败。')
+    } finally {
+      if (isCurrentRequest()) setCoursesLoading(false)
     }
-
-
   }, [callApi])
 
 
@@ -170,6 +176,9 @@ export default function useAuthentication({ stopPolling }) {
 
 
       event.preventDefault()
+
+
+      if (!mountedRef.current) return
 
 
       setError('')
@@ -208,7 +217,7 @@ export default function useAuthentication({ stopPolling }) {
         })
 
 
-        if (!loginResp) return
+        if (!loginResp || !mountedRef.current) return
 
 
         await loadCourses()
@@ -217,13 +226,13 @@ export default function useAuthentication({ stopPolling }) {
       } catch (err) {
 
 
-        setError(err?.message || '登录失败。')
+        if (mountedRef.current) setError(err?.message || '登录失败。')
 
 
       } finally {
 
 
-        setLoginLoading(false)
+        if (mountedRef.current) setLoginLoading(false)
 
 
       }
@@ -242,6 +251,7 @@ export default function useAuthentication({ stopPolling }) {
     username, setUsername,
     password, setPassword,
     loginLoading,
+    coursesLoading,
     courses, setCourses,
     error, setError,
     notice, setNotice,

@@ -1,5 +1,6 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { StrictMode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -21,9 +22,27 @@ function AuthenticationHarness() {
 
   return (
     <>
+      <input
+        aria-label="账号"
+        value={auth.username}
+        onChange={(event) => auth.setUsername(event.target.value)}
+      />
+      <input
+        aria-label="密码"
+        value={auth.password}
+        onChange={(event) => auth.setPassword(event.target.value)}
+      />
+      <button
+        type="button"
+        onClick={() => void auth.handleLogin({ preventDefault: () => {} })}
+      >
+        登录
+      </button>
       <button type="button" onClick={() => void auth.loadCourses()}>
         刷新课程
       </button>
+      <output data-testid="courses-loading">{String(auth.coursesLoading)}</output>
+      <output data-testid="login-loading">{String(auth.loginLoading)}</output>
       <output data-testid="courses-error">{auth.error}</output>
       <output data-testid="courses-notice">{auth.notice}</output>
       <output data-testid="courses">{JSON.stringify(auth.courses)}</output>
@@ -32,10 +51,22 @@ function AuthenticationHarness() {
 }
 
 const renderAuthentication = () => render(
-  <MemoryRouter>
-    <AuthenticationHarness />
-  </MemoryRouter>,
+  <StrictMode>
+    <MemoryRouter>
+      <AuthenticationHarness />
+    </MemoryRouter>
+  </StrictMode>,
 )
+
+const deferred = () => {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 describe('useAuthentication course refresh errors', () => {
   beforeEach(() => {
@@ -119,5 +150,123 @@ describe('useAuthentication course refresh errors', () => {
     await user.click(refreshButton)
     await waitFor(() => expect(screen.getByTestId('courses-error')).toHaveTextContent('第二次刷新失败'))
     expect(screen.getByTestId('courses-notice')).toBeEmptyDOMElement()
+  })
+
+  test('keeps the latest successful course refresh when responses resolve out of order', async () => {
+    const first = deferred()
+    const second = deferred()
+    const coursesA = [{ courseId: 'course-a', name: '旧课程' }]
+    const coursesB = [{ courseId: 'course-b', name: '新课程' }]
+    api.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+
+    const user = userEvent.setup()
+    renderAuthentication()
+    const refreshButton = screen.getByRole('button', { name: '刷新课程' })
+
+    await user.click(refreshButton)
+    await waitFor(() => expect(screen.getByTestId('courses-loading')).toHaveTextContent('true'))
+    await user.click(refreshButton)
+
+    await act(async () => {
+      second.resolve({ courses: coursesB })
+      await second.promise
+    })
+    await waitFor(() => expect(screen.getByTestId('courses')).toHaveTextContent(JSON.stringify(coursesB)))
+    expect(screen.getByTestId('courses-loading')).toHaveTextContent('false')
+    expect(screen.getByTestId('courses-notice')).toHaveTextContent('已获取 1 门课程。')
+
+    await act(async () => {
+      first.resolve({ courses: coursesA })
+      await first.promise
+    })
+    expect(screen.getByTestId('courses')).toHaveTextContent(JSON.stringify(coursesB))
+    expect(screen.getByTestId('courses-notice')).toHaveTextContent('已获取 1 门课程。')
+    expect(screen.getByTestId('courses-error')).toBeEmptyDOMElement()
+  })
+
+  test('does not let an older refresh error overwrite a newer success', async () => {
+    const first = deferred()
+    const second = deferred()
+    const coursesB = [{ courseId: 'course-b', name: '新课程' }]
+    api.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+
+    const user = userEvent.setup()
+    renderAuthentication()
+    const refreshButton = screen.getByRole('button', { name: '刷新课程' })
+
+    await user.click(refreshButton)
+    await user.click(refreshButton)
+
+    await act(async () => {
+      second.resolve({ courses: coursesB })
+      await second.promise
+      first.reject(new Error('旧刷新失败'))
+      await first.promise.catch(() => undefined)
+    })
+    await waitFor(() => expect(screen.getByTestId('courses')).toHaveTextContent(JSON.stringify(coursesB)))
+    expect(screen.getByTestId('courses-error')).toBeEmptyDOMElement()
+    expect(screen.getByTestId('courses-loading')).toHaveTextContent('false')
+  })
+
+  test('shares latest-wins ownership between login loading and manual refresh', async () => {
+    const login = Promise.resolve({ status: true })
+    const loginCourses = deferred()
+    const manualRefresh = deferred()
+    const coursesB = [{ courseId: 'course-b', name: '新课程' }]
+    api
+      .mockImplementationOnce(() => login)
+      .mockImplementationOnce(() => loginCourses.promise)
+      .mockImplementationOnce(() => manualRefresh.promise)
+
+    const user = userEvent.setup()
+    renderAuthentication()
+    await user.type(screen.getByRole('textbox', { name: '账号' }), 'user')
+    await user.type(screen.getByRole('textbox', { name: '密码' }), 'pass')
+    await user.click(screen.getByRole('button', { name: '登录' }))
+    await waitFor(() => expect(screen.getByTestId('courses-loading')).toHaveTextContent('true'))
+
+    await user.click(screen.getByRole('button', { name: '刷新课程' }))
+    await act(async () => {
+      manualRefresh.resolve({ courses: coursesB })
+      await manualRefresh.promise
+    })
+    await waitFor(() => expect(screen.getByTestId('courses')).toHaveTextContent(JSON.stringify(coursesB)))
+    expect(screen.getByTestId('courses-loading')).toHaveTextContent('false')
+
+    await act(async () => {
+      loginCourses.reject(new Error('旧登录课程加载失败'))
+      await loginCourses.promise.catch(() => undefined)
+    })
+    expect(screen.getByTestId('courses')).toHaveTextContent(JSON.stringify(coursesB))
+    expect(screen.getByTestId('courses-error')).toBeEmptyDOMElement()
+    expect(screen.getByTestId('login-loading')).toHaveTextContent('false')
+  })
+
+  test('does not render again when a pending course load settles after unmount', async () => {
+    const pending = deferred()
+    api.mockImplementationOnce(() => pending.promise)
+    let renderCount = 0
+    const HarnessWithRenderCount = () => {
+      renderCount += 1
+      return <AuthenticationHarness />
+    }
+
+    const user = userEvent.setup()
+    const rendered = render(
+      <StrictMode>
+        <MemoryRouter>
+          <HarnessWithRenderCount />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+    await user.click(screen.getByRole('button', { name: '刷新课程' }))
+    const renderCountAtUnmount = renderCount
+    rendered.unmount()
+
+    await act(async () => {
+      pending.resolve({ courses: [{ courseId: 'late' }] })
+      await pending.promise
+    })
+    expect(renderCount).toBe(renderCountAtUnmount)
   })
 })

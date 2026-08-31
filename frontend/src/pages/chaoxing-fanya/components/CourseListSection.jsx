@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CARD, getCourseId, getCourseName } from '../utils'
 
 
@@ -6,6 +6,33 @@ export default function CourseListSection({
   courses, selectedCourses, setSelectedCourses, chapters, expanded,
   toggleExpand, loadCourses,
 }) {
+
+
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshInFlightRef = useRef(false)
+  const mountedRef = useRef(true)
+
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+
+  const handleRefresh = async () => {
+    if (refreshInFlightRef.current) return
+
+    refreshInFlightRef.current = true
+    setRefreshing(true)
+    try {
+      await loadCourses()
+    } finally {
+      refreshInFlightRef.current = false
+      if (mountedRef.current) setRefreshing(false)
+    }
+  }
 
 
   const courseIds = useMemo(() => courses.map(getCourseId).filter(Boolean), [courses])
@@ -64,12 +91,14 @@ export default function CourseListSection({
 
 
             className="min-h-[44px] cursor-pointer rounded-lg border border-border px-3 text-sm"
+            disabled={refreshing}
+            aria-busy={refreshing}
 
 
             onClick={() => {
 
 
-              void loadCourses()
+              void handleRefresh()
 
 
             }}
@@ -78,7 +107,7 @@ export default function CourseListSection({
           >
 
 
-            刷新课程
+            {refreshing ? '刷新中...' : '刷新课程'}
 
 
           </button>
