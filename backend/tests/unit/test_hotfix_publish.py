@@ -26,6 +26,9 @@ def publisher_fixture(tmp_path):
     (target.parent / "space name.py").write_text("print('spaces')\n")
     (repo / ".env").write_text("SECRET_KEY=fixture-only\n")
     (repo / "Dockerfile.server").write_text("FROM scratch\n")
+    nginx_config = repo / "nginx" / "nginx.conf"
+    nginx_config.parent.mkdir(parents=True)
+    nginx_config.write_text("events {}\n")
     frontend_dist = repo / "frontend" / "dist"
     frontend_dist.mkdir(parents=True)
     (frontend_dist / "index.html").write_text("fixture\n")
@@ -171,13 +174,20 @@ def run_publisher(fixture, *paths):
     )
 
 
+def _scp_target_lines(log):
+    return [line for line in log.splitlines() if line.startswith("tester@test.invalid:")]
+
+
 def test_normal_relative_file_keeps_remote_target_semantics(publisher_fixture):
     result = run_publisher(publisher_fixture, "backend/app/main.py")
 
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
     assert "mkdir -p '/opt/university-helper/backend/app'" in log
-    assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py.hotfix-stage." in log
+    scp_targets = _scp_target_lines(log)
+    assert len(scp_targets) == 1
+    assert scp_targets[0].startswith("tester@test.invalid:/opt/university-helper/backend/app/main.py.hotfix-stage.")
+    assert "'" not in scp_targets[0]
     assert "mv -f '/opt/university-helper/backend/app/main.py.hotfix-stage." in log
     assert "up -d --build --no-deps --force-recreate app" in log
     assert "docker cp" not in log
@@ -190,7 +200,10 @@ def test_dot_prefix_alias_is_canonicalized_before_upload_and_classification(publ
 
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
-    assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py.hotfix-stage." in log
+    scp_targets = _scp_target_lines(log)
+    assert len(scp_targets) == 1
+    assert scp_targets[0].startswith("tester@test.invalid:/opt/university-helper/backend/app/main.py.hotfix-stage.")
+    assert "'" not in scp_targets[0]
     assert "mv -f '/opt/university-helper/backend/app/main.py.hotfix-stage." in log
     assert "up -d --build --no-deps --force-recreate app" in log
     assert "docker cp" not in log
@@ -203,10 +216,26 @@ def test_space_in_repository_path_is_one_literal_remote_word(publisher_fixture):
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
     assert "mkdir -p '/opt/university-helper/backend/app'" in log
-    assert "tester@test.invalid:'/opt/university-helper/backend/app/space name.py.hotfix-stage." in log
+    scp_targets = _scp_target_lines(log)
+    assert len(scp_targets) == 1
+    assert scp_targets[0].startswith(
+        "tester@test.invalid:/opt/university-helper/backend/app/space name.py.hotfix-stage."
+    )
+    assert "'" not in scp_targets[0]
     assert "mv -f '/opt/university-helper/backend/app/space name.py.hotfix-stage." in log
     assert "up -d --build --no-deps --force-recreate app" in log
     assert "docker cp" not in log
+
+
+def test_non_backend_scp_target_has_no_literal_shell_quotes(publisher_fixture):
+    result = run_publisher(publisher_fixture, "nginx/nginx.conf")
+
+    assert result.returncode == 0, result.stderr
+    log = publisher_fixture["call_log"].read_text()
+    scp_targets = _scp_target_lines(log)
+    assert scp_targets == ["tester@test.invalid:/opt/university-helper/nginx/nginx.conf"]
+    assert "'" not in scp_targets[0]
+    assert "mkdir -p '/opt/university-helper/nginx'" in log
 
 
 def test_compose_values_are_individually_quoted_in_remote_command(publisher_fixture):
@@ -235,7 +264,7 @@ def test_backend_hotfix_uploads_then_rebuilds_then_checks_health(publisher_fixtu
 
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
-    upload = log.index("tester@test.invalid:'/opt/university-helper/backend/app/main.py.hotfix-stage.")
+    upload = log.index("tester@test.invalid:/opt/university-helper/backend/app/main.py.hotfix-stage.")
     rebuild = log.index("up -d --build --no-deps --force-recreate app")
     health = log.index("curl -fsS --max-time 5")
     assert upload < rebuild < health

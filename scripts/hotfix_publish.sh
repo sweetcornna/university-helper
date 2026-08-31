@@ -388,7 +388,7 @@ if [[ "$needs_app_rebuild" != true ]]; then
     remote_path_quoted="$(shell_quote "$remote_path")"
     remote_dir_quoted="$(shell_quote "$remote_dir")"
     remote_sh "mkdir -p $remote_dir_quoted"
-    "${SCP_BASE[@]}" "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:$remote_path_quoted"
+    "${SCP_BASE[@]}" "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:${remote_path}"
   done
 
   if [[ "$needs_web_reload" == true ]]; then
@@ -691,7 +691,7 @@ for index in "${!validated_rel_paths[@]}"; do
   stage_path_quoted="$(shell_quote "$stage_path")"
 
   operation="uploading staged $rel_path"
-  run_scp_checked "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:$stage_path_quoted"
+  run_scp_checked "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:${stage_path}"
   operation="atomically publishing $rel_path"
   run_remote_checked "mv -f $stage_path_quoted $remote_path_quoted"
   stage_remote_paths[index]=""
