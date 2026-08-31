@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 _QR_SESSION_TTL_SECONDS = 10 * 60
 _USER_ADAPTER_TTL_SECONDS = 60 * 60  # 1 hour
 _COURSE_TASK_TTL_SECONDS = 2 * 60 * 60  # 2 hours
+_TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "cancelled", "error"})
 _qr_sessions: Dict[str, Dict[str, Any]] = {}
 _qr_sessions_lock = threading.Lock()
 _user_adapters: Dict[str, Dict[str, Any]] = {}  # {"adapter": ..., "last_access": ...}
