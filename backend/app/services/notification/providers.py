@@ -7,7 +7,7 @@ import configparser
 import ipaddress
 import socket
 from abc import ABC, abstractmethod
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 from loguru import logger
@@ -15,7 +15,9 @@ from loguru import logger
 # Hostnames that are never legitimate notification targets (cloud metadata, etc.).
 _BLOCKED_HOSTNAMES = frozenset(
     {
+        "instance-data.ec2.internal",
         "localhost",
+        "metadata.azure.com",
         "metadata.google.internal",
         "metadata",
     }
@@ -24,15 +26,19 @@ _BLOCKED_HOSTNAMES = frozenset(
 
 def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
     """Return True for any address that must not be reachable from the server."""
+    # Treat all IPv4-mapped IPv6 literals as unsafe. Even when the mapped IPv4
+    # value is globally routable, different HTTP clients can disagree about
+    # the address family and destination formatting.
+    if getattr(ip, "ipv4_mapped", None) is not None:
+        return True
     return (
-        ip.is_private
+        not ip.is_global
+        or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_reserved
         or ip.is_multicast
         or ip.is_unspecified
-        # IPv4-mapped/compatible IPv6 that wrap a blocked v4 address.
-        or (getattr(ip, "ipv4_mapped", None) is not None and _is_blocked_ip(ip.ipv4_mapped))
     )
 
 
@@ -43,48 +49,111 @@ def validate_notification_url(url: str | None) -> bool:
     loopback/private/link-local/reserved/metadata address. This is a
     best-effort guard against using the notification feature as an SSRF
     primitive against cloud metadata or internal services.
+
+    The URL is validated using the same authority syntax that ``requests``
+    receives. In particular, userinfo and backslashes are rejected before DNS
+    resolution. Both are dangerous here because URL parsers do not agree on
+    how they delimit the authority (for example, a backslash can make a
+    public-looking hostname resolve to a loopback address in requests).
     """
     if not url or not isinstance(url, str):
         return False
 
     try:
-        parsed = urlparse(url.strip())
-    except (ValueError, TypeError):
+        normalized_url = url.strip()
+
+        # Requests normalizes backslashes in a URL before connecting. Reject
+        # them (including percent-encoded backslashes) in the complete input,
+        # rather than only in ``parsed.netloc``, so validation and the eventual
+        # request cannot disagree about the authority boundary.
+        if not normalized_url or "\\" in normalized_url or "%5c" in normalized_url.lower():
+            return False
+
+        # Raw C0 controls are stripped/normalized by URL clients. Rejecting
+        # them avoids another validation/request parsing mismatch while still
+        # allowing ordinary (properly percent-encoded) URL characters.
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in normalized_url):
+            return False
+
+        parsed = urlparse(normalized_url)
+
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        # A literal ``@`` denotes userinfo, including an empty userinfo
+        # component (``http://@host``). Percent escapes in an authority are
+        # rejected as well because clients may decode them at different
+        # stages (and could turn an encoded delimiter into userinfo).
+        authority = parsed.netloc
+        decoded_authority = unquote(authority)
+        if authority.endswith(":"):
+            # ``urlparse`` reports an empty port as ``None``; reject the
+            # explicit delimiter so it cannot be interpreted differently by
+            # requests/urllib3.
+            return False
+        if (
+            "@" in authority
+            or "@" in decoded_authority
+            or "\\" in authority
+            or "\\" in decoded_authority
+            or "%" in authority
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return False
+
+        # Accessing ``port`` forces malformed ports (e.g. ``:abc`` or an
+        # out-of-range integer) to fail closed instead of being sent to a
+        # different URL parser later.
+        parsed_port = parsed.port
+        if parsed_port is not None and not 1 <= parsed_port <= 65535:
+            return False
+    except Exception:
         return False
 
-    if parsed.scheme not in ("http", "https"):
-        return False
-
-    hostname = parsed.hostname
-    if not hostname:
-        return False
-
-    if hostname.lower() in _BLOCKED_HOSTNAMES:
-        return False
-
-    # If the host is a literal IP, validate it directly.
     try:
-        literal_ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        literal_ip = None
-    if literal_ip is not None:
-        return not _is_blocked_ip(literal_ip)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
 
-    # Otherwise resolve the hostname and reject if ANY resolved address is internal.
-    try:
+        normalized_hostname = hostname.rstrip(".").lower()
+        if not normalized_hostname or normalized_hostname in _BLOCKED_HOSTNAMES:
+            return False
+
+        # If the host is a literal IP, validate it directly. ``ip_address``
+        # also handles IPv6 and IPv4-mapped IPv6 literals.
+        try:
+            literal_ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            literal_ip = None
+        if literal_ip is not None:
+            return not _is_blocked_ip(literal_ip)
+
+        # Otherwise resolve the hostname and reject if ANY resolved address is
+        # internal. An empty or malformed answer is a resolution failure, not
+        # evidence that the host is safe.
         infos = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
+        if not infos:
+            return False
+    except Exception:
         # Cannot resolve -> treat as unsafe rather than fetching blindly.
         return False
 
-    for info in infos:
-        sockaddr = info[4]
-        try:
-            resolved = ipaddress.ip_address(sockaddr[0])
-        except ValueError:
-            return False
-        if _is_blocked_ip(resolved):
-            return False
+    try:
+        for info in infos:
+            try:
+                sockaddr = info[4]
+                resolved = ipaddress.ip_address(sockaddr[0])
+            except Exception:
+                return False
+            try:
+                if _is_blocked_ip(resolved):
+                    return False
+            except Exception:
+                return False
+    except Exception:
+        # Treat resolver iterators that fail while being consumed as unsafe.
+        return False
 
     return True
 
@@ -166,7 +235,13 @@ class NotificationService(ABC):
 
     def _url_allowed(self) -> bool:
         """Reject outbound POSTs to unvalidated/internal URLs (F55 SSRF guard)."""
-        if not validate_notification_url(self.url):
+        try:
+            allowed = validate_notification_url(self.url)
+        except Exception:
+            # Keep the outbound path fail-closed even if a resolver or URL
+            # parser unexpectedly escapes the validator's defensive guards.
+            allowed = False
+        if not allowed:
             logger.error(f"{self.name} 通知地址校验失败")
             return False
         return True
@@ -247,7 +322,7 @@ class DefaultNotification(NotificationService):
             # module globals also contain imported modules and logger objects.
             provider_class = _PROVIDER_CLASSES.get(provider_name) if isinstance(provider_name, str) else None
             if not provider_class:
-                logger.error(f"未找到名为 {provider_name} 的通知服务提供商")
+                logger.error("未找到配置的通知服务提供商")
                 self.disabled = True
                 return self
 
@@ -312,6 +387,10 @@ class ServerChan(NotificationService):
             logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         except ValueError as e:
             logger.error(f"{self.name}返回数据解析失败: {type(e).__name__}")
+        except Exception as e:
+            # A provider/parser implementation must not expose URL or token
+            # contents if an unexpected outbound error escapes requests.
+            logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         return False
 
 
@@ -362,6 +441,8 @@ class Qmsg(NotificationService):
             logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         except ValueError as e:
             logger.error(f"{self.name}返回数据解析失败: {type(e).__name__}")
+        except Exception as e:
+            logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         return False
 
 
@@ -410,6 +491,8 @@ class Bark(NotificationService):
             logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         except ValueError as e:
             logger.error(f"{self.name}返回数据解析失败: {type(e).__name__}")
+        except Exception as e:
+            logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         return False
 
 
@@ -460,6 +543,8 @@ class Telegram(NotificationService):
             logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         except ValueError as e:
             logger.error(f"{self.name}返回数据解析失败: {type(e).__name__}")
+        except Exception as e:
+            logger.error(f"{self.name}通知发送失败: {type(e).__name__}")
         return False
 
 

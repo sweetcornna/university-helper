@@ -37,6 +37,7 @@ _user_adapters: Dict[str, Dict[str, Any]] = {}  # {"adapter": ..., "last_access"
 _course_tasks: Dict[str, Dict[str, Any]] = {}
 _course_tasks_lock = threading.Lock()
 _learning_manager_instance: Any = None
+_NOTIFICATION_SERVICE_LABELS = frozenset({"ServerChan", "Qmsg", "Bark", "Telegram"})
 THREAD_START_FAILURE_DETAIL = (
     "Server cannot start a new background thread. Stop existing tasks and retry, "
     "or restart the service if the problem persists."
@@ -1151,14 +1152,23 @@ async def get_chapters(
 async def test_notification(request: dict, current_user: dict = Depends(get_current_user)):
     _current_user_id(current_user)
 
-    service = request.get("service")
+    requested_service = request.get("service")
     url = request.get("url")
 
-    if not service or not url:
+    if not requested_service or not url:
         raise HTTPException(status_code=400, detail="service and url are required")
 
+    if not isinstance(requested_service, str) or requested_service not in _NOTIFICATION_SERVICE_LABELS:
+        raise HTTPException(status_code=400, detail="Unsupported notification service")
+    service = requested_service
+
     # SSRF guard: never let the test endpoint POST to an internal/loopback host.
-    if not validate_notification_url(url):
+    try:
+        url_allowed = validate_notification_url(url)
+    except Exception:
+        logger.warning("Notification URL validation failed")
+        url_allowed = False
+    if not url_allowed:
         raise HTTPException(
             status_code=400,
             detail="Notification URL must be a public http(s) address",
@@ -1170,13 +1180,13 @@ async def test_notification(request: dict, current_user: dict = Depends(get_curr
         config["tg_chat_id"] = str(tg_chat_id)
 
     def _deliver() -> bool:
-        provider = NotificationFactory.create_service(config)
-        if getattr(provider, "disabled", False):
-            return False
         try:
+            provider = NotificationFactory.create_service(config)
+            if getattr(provider, "disabled", False):
+                return False
             return bool(provider.send("University-Helper 测试通知 / test notification"))
-        except Exception as exc:
-            logger.warning("Test notification delivery failed: %s", exc)
+        except Exception:
+            logger.warning("Test notification delivery failed")
             return False
 
     delivered = await _run_blocking(_deliver)
@@ -1184,7 +1194,7 @@ async def test_notification(request: dict, current_user: dict = Depends(get_curr
     if not delivered:
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to send test notification via {service}",
+            detail="Failed to send test notification",
         )
 
-    return {"status": "success", "message": f"Test notification sent via {service}"}
+    return {"status": "success", "message": "Test notification sent"}

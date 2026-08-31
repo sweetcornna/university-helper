@@ -3,6 +3,8 @@
 notify_config must actually be sent through the notification provider path
 (not merely logged), with an SSRF guard mirroring the /notify/test endpoint.
 """
+
+import logging
 import threading
 from unittest import mock
 
@@ -70,6 +72,25 @@ def test_completion_notification_blocks_internal_url(monkeypatch):
     factory.create_service.assert_not_called()
 
 
+def test_completion_notification_validator_failure_is_safe(monkeypatch, caplog):
+    m = _bare_manager()
+    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
+    sentinel_url = "https://notify.example/NOTIFICATION_SENTINEL?token=NOTIFICATION_SENTINEL"
+    monkeypatch.setattr(lm, "validate_notification_url", mock.Mock(side_effect=RuntimeError(sentinel_url)))
+
+    with caplog.at_level(logging.WARNING, logger=lm.__name__):
+        m._send_completion_notification(
+            "t1",
+            {"service": "Bark", "url": sentinel_url},
+            "Task completed",
+        )
+
+    task_logs = m._tasks["t1"]["logs"]
+    assert sentinel_url not in caplog.text
+    assert all(sentinel_url not in str(entry) for entry in task_logs)
+    assert "RuntimeError" in caplog.text
+
+
 def test_completion_notification_noop_without_config(monkeypatch):
     m = _bare_manager()
     monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
@@ -82,20 +103,49 @@ def test_completion_notification_noop_without_config(monkeypatch):
     factory.create_service.assert_not_called()
 
 
-def test_completion_notification_send_failure_is_swallowed(monkeypatch):
+def test_completion_notification_send_failure_is_swallowed(monkeypatch, caplog):
     m = _bare_manager()
     monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
     monkeypatch.setattr(lm, "validate_notification_url", lambda url: True)
 
     notifier = mock.Mock()
-    notifier.send.side_effect = RuntimeError("boom")
+    sentinel_url = "https://notify.example/NOTIFICATION_SENTINEL?token=NOTIFICATION_SENTINEL"
+    notifier.send.side_effect = RuntimeError(sentinel_url)
     factory = mock.Mock()
     factory.create_service.return_value = notifier
     monkeypatch.setattr(lm, "NotificationFactory", factory)
 
-    # Must not raise even when the provider send blows up.
+    # Must not raise even when the provider send blows up. Neither the
+    # application log nor the task's user-visible log may echo the URL.
+    with caplog.at_level(logging.WARNING, logger=lm.__name__):
+        m._send_completion_notification(
+            "t1",
+            {"service": "Qmsg", "url": sentinel_url},
+            "Task completed",
+        )
+
+    task_logs = m._tasks["t1"]["logs"]
+    assert sentinel_url not in caplog.text
+    assert all(sentinel_url not in str(entry) for entry in task_logs)
+    assert any("RuntimeError" in str(entry) for entry in task_logs)
+
+
+def test_completion_notification_skips_unknown_service_without_echoing_input(monkeypatch):
+    m = _bare_manager()
+    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
+    sentinel_service = "Unknown-NOTIFICATION_SENTINEL"
+    sentinel_url = "https://notify.example/NOTIFICATION_SENTINEL?token=NOTIFICATION_SENTINEL"
+
+    factory = mock.Mock()
+    monkeypatch.setattr(lm, "NotificationFactory", factory)
+
     m._send_completion_notification(
         "t1",
-        {"service": "Qmsg", "url": "https://qmsg.example.com/send"},
+        {"service": sentinel_service, "url": sentinel_url},
         "Task completed",
     )
+
+    factory.create_service.assert_not_called()
+    task_logs = m._tasks["t1"]["logs"]
+    assert all(sentinel_service not in str(entry) for entry in task_logs)
+    assert all(sentinel_url not in str(entry) for entry in task_logs)

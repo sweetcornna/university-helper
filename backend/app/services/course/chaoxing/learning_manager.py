@@ -26,6 +26,7 @@ from .task_admission import (
 logger = logging.getLogger(__name__)
 LEARNING_TASK_KIND = "chaoxing_learning"
 INTERRUPTED_STATUSES = {"running", "pending", "paused", "cancelling", "stopping"}
+_NOTIFICATION_SERVICE_LABELS = frozenset({"ServerChan", "Qmsg", "Bark", "Telegram"})
 RESTART_INTERRUPTED_MESSAGE = "Task interrupted due to service restart"
 UNEXPECTED_WORKER_ERROR_PREFIX = "Unexpected task failure"
 USER_TASK_LOAD_LIMIT = 2000
@@ -589,14 +590,25 @@ class ChaoxingLearningManager:
         """
         if not isinstance(notify_config, dict):
             return
-        service = str(notify_config.get("service") or "").strip()
-        url = str(notify_config.get("url") or "").strip()
+        raw_service = notify_config.get("service")
+        service = raw_service.strip() if isinstance(raw_service, str) else ""
+        raw_url = notify_config.get("url")
+        url = raw_url.strip() if isinstance(raw_url, str) else ""
         if not service or not url:
+            return
+        if service not in _NOTIFICATION_SERVICE_LABELS:
+            self._append_task_log(task_id, "Notification skipped: unsupported service", "warning")
             return
 
         # SSRF guard: refuse to POST to internal/loopback/metadata hosts, mirroring
         # the /notify/test endpoint guard.
-        if not validate_notification_url(url):
+        try:
+            url_allowed = validate_notification_url(url)
+        except Exception as exc:
+            logger.warning("notification URL validation failed: %s", type(exc).__name__)
+            self._append_task_log(task_id, "Notification skipped: URL validation failed", "warning")
+            return
+        if not url_allowed:
             self._append_task_log(
                 task_id,
                 "Notification skipped: URL must be a public http(s) address",
@@ -614,8 +626,9 @@ class ChaoxingLearningManager:
             notifier.send(f"chaoxing : {summary}")
             self._append_task_log(task_id, f"Notification sent via {service}", "info")
         except Exception as exc:  # pragma: no cover - best-effort, never fatal
-            logger.warning("send learning notification failed: %s", exc)
-            self._append_task_log(task_id, f"Notification failed: {exc}", "warning")
+            failure_type = type(exc).__name__
+            logger.warning("send learning notification failed: %s", failure_type)
+            self._append_task_log(task_id, f"Notification failed ({failure_type})", "warning")
 
     def _run_task_worker_guarded(self, task_id: str, user_id: str, payload: dict[str, Any]) -> None:
         try:
