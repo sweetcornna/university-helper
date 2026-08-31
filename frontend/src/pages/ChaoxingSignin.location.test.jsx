@@ -1,10 +1,23 @@
 import { act } from 'react-dom/test-utils'
 import { createRoot } from 'react-dom/client'
+import { fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import ChaoxingSignin from './ChaoxingSignin'
 import { wgs84ToBd09 } from '../utils/coordTransform'
+
+vi.mock('../components/BaiduMapPickerModal', () => ({
+  default: ({ onConfirm }) => (
+    <button
+      type="button"
+      data-testid="mock-map-confirm"
+      onClick={() => onConfirm({ address: '地图地点', latitude: 31.2304, longitude: 121.4737 })}
+    >
+      确认地图坐标
+    </button>
+  ),
+}))
 
 const expectedBd09 = (wgsLat, wgsLng) => {
   const [bdLng, bdLat] = wgs84ToBd09(wgsLng, wgsLat)
@@ -45,6 +58,47 @@ const mockPlaceSearchResponse = {
         },
       ],
     }),
+}
+
+const deferred = () => {
+  let resolve
+  let reject
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve
+    reject = promiseReject
+  })
+  return { promise, resolve, reject }
+}
+
+const renderSignin = async (container, root) => {
+  await act(async () => {
+    root.render(
+      <RuntimeProfileContext.Provider value={{ profile: 'server', isLocal: false, requiresAuth: true, loading: false }}>
+        <ToastProvider>
+          <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <ChaoxingSignin />
+          </MemoryRouter>
+        </ToastProvider>
+      </RuntimeProfileContext.Provider>
+    )
+  })
+}
+
+const chooseLocationSignType = (container) => {
+  const signType = container.querySelector('#cx-signtype')
+  if (!signType) {
+    throw new Error('Expected the Chaoxing sign-in form to render a sign type selector.')
+  }
+  act(() => {
+    signType.value = 'location'
+    signType.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
+const setInputValue = (input, value) => {
+  act(() => {
+    fireEvent.change(input, { target: { value } })
+  })
 }
 
 const waitFor = async (predicate, timeoutMs = 1000) => {
@@ -216,6 +270,101 @@ describe('ChaoxingSignin location flow', () => {
 
       return true
     })
+  })
+
+  test('manual coordinates win over a pending geolocation on the page', async () => {
+    const requests = []
+    vi.stubGlobal('navigator', {
+      geolocation: {
+        getCurrentPosition: vi.fn((onSuccess, onError, options) => {
+          requests.push({ onSuccess, onError, options })
+        }),
+      },
+    })
+
+    await renderSignin(container, root)
+    chooseLocationSignType(container)
+
+    const useLocationButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('使用当前位置')
+    )
+    act(() => useLocationButton.click())
+    expect(requests).toHaveLength(1)
+
+    setInputValue(container.querySelector('#cx-latitude'), 'manual-latitude')
+    setInputValue(container.querySelector('#cx-longitude'), 'manual-longitude')
+    act(() => requests[0].onSuccess({ coords: { latitude: 31.2304, longitude: 121.4737 } }))
+
+    await waitFor(() => (
+      container.querySelector('#cx-latitude')?.value === 'manual-latitude' &&
+      container.querySelector('#cx-longitude')?.value === 'manual-longitude'
+    ))
+  })
+
+  test('map confirmation wins over a pending geolocation on the page', async () => {
+    const requests = []
+    vi.stubGlobal('navigator', {
+      geolocation: {
+        getCurrentPosition: vi.fn((onSuccess, onError, options) => {
+          requests.push({ onSuccess, onError, options })
+        }),
+      },
+    })
+
+    await renderSignin(container, root)
+    chooseLocationSignType(container)
+
+    const useLocationButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('使用当前位置')
+    )
+    act(() => useLocationButton.click())
+    expect(requests).toHaveLength(1)
+
+    const mapButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('在地图上选点')
+    )
+    act(() => mapButton.click())
+    await waitFor(() => container.querySelector('[data-testid="mock-map-confirm"]'))
+
+    act(() => container.querySelector('[data-testid="mock-map-confirm"]').click())
+    const { lat, lng } = expectedBd09(31.2304, 121.4737)
+    act(() => requests[0].onSuccess({ coords: { latitude: 39.9042, longitude: 116.4074 } }))
+
+    await waitFor(() => (
+      container.querySelector('#cx-latitude')?.value === lat &&
+      container.querySelector('#cx-longitude')?.value === lng
+    ))
+  })
+
+  test('manual coordinates win over a pending geocode on the page', async () => {
+    const pending = deferred()
+    globalThis.fetch.mockImplementation((input) => {
+      const url = String(input)
+      if (url.includes('/api/v1/chaoxing/location/geocode')) return pending.promise
+      if (url.includes('/api/v1/chaoxing/location/search')) return mockPlaceSearchResponse
+      return mockBootstrapResponse({ data: [] })
+    })
+
+    await renderSignin(container, root)
+    chooseLocationSignType(container)
+    setInputValue(container.querySelector('#cx-address'), '旧地址')
+
+    const resolveButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('解析坐标')
+    )
+    act(() => resolveButton.click())
+    await waitFor(() => resolveButton.textContent?.includes('解析中...'))
+
+    setInputValue(container.querySelector('#cx-latitude'), 'manual-latitude')
+    setInputValue(container.querySelector('#cx-longitude'), 'manual-longitude')
+    await act(async () => {
+      pending.resolve(mockGeocodeResponse)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('#cx-latitude').value).toBe('manual-latitude')
+    expect(container.querySelector('#cx-longitude').value).toBe('manual-longitude')
   })
 
 })

@@ -147,6 +147,37 @@ const cases = [
   },
 ]
 
+const userLocationIntents = [
+  {
+    label: 'manual coordinates',
+    apply: (services) => services.applyUserLocationIntent(
+      { latitude: 'manual-latitude', longitude: 'manual-longitude' },
+      { convert: false },
+    ),
+    expected: { latitude: 'manual-latitude', longitude: 'manual-longitude' },
+  },
+  {
+    label: 'map confirmation',
+    apply: (services) => services.applyUserLocationIntent({
+      address: '地图地点',
+      latitude: 31.2304,
+      longitude: 121.4737,
+    }),
+    expected: { address: '地图地点', ...expectedCoordinates(31.2304, 121.4737) },
+  },
+  {
+    label: 'place candidate',
+    apply: (services) => services.choosePlaceSearchResult({
+      id: 'candidate-1',
+      name: '候选地点',
+      address: '候选地址',
+      latitude: '22.5431',
+      longitude: '114.0579',
+    }),
+    expected: { address: '候选地点 候选地址', ...expectedCoordinates(22.5431, 114.0579) },
+  },
+]
+
 describe('useLocationServices overlapping request loading', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -492,6 +523,78 @@ describe('useLocationServices overlapping request loading', () => {
 
       expect(rendered.container.querySelector('[data-testid="geocode-loading"]')).toHaveTextContent('false')
       expect(rendered.container.querySelector('[data-testid="geocode-status"]')).toHaveTextContent('success')
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+  test.each(userLocationIntents)('a user $label invalidates a pending geolocation', ({ apply, expected }) => {
+    const { geolocation, requests } = deferredGeolocation()
+    vi.stubGlobal('navigator', { geolocation })
+
+    const form = { address: '原地址', latitude: 'old-latitude', longitude: 'old-longitude', altitude: '100' }
+    const setForm = vi.fn((update) => Object.assign(form, update(form)))
+    const rendered = renderLocationServices(vi.fn(), setForm)
+
+    try {
+      act(() => rendered.current.useCurrentLocation())
+      expect(requests).toHaveLength(1)
+      act(() => apply(rendered.current))
+      const setFormCallsAfterIntent = setForm.mock.calls.length
+
+      act(() => requests[0].onSuccess(position(39.9042, 116.4074)))
+
+      expect(setForm).toHaveBeenCalledTimes(setFormCallsAfterIntent)
+      expect(form).toMatchObject(expected)
+      expect(rendered.container.querySelector('[data-testid="geocode-loading"]')).toHaveTextContent('false')
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+  test.each(userLocationIntents)('a user $label invalidates a pending geocode', async ({ apply, expected }) => {
+    const pending = deferred()
+    const form = { address: '', latitude: 'old-latitude', longitude: 'old-longitude', altitude: '100' }
+    const setForm = vi.fn((update) => Object.assign(form, update(form)))
+    const rendered = renderLocationServices(vi.fn(() => pending.promise), setForm)
+
+    try {
+      const request = await startRequest(rendered, 'resolveLocationCoordinates', '旧地址')
+      act(() => apply(rendered.current))
+      const setFormCallsAfterIntent = rendered.setForm.mock.calls.length
+
+      await settleRequest(request.promise, () => pending.resolve(geocodeResponse('旧地址')))
+
+      expect(rendered.setForm).toHaveBeenCalledTimes(setFormCallsAfterIntent)
+      expect(rendered.container.querySelector('[data-testid="geocode-loading"]')).toHaveTextContent('false')
+      expect(rendered.container.querySelector('[data-testid="geocode-message"]')).not.toHaveTextContent('旧地址')
+      expect(form).toMatchObject(expected)
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+  test('a stale geolocation callback cannot clear a newer geocode loading state', async () => {
+    const { geolocation, requests } = deferredGeolocation()
+    vi.stubGlobal('navigator', { geolocation })
+    const pending = deferred()
+    const rendered = renderLocationServices(vi.fn(() => pending.promise))
+
+    try {
+      await setAddress(rendered, '新地址')
+      act(() => rendered.current.useCurrentLocation())
+      const geolocationRequest = requests[0]
+      let geocodeRequest
+      await act(async () => {
+        geocodeRequest = rendered.current.resolveLocationCoordinates()
+        await Promise.resolve()
+      })
+      expect(rendered.container.querySelector('[data-testid="geocode-loading"]')).toHaveTextContent('true')
+
+      act(() => geolocationRequest.onSuccess(position(31.2304, 121.4737)))
+
+      expect(rendered.container.querySelector('[data-testid="geocode-loading"]')).toHaveTextContent('true')
+      await settleRequest(geocodeRequest, () => pending.resolve(geocodeResponse('新地址')))
     } finally {
       rendered.cleanup()
     }

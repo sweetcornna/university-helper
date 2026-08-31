@@ -244,7 +244,7 @@ export default function ChaoxingSignin() {
     placeSearchMessage,
     isMapPickerOpen,
     setIsMapPickerOpen,
-    applyResolvedLocation,
+    applyUserLocationIntent,
     useCurrentLocation,
     resolveLocationCoordinates,
     searchLocationCandidates,
@@ -1581,9 +1581,7 @@ export default function ChaoxingSignin() {
                           label="纬度"
                           type="text"
                           value={form.latitude}
-                          onChange={(e) =>
-                            setForm((prev) => ({ ...prev, latitude: e.target.value }))
-                          }
+                          onChange={(e) => applyUserLocationIntent({ latitude: e.target.value }, { convert: false })}
                           placeholder="e.g. 39.9042"
                         />
 
@@ -1592,9 +1590,7 @@ export default function ChaoxingSignin() {
                           label="经度"
                           type="text"
                           value={form.longitude}
-                          onChange={(e) =>
-                            setForm((prev) => ({ ...prev, longitude: e.target.value }))
-                          }
+                          onChange={(e) => applyUserLocationIntent({ longitude: e.target.value }, { convert: false })}
                           placeholder="e.g. 116.4074"
                         />
 
@@ -1968,7 +1964,7 @@ export default function ChaoxingSignin() {
             }}
             onClose={() => setIsMapPickerOpen(false)}
             onConfirm={(location) => {
-              applyResolvedLocation(location)
+              applyUserLocationIntent(location)
               setGeocodeStatus('success')
               setGeocodeMessage(`已选点：${location.latitude}, ${location.longitude}`)
               setIsMapPickerOpen(false)
