@@ -247,6 +247,41 @@ fi
 
 remote_sh() { "${SSH_BASE[@]}" "$@"; }
 
+run_scp_checked() {
+  local retry_mode=$1
+  shift
+  local max_attempts=1 attempt status
+
+  case "$retry_mode" in
+    staged)
+      max_attempts=3
+      ;;
+    direct)
+      ;;
+    *)
+      echo "Internal error: invalid scp retry mode" >&2
+      return 2
+      ;;
+  esac
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if "${SCP_BASE[@]}" "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt < max_attempts )); then
+      echo "scp upload attempt $attempt failed; retrying" >&2
+      sleep 1
+    fi
+  done
+
+  if [[ "${transaction_active:-0}" == "1" ]]; then
+    on_error "$status"
+  fi
+  return "$status"
+}
+
 # Expand COMPOSE_FILES into individually quoted "-f path" arguments.
 compose_cmd="$(shell_quote "$COMPOSE_BIN") -p $(shell_quote "$COMPOSE_PROJECT")"
 for compose_file in "${COMPOSE_FILE_LIST[@]}"; do
@@ -388,7 +423,7 @@ if [[ "$needs_app_rebuild" != true ]]; then
     remote_path_quoted="$(shell_quote "$remote_path")"
     remote_dir_quoted="$(shell_quote "$remote_dir")"
     remote_sh "mkdir -p $remote_dir_quoted"
-    "${SCP_BASE[@]}" "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:${remote_path}"
+    run_scp_checked direct "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:${remote_path}"
   done
 
   if [[ "$needs_web_reload" == true ]]; then
@@ -626,16 +661,6 @@ run_remote_checked() {
   fi
 }
 
-run_scp_checked() {
-  local status
-  if "${SCP_BASE[@]}" "$@"; then
-    return 0
-  else
-    status=$?
-    on_error "$status"
-  fi
-}
-
 trap 'on_error "$?"' ERR
 
 for index in "${!validated_rel_paths[@]}"; do
@@ -691,7 +716,7 @@ for index in "${!validated_rel_paths[@]}"; do
   stage_path_quoted="$(shell_quote "$stage_path")"
 
   operation="uploading staged $rel_path"
-  run_scp_checked "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:${stage_path}"
+  run_scp_checked staged "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:${stage_path}"
   operation="atomically publishing $rel_path"
   run_remote_checked "mv -f $stage_path_quoted $remote_path_quoted"
   stage_remote_paths[index]=""

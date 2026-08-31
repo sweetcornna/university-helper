@@ -59,6 +59,20 @@ printf '%s\\n' "$@" >> "$CALL_LOG"
 if [[ "${FAIL_TRANSPORT:-}" == "$(basename "$0")" ]]; then
   exit 42
 fi
+command_name="$(basename "$0")"
+if [[ "$command_name" == "scp" && "${FAIL_SCP_ATTEMPTS:-}" =~ ^[1-9][0-9]*$ ]]; then
+  scp_attempts_file="${CALL_LOG}.scp-attempts"
+  if [[ -f "$scp_attempts_file" ]]; then
+    scp_attempt="$(<"$scp_attempts_file")"
+  else
+    scp_attempt=0
+  fi
+  scp_attempt=$((scp_attempt + 1))
+  printf '%s\\n' "$scp_attempt" > "$scp_attempts_file"
+  if (( scp_attempt <= FAIL_SCP_ATTEMPTS )); then
+    exit 42
+  fi
+fi
 if [[ -n "${FAIL_REMOTE_SUBSTRING:-}" && "$*" == *"$FAIL_REMOTE_SUBSTRING"* ]]; then
   exit 42
 fi
@@ -156,6 +170,7 @@ exec "$@"
     )
     for failure_variable in (
         "FAIL_TRANSPORT",
+        "FAIL_SCP_ATTEMPTS",
         "FAIL_REMOTE_SUBSTRING",
         "FAIL_HEALTH_INSPECT",
         "FAIL_COMPOSE_IMAGE_INSPECT",
@@ -186,6 +201,10 @@ def run_publisher(fixture, *paths):
 
 def _scp_target_lines(log):
     return [line for line in log.splitlines() if line.startswith("tester@test.invalid:")]
+
+
+def _transport_call_count(log, command):
+    return sum(Path(line).name == command for line in log.splitlines())
 
 
 def test_normal_relative_file_keeps_remote_target_semantics(publisher_fixture):
@@ -248,6 +267,16 @@ def test_non_backend_scp_target_has_no_literal_shell_quotes(publisher_fixture):
     assert "mkdir -p '/opt/university-helper/nginx'" in log
 
 
+def test_non_backend_scp_uses_checked_helper_without_retry(publisher_fixture):
+    publisher_fixture["env"]["FAIL_SCP_ATTEMPTS"] = "1"
+
+    result = run_publisher(publisher_fixture, "nginx/nginx.conf")
+
+    assert result.returncode != 0
+    assert _transport_call_count(publisher_fixture["call_log"].read_text(), "scp") == 1
+    assert "scp upload attempt" not in result.stderr
+
+
 def test_compose_values_are_individually_quoted_in_remote_command(publisher_fixture):
     result = run_publisher(publisher_fixture, "Dockerfile.server")
 
@@ -302,6 +331,46 @@ def test_multiple_backend_files_use_unique_staging_and_one_rebuild(publisher_fix
     assert len(set(mktemp_outputs)) == len(mktemp_outputs)
     assert log.count("up -d --build --no-deps --force-recreate app") == 1
     assert log.count("hotfix-stage.") >= 4
+
+
+def test_backend_staged_scp_retries_transient_failure_without_rollback(publisher_fixture):
+    publisher_fixture["env"]["FAIL_SCP_ATTEMPTS"] = "1"
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    assert _transport_call_count(publisher_fixture["call_log"].read_text(), "scp") == 2
+    assert "scp upload attempt 1 failed; retrying" in result.stderr
+    assert "scp upload attempt 2 failed; retrying" not in result.stderr
+    assert "Attempting backend hotfix rollback" not in result.stderr
+    assert "Hotfix publish complete." in result.stdout
+
+
+def test_backend_staged_scp_exhausts_three_attempts_and_rolls_back(publisher_fixture):
+    publisher_fixture["env"]["FAIL_SCP_ATTEMPTS"] = "3"
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert _transport_call_count(publisher_fixture["call_log"].read_text(), "scp") == 3
+    assert result.stderr.count("scp upload attempt 1 failed; retrying") == 1
+    assert result.stderr.count("scp upload attempt 2 failed; retrying") == 1
+    assert "scp upload attempt 3 failed; retrying" not in result.stderr
+    assert "Attempting backend hotfix rollback" in result.stderr
+    assert "rollback completed and app health is healthy" in result.stderr
+    assert "Hotfix publish complete." not in result.stdout
+
+
+def test_remote_ssh_failure_is_not_retried(publisher_fixture):
+    publisher_fixture["env"]["FAIL_TRANSPORT"] = "ssh"
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    log = publisher_fixture["call_log"].read_text()
+    assert _transport_call_count(log, "ssh") == 1
+    assert _transport_call_count(log, "scp") == 0
+    assert "scp upload attempt" not in result.stderr
 
 
 def test_backend_hotfix_fails_closed_when_remote_topology_has_no_build_context(publisher_fixture):
