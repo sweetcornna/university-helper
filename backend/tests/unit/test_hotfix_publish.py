@@ -95,6 +95,11 @@ if [[ "$*" == *"{{.State.Health.Status}}"* ]]; then
   printf '%s\\n' "${FAKE_HEALTH_STATUS:-healthy}"
   exit 0
 fi
+if [[ "$*" == *"docker image inspect --format '{{.Id}}'"* ]]; then
+  [[ "${FAIL_COMPOSE_IMAGE_INSPECT:-}" != "1" ]] || exit 42
+  printf '%s\\n' "${FAKE_COMPOSE_IMAGE_INSPECT_ID:-$FAKE_NEW_IMAGE_ID}"
+  exit 0
+fi
 if [[ "$*" == *"{{.Image}}"* ]]; then
   printf '%s\\n' "${FAKE_NEW_IMAGE_ID}"
   exit 0
@@ -149,7 +154,12 @@ exec "$@"
             "FAKE_IMAGE_REF": "university-helper-app:latest",
         }
     )
-    for failure_variable in ("FAIL_TRANSPORT", "FAIL_REMOTE_SUBSTRING", "FAIL_HEALTH_INSPECT"):
+    for failure_variable in (
+        "FAIL_TRANSPORT",
+        "FAIL_REMOTE_SUBSTRING",
+        "FAIL_HEALTH_INSPECT",
+        "FAIL_COMPOSE_IMAGE_INSPECT",
+    ):
         env.pop(failure_variable, None)
     return {
         "repo": repo,
@@ -386,6 +396,44 @@ def test_backend_hotfix_rejects_compose_image_mismatch_and_rolls_back(publisher_
     assert "Hotfix publish complete." not in result.stdout
 
 
+@pytest.mark.parametrize("short_id_length", [12, 64])
+def test_backend_hotfix_normalizes_bare_compose_image_id_before_comparison(publisher_fixture, short_id_length):
+    short_id = "b" * short_id_length
+    publisher_fixture["env"]["FAKE_COMPOSE_IMAGE_ID"] = short_id
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    log = publisher_fixture["call_log"].read_text()
+    assert f"docker image inspect --format '{{{{.Id}}}}' '{short_id}'" in log
+    assert "Hotfix publish complete." in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("compose_image_id", "inspect_failure", "normalized_image_id"),
+    [
+        ("", "0", None),
+        ("not-a-digest", "0", None),
+        ("a" * 12, "1", None),
+        ("a" * 12, "0", "sha256:" + "c" * 64),
+    ],
+)
+def test_backend_hotfix_rejects_compose_image_normalization_failures_and_rolls_back(
+    publisher_fixture, compose_image_id, inspect_failure, normalized_image_id
+):
+    publisher_fixture["env"]["FAKE_COMPOSE_IMAGE_ID"] = compose_image_id
+    publisher_fixture["env"]["FAIL_COMPOSE_IMAGE_INSPECT"] = inspect_failure
+    if normalized_image_id is not None:
+        publisher_fixture["env"]["FAKE_COMPOSE_IMAGE_INSPECT_ID"] = normalized_image_id
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "Attempting backend hotfix rollback" in result.stderr
+    assert "rollback completed" in result.stderr
+    assert "Hotfix publish complete." not in result.stdout
+
+
 def test_backend_hotfix_accepts_matching_new_container_and_compose_image(publisher_fixture):
     result = run_publisher(publisher_fixture, "backend/app/main.py")
 
@@ -393,6 +441,7 @@ def test_backend_hotfix_accepts_matching_new_container_and_compose_image(publish
     assert publisher_fixture["env"]["FAKE_NEW_IMAGE_ID"] in result.stdout
     log = publisher_fixture["call_log"].read_text()
     assert "docker inspect --format '{{.Image}}'" in log
+    assert "docker image inspect --format '{{.Id}}'" not in log
     assert "images -q app" in log
     assert "up -d --no-build --force-recreate --no-deps app" not in log
 

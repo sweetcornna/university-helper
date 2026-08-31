@@ -740,6 +740,15 @@ else
   status=$?
   on_error "$status"
 fi
+if [[ "$compose_app_image_id" =~ ^[[:xdigit:]]{12,64}$ ]]; then
+  compose_app_image_id_quoted="$(shell_quote "$compose_app_image_id")"
+  if compose_app_image_id="$(remote_sh "docker image inspect --format '{{.Id}}' $compose_app_image_id_quoted")"; then
+    :
+  else
+    status=$?
+    on_error "$status"
+  fi
+fi
 if [[ ! "$compose_app_image_id" =~ ^sha256:[[:xdigit:]]{64}$ ]]; then
   abort_transaction "Compose app image ID is empty or is not a full sha256 digest"
 fi
