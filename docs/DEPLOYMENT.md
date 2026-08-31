@@ -120,7 +120,20 @@ export EASY_LEARNING_SERVER_PASSWORD=<from secrets manager>
 Behavior:
 
 - Syncs only the listed files into `/opt/university-helper/` on the server.
-- Backend `.py` changes are copied into the running app container; container is restarted.
+- Backend changes are uploaded into the remote repository checkout, after which
+  the script verifies that the selected Compose files contain a buildable `app`
+  service and runs `up -d --build --no-deps --force-recreate app`. The read-only app container is
+  replaced from that image; no files are copied into a running container. Each
+  existing remote file is copied to a unique same-directory temporary backup,
+  and each upload is written to a same-directory temporary file and then
+  published with `rename`. This is a per-file replacement mechanism; it does
+  not make the overall multi-file and container update atomic. After the replacement container is healthy and the
+  new container uses a new full SHA-256 image ID matching Compose, and the
+  bounded HTTP health check succeeds, temporary backups are removed. If upload,
+  build, or health verification fails, the script restores/deletes the source
+  files, retags the old image, recreates the old service without a build, and
+  verifies the restored container uses the exact old image ID and is healthy; a rollback failure is reported as fatal for manual
+  recovery. Image-only/release Compose topologies fail closed before upload.
 - Frontend changes are published only through the built artifact flow. From the repository root:
 
   ```bash
@@ -291,7 +304,16 @@ cd ..
 行为：
 
 - 仅同步指定文件到服务器的 `/opt/university-helper/`。
-- 后端 `.py` 文件被拷贝进运行中的 app 容器并重启。
+- 后端改动会先同步到远程仓库检出目录；脚本确认所选 Compose 文件中的
+  `app` 服务存在可构建上下文后，执行 `up -d --build --no-deps --force-recreate app` 重建并替换
+  app。app 容器是只读根文件系统，不会向运行中的容器拷贝文件。已有源文件会
+  先复制到同目录、唯一的临时备份；上传先写入同目录临时文件，再用 `rename` 发布
+  和替换。这只是单文件替换手段，不承诺整个多文件与容器更新是原子的。替换容器
+  使用与 Compose 完全匹配的新 SHA-256 镜像、容器健康且有界 HTTP
+  健康检查成功后，脚本清理临时备份；上传、构建
+  或健康检查失败时会恢复/删除源文件、将旧镜像重新标记到原引用、无构建重建旧
+  服务并验证容器精确恢复旧镜像且健康；回滚失败会明确报致命错误，保留现场供人工恢复。构建上下文
+  不存在（例如仅镜像的 release 拓扑）时会在上传前安全失败。
 - 前端改动会重新构建并写入 `frontend/dist/`，宿主机 nginx 已直接 serve 这个目录。
 - 依赖层改动（`backend/requirements.txt`、`Dockerfile.server`）会触发 app 镜像重建。
 

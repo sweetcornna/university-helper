@@ -256,7 +256,8 @@ docker compose -f docker-compose.server.yml -p university-helper up -d --build
 
 Confirm that `frontend/dist/` exists before configuring host nginx to serve it.
 
-Hotfix individual files to a running prod box (SSH-key auth preferred):
+Hotfix individual files in the remote production checkout and rebuild the app
+service (SSH-key auth preferred):
 ```bash
 SERVER_IP=… SSH_KEY=~/.ssh/uh ./scripts/hotfix_publish.sh backend/app/main.py
 ```

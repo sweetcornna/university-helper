@@ -93,7 +93,9 @@ JWT in `Authorization: Bearer …`, signed HS256. Claims: `user_id`, `tenant_db_
 
 - One docker-compose stack per environment: `docker-compose.server.yml` is the base; `docker-compose.staging.yml` is an overlay that swaps ports and volumes for parallel staging on the same host.
 - Image is published from `Dockerfile.server` — multi-stage build, non-root runtime, capability drop, `no-new-privileges`.
-- `scripts/hotfix_publish.sh` syncs single files into a running prod container for fast iteration; prefers SSH-key auth over sshpass.
+- `scripts/hotfix_publish.sh` uploads canonical single-file changes into the
+  remote checkout and rebuilds/replaces the Compose `app` service (the runtime
+  rootfs is read-only); it prefers SSH-key auth over sshpass.
 - `scripts/db_backup.sh` runs `pg_dumpall` and encrypts via `age` when a recipient is configured; refuses to write plaintext `.env` snapshots unless `ALLOW_UNENCRYPTED=1`.
 
 ## Future directions

@@ -194,7 +194,7 @@ docker compose -f docker-compose.server.yml -p university-helper up -d --build">
         <li>验证：<code>curl -fsS http://127.0.0.1:8000/health</code>。</li>
       </ol>
 
-      <div class="callout callout-info"><div>日常小改动用 <code>scripts/hotfix_publish.sh</code> 单文件热更新（SSH-key 认证优先），不要重复整栈重建。仓库根目录的旧 <code>deploy.*</code> 脚本已归档至 <code>scripts/_legacy/</code>，禁止运行。</div></div>
+      <div class="callout callout-info"><div>日常小改动用 <code>scripts/hotfix_publish.sh</code> 单文件更新（SSH-key 认证优先）：文件会同步到远程仓库检出目录并重建/替换 Compose 的 app 服务，不能写入只读运行容器。仓库根目录的旧 <code>deploy.*</code> 脚本已归档至 <code>scripts/_legacy/</code>，禁止运行。</div></div>
     </section>
 
     <!-- ============ 超星学习通 ============ -->
@@ -325,7 +325,7 @@ docker compose -f docker-compose.server.yml -p university-helper up -d --build">
 
       <details>
         <summary>怎么更新已部署的服务？</summary>
-        <div class="faq-body"><p>整体升级：拉新代码后重新 <code>docker compose -f docker-compose.server.yml up -d --build</code>。单文件热修复：<code>scripts/hotfix_publish.sh backend/app/main.py</code>（需要配置 <code>SERVER_IP</code> 与 SSH key），后端文件会同步进容器并自动重启，依赖层变更会触发整镜像重建。</p></div>
+        <div class="faq-body"><p>整体升级：拉新代码后重新 <code>docker compose -f docker-compose.server.yml up -d --build</code>。单文件热修复：<code>scripts/hotfix_publish.sh backend/app/main.py</code>（需要配置 <code>SERVER_IP</code> 与 SSH key），后端文件会同步到远程仓库检出目录，再用 Compose 重建并替换 app 服务（<code>--no-deps</code>）；只读容器不会被直接写入，依赖层变更会触发整镜像重建。</p></div>
       </details>
     </section>
 

@@ -14,7 +14,9 @@
 #   - The SPA is served by the `web` container from a read-only bind-mount of
 #     /opt/university-helper/frontend/dist, so built frontend artifacts take
 #     effect as soon as they're uploaded (an `nginx -s reload` is issued to be safe).
-#   - Backend code lives at /srv/backend inside the app container.
+#   - Backend hotfixes are uploaded into the remote repository checkout and
+#     applied by rebuilding/replacing the app service; the app rootfs is
+#     read-only, so this script never writes into the running container.
 #   - The app is published on 127.0.0.1:8000, so /health is reachable locally.
 #
 # Transport: SSH key first; falls back to sshpass + password.
@@ -272,9 +274,7 @@ fi
 
 # ── per-file hotfix mode ──────────────────────────────────────────────────────
 needs_app_rebuild=false
-needs_app_hotcopy=false
 needs_web_reload=false
-backend_files=()
 
 # Resolve and validate every input before starting any remote operation.  Both
 # the source path and the repository-relative path are canonicalized here; all
@@ -357,11 +357,286 @@ for rel_path in "$@"; do
   validated_abs_paths+=("$canonical_path")
 done
 
+# Classify only after every source path has passed canonicalization.  This is
+# intentionally done before the first remote operation so backend updates can
+# fail closed when the selected remote Compose topology cannot build the app.
+for rel_path in "${validated_rel_paths[@]}"; do
+  case "$rel_path" in
+    backend/*|Dockerfile.server|docker-compose*.yml)
+      needs_app_rebuild=true
+      ;;
+    frontend/*|nginx/nginx.conf|nginx/proxy_params.conf|nginx/snippets/*)
+      needs_web_reload=true
+      ;;
+  esac
+done
+
 if [[ "$DRY_RUN" == "1" ]]; then
   printf 'Dry run: validated %d repository path(s):\n' "${#validated_rel_paths[@]}"
   printf '  %s\n' "${validated_rel_paths[@]}"
   exit 0
 fi
+
+if [[ "$needs_app_rebuild" != true ]]; then
+  # Keep the existing non-backend per-file path (for example nginx reference
+  # configuration) independent from the app image transaction below.
+  for index in "${!validated_rel_paths[@]}"; do
+    rel_path="${validated_rel_paths[$index]}"
+    abs_path="${validated_abs_paths[$index]}"
+    remote_path="$REMOTE_DIR/$rel_path"
+    remote_dir="$(dirname "$remote_path")"
+    remote_path_quoted="$(shell_quote "$remote_path")"
+    remote_dir_quoted="$(shell_quote "$remote_dir")"
+    remote_sh "mkdir -p $remote_dir_quoted"
+    "${SCP_BASE[@]}" "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:$remote_path_quoted"
+  done
+
+  if [[ "$needs_web_reload" == true ]]; then
+    echo "Reloading web nginx ($WEB_CONTAINER)"
+    web_container_quoted="$(shell_quote "$WEB_CONTAINER")"
+    remote_sh "docker exec $web_container_quoted nginx -s reload >/dev/null 2>&1 || true"
+  fi
+
+  echo "Waiting for app health ($HEALTH_URL)"
+  health_url_quoted="$(shell_quote "$HEALTH_URL")"
+  remote_sh "for i in \$(seq 1 30); do if curl -fsS --max-time 5 $health_url_quoted >/dev/null 2>&1; then exit 0; fi; sleep 2; done; exit 1"
+  echo "Hotfix publish complete."
+  exit 0
+fi
+
+# Compose's JSON output is the source of truth for the build context.  The
+# validator resolves both context and Dockerfile through realpath on the
+# remote host and rejects symlink/path escapes before any source is uploaded.
+compose_build_validator_py='
+import json
+import os
+import sys
+
+def fail(message):
+    raise SystemExit(message)
+
+try:
+    document = json.load(sys.stdin)
+except Exception as exc:
+    fail("invalid Compose JSON: " + str(exc))
+
+root = os.path.realpath(sys.argv[1])
+services = document.get("services")
+app = services.get("app") if isinstance(services, dict) else None
+build = app.get("build") if isinstance(app, dict) else None
+if not isinstance(build, dict):
+    fail("services.app.build is missing")
+context = build.get("context")
+if not isinstance(context, str) or not context:
+    fail("services.app.build.context is missing")
+context_path = os.path.realpath(context if os.path.isabs(context) else os.path.join(root, context))
+if not os.path.isdir(context_path):
+    fail("services.app.build.context does not exist")
+try:
+    if os.path.commonpath((root, context_path)) != root:
+        fail("services.app.build.context escapes the repository checkout")
+except ValueError:
+    fail("services.app.build.context is on another filesystem root")
+dockerfile = build.get("dockerfile", "Dockerfile")
+if not isinstance(dockerfile, str) or not dockerfile:
+    fail("services.app.build.dockerfile is invalid")
+dockerfile_path = os.path.realpath(dockerfile if os.path.isabs(dockerfile) else os.path.join(context_path, dockerfile))
+try:
+    if os.path.commonpath((context_path, dockerfile_path)) != context_path:
+        fail("services.app.build.dockerfile escapes the build context")
+except ValueError:
+    fail("services.app.build.dockerfile is on another filesystem root")
+if not os.path.isfile(dockerfile_path):
+    fail("services.app.build.dockerfile does not exist")
+print("build-context-ok")
+'
+compose_build_validator_quoted="$(shell_quote "$compose_build_validator_py")"
+compose_image_ref_py='
+import json
+import sys
+
+# hotfix-image-ref
+document = json.load(sys.stdin)
+services = document.get("services")
+app = services.get("app") if isinstance(services, dict) else None
+image = app.get("image") if isinstance(app, dict) else None
+if not isinstance(image, str) or not image:
+    raise SystemExit("services.app.image is missing")
+print(image)
+'
+compose_image_ref_quoted="$(shell_quote "$compose_image_ref_py")"
+remote_dir_quoted="$(shell_quote "$REMOTE_DIR")"
+app_container_quoted="$(shell_quote "$APP_CONTAINER")"
+
+validate_remote_build_context() {
+  local phase=$1 context_command
+  context_command="cd $remote_dir_quoted && test -d . && config_output=\$($compose_cmd config --format json) && printf '%s\\n' \"\$config_output\" | python3 -c $compose_build_validator_quoted $remote_dir_quoted"
+  if ! remote_sh "$context_command"; then
+    echo "Remote Compose build-context validation failed ($phase); refusing backend hotfix." >&2
+    return 1
+  fi
+}
+
+echo "Validating remote Compose build context"
+if ! validate_remote_build_context "before upload"; then
+  exit 1
+fi
+
+# Capture the state needed for a deterministic rollback before touching the
+# checkout.  IDs are validated locally before being interpolated into any
+# later remote command.
+old_app_record="$(remote_sh "docker inspect --format '{{.Id}}|{{.Image}}' $app_container_quoted")"
+IFS='|' read -r old_app_container_id old_app_image_id <<< "$old_app_record"
+if [[ ! "$old_app_container_id" =~ ^[[:xdigit:]]{12,64}$ || ! "$old_app_image_id" =~ ^sha256:[[:xdigit:]]{12,64}$ ]]; then
+  echo "Unable to record the current app container/image IDs; refusing backend hotfix." >&2
+  exit 1
+fi
+compose_image_query="cd $remote_dir_quoted && config_output=\$($compose_cmd config --format json) && printf '%s\\n' \"\$config_output\" | python3 -c $compose_image_ref_quoted"
+old_app_image_ref="$(remote_sh "$compose_image_query")"
+if [[ ! "$old_app_image_ref" =~ ^[A-Za-z0-9._/@:+-]+$ ]]; then
+  echo "Unable to record a safe Compose app image reference; refusing backend hotfix." >&2
+  exit 1
+fi
+old_app_image_id_quoted="$(shell_quote "$old_app_image_id")"
+old_app_image_ref_quoted="$(shell_quote "$old_app_image_ref")"
+
+published_remote_paths=()
+backup_remote_paths=()
+source_states=()
+stage_remote_paths=()
+transaction_active=1
+operation="initializing backend hotfix transaction"
+
+cleanup_remote_transaction() {
+  local cleanup_command=":" index path_quoted
+  for index in "${!stage_remote_paths[@]}"; do
+    if [[ -n "${stage_remote_paths[$index]}" ]]; then
+      path_quoted="$(shell_quote "${stage_remote_paths[$index]}")"
+      cleanup_command+=" && rm -f $path_quoted"
+    fi
+  done
+  for index in "${!backup_remote_paths[@]}"; do
+    if [[ -n "${backup_remote_paths[$index]}" ]]; then
+      path_quoted="$(shell_quote "${backup_remote_paths[$index]}")"
+      cleanup_command+=" && rm -f $path_quoted"
+    fi
+  done
+  remote_sh "$cleanup_command"
+}
+
+restore_remote_sources() {
+  local restore_command=":" index target_quoted path_quoted
+  for index in "${!published_remote_paths[@]}"; do
+    target_quoted="$(shell_quote "${published_remote_paths[$index]}")"
+    if [[ -n "${stage_remote_paths[$index]}" ]]; then
+      path_quoted="$(shell_quote "${stage_remote_paths[$index]}")"
+      restore_command+=" && rm -f $path_quoted"
+    fi
+    case "${source_states[$index]}" in
+      existing)
+        path_quoted="$(shell_quote "${backup_remote_paths[$index]}")"
+        restore_command+=" && cp -p -- $path_quoted $target_quoted"
+        ;;
+      missing)
+        restore_command+=" && rm -f $target_quoted"
+        ;;
+      unknown)
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done
+  remote_sh "$restore_command"
+}
+
+rollback_transaction() {
+  local rollback_status=0 rollback_health_command rollback_record
+  local rollback_container_id rollback_container_id_quoted rollback_image_id
+  trap - ERR
+  transaction_active=0
+  set +e
+  echo "Attempting backend hotfix rollback" >&2
+
+  if ! restore_remote_sources; then
+    rollback_status=1
+  fi
+  if (( rollback_status == 0 )); then
+    if ! remote_sh "docker tag $old_app_image_id_quoted $old_app_image_ref_quoted"; then
+      rollback_status=1
+    fi
+  fi
+  if (( rollback_status == 0 )); then
+    if ! remote_sh "cd $remote_dir_quoted && $compose_cmd up -d --no-build --force-recreate --no-deps app"; then
+      rollback_status=1
+    fi
+  fi
+  if (( rollback_status == 0 )); then
+    rollback_record="$(remote_sh "docker inspect --format '{{.Image}}|{{.Id}}' $app_container_quoted")"
+    IFS='|' read -r rollback_image_id rollback_container_id <<< "$rollback_record"
+    if [[ ! "$rollback_container_id" =~ ^[[:xdigit:]]{12,64}$ || "$rollback_image_id" != "$old_app_image_id" ]]; then
+      rollback_status=1
+    fi
+  fi
+  if (( rollback_status == 0 )); then
+    rollback_container_id_quoted="$(shell_quote "$rollback_container_id")"
+    rollback_health_command="for i in \$(seq 1 30); do status=\$(docker inspect --format '{{.State.Health.Status}}' $rollback_container_id_quoted 2>/dev/null || true); if [ \"\$status\" = healthy ]; then exit 0; fi; if [ \"\$status\" = unhealthy ]; then exit 1; fi; sleep 2; done; exit 1"
+    if ! remote_sh "$rollback_health_command"; then
+      rollback_status=1
+    fi
+  fi
+  if (( rollback_status == 0 )); then
+    if ! cleanup_remote_transaction; then
+      rollback_status=1
+    fi
+  fi
+  set -e
+  if (( rollback_status != 0 )); then
+    echo "FATAL: backend hotfix rollback failed; source backups and deployment state require manual recovery." >&2
+    return 1
+  fi
+  echo "Backend hotfix rollback completed and app health is healthy; app image $old_app_image_id is restored." >&2
+  return 0
+}
+
+on_error() {
+  local status=${1:-1}
+  trap - ERR
+  if [[ "$transaction_active" == "1" ]]; then
+    echo "Hotfix failed during $operation; no success declared." >&2
+    if ! rollback_transaction; then
+      echo "FATAL: rollback did not complete; no success declared." >&2
+    fi
+  fi
+  exit "$status"
+}
+
+abort_transaction() {
+  echo "Hotfix failed: $*" >&2
+  on_error 1
+}
+
+run_remote_checked() {
+  local status
+  if remote_sh "$@"; then
+    return 0
+  else
+    status=$?
+    on_error "$status"
+  fi
+}
+
+run_scp_checked() {
+  local status
+  if "${SCP_BASE[@]}" "$@"; then
+    return 0
+  else
+    status=$?
+    on_error "$status"
+  fi
+}
+
+trap 'on_error "$?"' ERR
 
 for index in "${!validated_rel_paths[@]}"; do
   rel_path="${validated_rel_paths[$index]}"
@@ -369,37 +644,112 @@ for index in "${!validated_rel_paths[@]}"; do
   remote_path="$REMOTE_DIR/$rel_path"
   remote_dir="$(dirname "$remote_path")"
   remote_path_quoted="$(shell_quote "$remote_path")"
-  remote_dir_quoted="$(shell_quote "$remote_dir")"
-  remote_sh "mkdir -p $remote_dir_quoted"
-  "${SCP_BASE[@]}" "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:$remote_path_quoted"
+  remote_dir_for_file_quoted="$(shell_quote "$remote_dir")"
+  backup_template_quoted="$(shell_quote "$remote_path.hotfix-backup.XXXXXX")"
+  stage_template_quoted="$(shell_quote "$remote_path.hotfix-stage.XXXXXX")"
+  published_remote_paths[index]="$remote_path"
+  backup_remote_paths[index]=""
+  source_states[index]="unknown"
+  stage_remote_paths[index]=""
 
-  case "$rel_path" in
-    backend/*) backend_files+=("$rel_path"); needs_app_hotcopy=true ;;
+  operation="creating backup for $rel_path"
+  run_remote_checked "mkdir -p $remote_dir_for_file_quoted"
+  if backup_record="$(remote_sh "set -e; if [ -e $remote_path_quoted ]; then backup_path=\$(mktemp $backup_template_quoted); cp -p -- $remote_path_quoted \"\$backup_path\"; printf 'existing|%s\\n' \"\$backup_path\"; else printf 'missing|\\n'; fi")"; then
+    :
+  else
+    status=$?
+    on_error "$status"
+  fi
+  case "$backup_record" in
+    existing\|*)
+      backup_path=${backup_record#existing|}
+      if [[ "$backup_path" != "$remote_path.hotfix-backup."* ]]; then
+        abort_transaction "remote backup path is not a unique same-directory mktemp path for $rel_path"
+      fi
+      backup_remote_paths[index]="$backup_path"
+      source_states[index]="existing"
+      ;;
+    missing\|)
+      source_states[index]="missing"
+      ;;
+    *)
+      abort_transaction "unable to record the pre-hotfix source state for $rel_path"
+      ;;
   esac
-  case "$rel_path" in
-    Dockerfile.server|backend/requirements.txt|backend/pyproject.toml|docker-compose*.yml)
-      needs_app_rebuild=true ;;
-    frontend/*|nginx/nginx.conf|nginx/proxy_params.conf|nginx/snippets/*)
-      needs_web_reload=true ;;
-  esac
+
+  operation="creating staging file for $rel_path"
+  if stage_path="$(remote_sh "set -e; stage_path=\$(mktemp $stage_template_quoted); printf '%s\\n' \"\$stage_path\"")"; then
+    :
+  else
+    status=$?
+    on_error "$status"
+  fi
+  if [[ "$stage_path" != "$remote_path.hotfix-stage."* ]]; then
+    abort_transaction "remote staging path is not a unique same-directory mktemp path for $rel_path"
+  fi
+  stage_remote_paths[index]="$stage_path"
+  stage_path_quoted="$(shell_quote "$stage_path")"
+
+  operation="uploading staged $rel_path"
+  run_scp_checked "$abs_path" "${SERVER_USER}@${FILE_TRANSFER_HOST}:$stage_path_quoted"
+  operation="atomically publishing $rel_path"
+  run_remote_checked "mv -f $stage_path_quoted $remote_path_quoted"
+  stage_remote_paths[index]=""
 done
 
-if [[ "$needs_app_rebuild" == true ]]; then
-  echo "Rebuilding app image"
-  remote_dir_quoted="$(shell_quote "$REMOTE_DIR")"
-  remote_sh "cd $remote_dir_quoted && $compose_cmd up -d --build app"
-elif [[ "$needs_app_hotcopy" == true ]]; then
-  echo "Hot-copying backend files into $APP_CONTAINER"
-  for rel_path in "${backend_files[@]}"; do
-    remote_path="$REMOTE_DIR/$rel_path"
-    backend_target="$APP_CONTAINER:$APP_BACKEND_DIR/${rel_path#backend/}"
-    remote_path_quoted="$(shell_quote "$remote_path")"
-    backend_target_quoted="$(shell_quote "$backend_target")"
-    remote_sh "docker cp $remote_path_quoted $backend_target_quoted"
-  done
-  app_container_quoted="$(shell_quote "$APP_CONTAINER")"
-  remote_sh "docker restart $app_container_quoted >/dev/null"
+operation="revalidating remote Compose build context after upload"
+validate_remote_build_context "after upload" || on_error "$?"
+
+operation="rebuilding and replacing app container"
+echo "Rebuilding app image from remote repository checkout"
+run_remote_checked "cd $remote_dir_quoted && $compose_cmd up -d --build --no-deps --force-recreate app"
+
+operation="checking app container identity"
+if new_app_container_id="$(remote_sh "docker inspect --format '{{.Id}}' $app_container_quoted")"; then
+  :
+else
+  status=$?
+  on_error "$status"
 fi
+if [[ ! "$new_app_container_id" =~ ^[[:xdigit:]]{12,64}$ ]]; then
+  abort_transaction "unable to record the replacement app container ID"
+fi
+if [[ "$new_app_container_id" == "$old_app_container_id" ]]; then
+  abort_transaction "Compose did not replace the app container (identity is unchanged)"
+fi
+new_app_container_id_quoted="$(shell_quote "$new_app_container_id")"
+
+operation="checking replacement app image identity"
+if new_app_image_id="$(remote_sh "docker inspect --format '{{.Image}}' $new_app_container_id_quoted")"; then
+  :
+else
+  status=$?
+  on_error "$status"
+fi
+if [[ ! "$new_app_image_id" =~ ^sha256:[[:xdigit:]]{64}$ ]]; then
+  abort_transaction "replacement app image ID is empty or is not a full sha256 digest"
+fi
+if [[ "$new_app_image_id" == "$old_app_image_id" ]]; then
+  abort_transaction "Compose replaced the app container but its image identity is unchanged"
+fi
+
+operation="checking Compose app image identity"
+if compose_app_image_id="$(remote_sh "cd $remote_dir_quoted && $compose_cmd images -q app")"; then
+  :
+else
+  status=$?
+  on_error "$status"
+fi
+if [[ ! "$compose_app_image_id" =~ ^sha256:[[:xdigit:]]{64}$ ]]; then
+  abort_transaction "Compose app image ID is empty or is not a full sha256 digest"
+fi
+if [[ "$compose_app_image_id" != "$new_app_image_id" ]]; then
+  abort_transaction "replacement container image does not match the Compose app image"
+fi
+
+operation="waiting for replacement app Compose health"
+app_health_poll_command="for i in \$(seq 1 30); do status=\$(docker inspect --format '{{.State.Health.Status}}' $new_app_container_id_quoted 2>/dev/null || true); if [ \"\$status\" = healthy ]; then exit 0; fi; if [ \"\$status\" = unhealthy ]; then exit 1; fi; sleep 2; done; exit 1"
+run_remote_checked "$app_health_poll_command"
 
 if [[ "$needs_web_reload" == true ]]; then
   echo "Reloading web nginx ($WEB_CONTAINER)"
@@ -407,8 +757,13 @@ if [[ "$needs_web_reload" == true ]]; then
   remote_sh "docker exec $web_container_quoted nginx -s reload >/dev/null 2>&1 || true"
 fi
 
+operation="checking replacement app HTTP health"
 echo "Waiting for app health ($HEALTH_URL)"
 health_url_quoted="$(shell_quote "$HEALTH_URL")"
-remote_sh "for i in \$(seq 1 30); do if curl -fsS --max-time 5 $health_url_quoted >/dev/null 2>&1; then exit 0; fi; sleep 2; done; exit 1"
+run_remote_checked "for i in \$(seq 1 30); do if curl -fsS --max-time 5 $health_url_quoted >/dev/null 2>&1; then exit 0; fi; sleep 2; done; exit 1"
 
-echo "Hotfix publish complete."
+operation="cleaning successful hotfix staging and backups"
+cleanup_remote_transaction || on_error "$?"
+transaction_active=0
+trap - ERR
+echo "Hotfix publish complete. App container $old_app_container_id -> $new_app_container_id; image $old_app_image_id -> $new_app_image_id."

@@ -22,6 +22,7 @@ def publisher_fixture(tmp_path):
     target = repo / "backend" / "app" / "main.py"
     target.parent.mkdir(parents=True)
     target.write_text("print('fixture')\n")
+    (target.parent / "other.py").write_text("print('other fixture')\n")
     (target.parent / "space name.py").write_text("print('spaces')\n")
     (repo / ".env").write_text("SECRET_KEY=fixture-only\n")
     (repo / "Dockerfile.server").write_text("FROM scratch\n")
@@ -52,6 +53,61 @@ def publisher_fixture(tmp_path):
 printf '%s\\n' "$0" >> "$CALL_LOG"
 printf '%s\\n' "$@" >> "$CALL_LOG"
 : > "$CALL_MARKER"
+if [[ "${FAIL_TRANSPORT:-}" == "$(basename "$0")" ]]; then
+  exit 42
+fi
+if [[ -n "${FAIL_REMOTE_SUBSTRING:-}" && "$*" == *"$FAIL_REMOTE_SUBSTRING"* ]]; then
+  exit 42
+fi
+if [[ "$*" == *"mktemp"* ]]; then
+  template="$(printf '%s\\n' "$*" | sed -n "s/.*mktemp '\\(.*\\)XXXXXX'.*/\\1/p")"
+  [[ -n "$template" ]] || exit 43
+  counter_file="${CALL_LOG}.mktemp-counter"
+  if [[ -f "$counter_file" ]]; then
+    counter="$(<"$counter_file")"
+  else
+    counter=0
+  fi
+  counter=$((counter + 1))
+  printf '%s\\n' "$counter" > "$counter_file"
+  output="${template}${counter}"
+  printf 'mktemp-output=%s\\n' "$output" >> "$CALL_LOG"
+  if [[ "$template" == *"hotfix-backup."* ]]; then
+    printf 'existing|%s\\n' "$output"
+  else
+    printf '%s\\n' "$output"
+  fi
+  exit 0
+fi
+if [[ "$*" == *"{{.Id}}|{{.Image}}"* ]]; then
+  printf '%s|%s\\n' "${FAKE_OLD_CONTAINER_ID}" "${FAKE_OLD_IMAGE_ID}"
+  exit 0
+fi
+if [[ "$*" == *"{{.Image}}|{{.Id}}"* ]]; then
+  printf '%s|%s\\n' "${FAKE_ROLLBACK_IMAGE_ID}" "${FAKE_ROLLBACK_CONTAINER_ID}"
+  exit 0
+fi
+if [[ "$*" == *"{{.State.Health.Status}}"* ]]; then
+  [[ "${FAIL_HEALTH_INSPECT:-}" != "1" ]] || exit 42
+  printf '%s\\n' "${FAKE_HEALTH_STATUS:-healthy}"
+  exit 0
+fi
+if [[ "$*" == *"{{.Image}}"* ]]; then
+  printf '%s\\n' "${FAKE_NEW_IMAGE_ID}"
+  exit 0
+fi
+if [[ "$*" == *"{{.Id}}"* ]]; then
+  printf '%s\\n' "${FAKE_NEW_CONTAINER_ID}"
+  exit 0
+fi
+if [[ "$*" == *" images -q app"* ]]; then
+  printf '%s\\n' "${FAKE_COMPOSE_IMAGE_ID}"
+  exit 0
+fi
+if [[ "$*" == *"hotfix-image-ref"* ]]; then
+  printf '%s\\n' "${FAKE_IMAGE_REF}"
+  exit 0
+fi
 exit 0
 """
     for command in ("ssh", "scp", "rsync"):
@@ -80,8 +136,18 @@ exec "$@"
             "SERVER_USER": "tester",
             "EASY_LEARNING_REMOTE_DIR": "/opt/university-helper",
             "SSH_KNOWN_HOSTS_FILE": str(known_hosts),
+            "FAKE_OLD_CONTAINER_ID": "1111111111111111111111111111111111111111111111111111111111111111",
+            "FAKE_NEW_CONTAINER_ID": "2222222222222222222222222222222222222222222222222222222222222222",
+            "FAKE_OLD_IMAGE_ID": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "FAKE_NEW_IMAGE_ID": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "FAKE_COMPOSE_IMAGE_ID": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "FAKE_ROLLBACK_CONTAINER_ID": "3333333333333333333333333333333333333333333333333333333333333333",
+            "FAKE_ROLLBACK_IMAGE_ID": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "FAKE_IMAGE_REF": "university-helper-app:latest",
         }
     )
+    for failure_variable in ("FAIL_TRANSPORT", "FAIL_REMOTE_SUBSTRING", "FAIL_HEALTH_INSPECT"):
+        env.pop(failure_variable, None)
     return {
         "repo": repo,
         "script": script,
@@ -111,11 +177,11 @@ def test_normal_relative_file_keeps_remote_target_semantics(publisher_fixture):
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
     assert "mkdir -p '/opt/university-helper/backend/app'" in log
-    assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py'" in log
-    assert (
-        "docker cp '/opt/university-helper/backend/app/main.py' 'shuake-easy-learning-app:/srv/backend/app/main.py'"
-        in log
-    )
+    assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py.hotfix-stage." in log
+    assert "mv -f '/opt/university-helper/backend/app/main.py.hotfix-stage." in log
+    assert "up -d --build --no-deps --force-recreate app" in log
+    assert "docker cp" not in log
+    assert "docker restart" not in log
     assert publisher_fixture["call_marker"].exists()
 
 
@@ -124,11 +190,10 @@ def test_dot_prefix_alias_is_canonicalized_before_upload_and_classification(publ
 
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
-    assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py'" in log
-    assert (
-        "docker cp '/opt/university-helper/backend/app/main.py' 'shuake-easy-learning-app:/srv/backend/app/main.py'"
-        in log
-    )
+    assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py.hotfix-stage." in log
+    assert "mv -f '/opt/university-helper/backend/app/main.py.hotfix-stage." in log
+    assert "up -d --build --no-deps --force-recreate app" in log
+    assert "docker cp" not in log
     assert "./backend" not in log
 
 
@@ -138,11 +203,10 @@ def test_space_in_repository_path_is_one_literal_remote_word(publisher_fixture):
     assert result.returncode == 0, result.stderr
     log = publisher_fixture["call_log"].read_text()
     assert "mkdir -p '/opt/university-helper/backend/app'" in log
-    assert "tester@test.invalid:'/opt/university-helper/backend/app/space name.py'" in log
-    assert (
-        "docker cp '/opt/university-helper/backend/app/space name.py' 'shuake-easy-learning-app:/srv/backend/app/space name.py'"
-        in log
-    )
+    assert "tester@test.invalid:'/opt/university-helper/backend/app/space name.py.hotfix-stage." in log
+    assert "mv -f '/opt/university-helper/backend/app/space name.py.hotfix-stage." in log
+    assert "up -d --build --no-deps --force-recreate app" in log
+    assert "docker cp" not in log
 
 
 def test_compose_values_are_individually_quoted_in_remote_command(publisher_fixture):
@@ -152,8 +216,182 @@ def test_compose_values_are_individually_quoted_in_remote_command(publisher_fixt
     log = publisher_fixture["call_log"].read_text()
     assert (
         "cd '/opt/university-helper' && 'docker-compose' -p 'university-helper' "
-        "-f 'docker-compose.server.yml' -f 'docker-compose.newhost.yml' up -d --build app"
+        "-f 'docker-compose.server.yml' -f 'docker-compose.newhost.yml' up -d --build --no-deps --force-recreate app"
     ) in log
+
+
+def test_backend_hotfix_never_writes_to_read_only_app_container():
+    script = SCRIPT_SOURCE.read_text(encoding="utf-8")
+    compose = (SCRIPT_SOURCE.parents[1] / "docker-compose.server.yml").read_text(encoding="utf-8")
+
+    assert "docker cp" not in script
+    assert "docker restart" not in script
+    assert "read_only: true" in compose
+    assert "up -d --build --no-deps --force-recreate app" in script
+
+
+def test_backend_hotfix_uploads_then_rebuilds_then_checks_health(publisher_fixture):
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    log = publisher_fixture["call_log"].read_text()
+    upload = log.index("tester@test.invalid:'/opt/university-helper/backend/app/main.py.hotfix-stage.")
+    rebuild = log.index("up -d --build --no-deps --force-recreate app")
+    health = log.index("curl -fsS --max-time 5")
+    assert upload < rebuild < health
+    assert "hotfix-backup." in log
+    assert "Hotfix publish complete." in result.stdout
+
+
+def test_backend_hotfix_revalidates_compose_context_after_upload():
+    script = SCRIPT_SOURCE.read_text(encoding="utf-8")
+
+    assert script.count("config --format json") >= 2
+    assert "services.app.build.context" in script
+    assert "os.path.commonpath" in script
+    assert "os.path.isfile(dockerfile_path)" in script
+    assert 'validate_remote_build_context "after upload"' in script
+
+
+def test_multiple_backend_files_use_unique_staging_and_one_rebuild(publisher_fixture):
+    result = run_publisher(publisher_fixture, "backend/app/main.py", "backend/app/other.py")
+
+    assert result.returncode == 0, result.stderr
+    log = publisher_fixture["call_log"].read_text()
+    mktemp_outputs = [line.split("=", 1)[1] for line in log.splitlines() if line.startswith("mktemp-output=")]
+    assert len(mktemp_outputs) == 4
+    assert len(set(mktemp_outputs)) == len(mktemp_outputs)
+    assert log.count("up -d --build --no-deps --force-recreate app") == 1
+    assert log.count("hotfix-stage.") >= 4
+
+
+def test_backend_hotfix_fails_closed_when_remote_topology_has_no_build_context(publisher_fixture):
+    publisher_fixture["env"]["FAIL_REMOTE_SUBSTRING"] = "config --format json) && printf"
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "build-context validation failed" in result.stderr
+    assert "Hotfix publish complete." not in result.stdout
+    log = publisher_fixture["call_log"].read_text()
+    assert "tester@test.invalid:'/opt/university-helper/backend/app/main.py.hotfix-stage." not in log
+
+
+@pytest.mark.parametrize(
+    ("failure_variable", "failure_value", "forbidden_log_fragment"),
+    [
+        ("FAIL_TRANSPORT", "scp", "up -d --build --no-deps --force-recreate app"),
+        ("FAIL_REMOTE_SUBSTRING", "up -d --build --no-deps --force-recreate app", "curl -fsS --max-time 5"),
+        ("FAIL_REMOTE_SUBSTRING", "curl -fsS --max-time 5", "Hotfix publish complete."),
+    ],
+)
+def test_backend_upload_rebuild_health_failures_never_claim_success(
+    publisher_fixture, failure_variable, failure_value, forbidden_log_fragment
+):
+    publisher_fixture["env"][failure_variable] = failure_value
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "Hotfix publish complete." not in result.stdout
+    log = publisher_fixture["call_log"].read_text()
+    assert forbidden_log_fragment not in (result.stdout + result.stderr + log)
+    assert "Attempting backend hotfix rollback" in result.stderr
+    assert "cp -p -- '/opt/university-helper/backend/app/main.py.hotfix-backup." in log
+    assert (
+        "docker tag 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'university-helper-app:latest'"
+        in log
+    )
+    assert "up -d --no-build --force-recreate --no-deps app" in log
+    assert "{{.State.Health.Status}}" in log
+    assert "rollback completed and app health is healthy" in result.stderr
+
+
+def test_backend_hotfix_requires_a_new_container_identity_and_rolls_back(publisher_fixture):
+    publisher_fixture["env"]["FAKE_NEW_CONTAINER_ID"] = publisher_fixture["env"]["FAKE_OLD_CONTAINER_ID"]
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "identity is unchanged" in result.stderr
+    assert "up -d --no-build --force-recreate --no-deps app" in publisher_fixture["call_log"].read_text()
+    assert "Hotfix publish complete." not in result.stdout
+
+
+def test_backend_hotfix_requires_a_new_image_identity_and_rolls_back(publisher_fixture):
+    publisher_fixture["env"]["FAKE_NEW_IMAGE_ID"] = publisher_fixture["env"]["FAKE_OLD_IMAGE_ID"]
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "image identity is unchanged" in result.stderr
+    assert "up -d --no-build --force-recreate --no-deps app" in publisher_fixture["call_log"].read_text()
+    assert "Hotfix publish complete." not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "invalid_image_id",
+    ["", "not-a-digest", "sha256:abcd", f"sha256:{'g' * 64}"],
+)
+def test_backend_hotfix_rejects_empty_or_malformed_new_image_and_rolls_back(publisher_fixture, invalid_image_id):
+    publisher_fixture["env"]["FAKE_NEW_IMAGE_ID"] = invalid_image_id
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "not a full sha256 digest" in result.stderr
+    assert "rollback completed" in result.stderr
+    assert "Hotfix publish complete." not in result.stdout
+
+
+def test_backend_hotfix_rejects_compose_image_mismatch_and_rolls_back(publisher_fixture):
+    publisher_fixture["env"]["FAKE_COMPOSE_IMAGE_ID"] = (
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    )
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "does not match the Compose app image" in result.stderr
+    assert "rollback completed" in result.stderr
+    assert "Hotfix publish complete." not in result.stdout
+
+
+def test_backend_hotfix_accepts_matching_new_container_and_compose_image(publisher_fixture):
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode == 0, result.stderr
+    assert publisher_fixture["env"]["FAKE_NEW_IMAGE_ID"] in result.stdout
+    log = publisher_fixture["call_log"].read_text()
+    assert "docker inspect --format '{{.Image}}'" in log
+    assert "images -q app" in log
+    assert "up -d --no-build --force-recreate --no-deps app" not in log
+
+
+def test_backend_rollback_verifies_the_restored_old_image_identity(publisher_fixture):
+    publisher_fixture["env"]["FAKE_COMPOSE_IMAGE_ID"] = (
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    )
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "{{.Image}}|{{.Id}}" in publisher_fixture["call_log"].read_text()
+    assert f"app image {publisher_fixture['env']['FAKE_OLD_IMAGE_ID']} is restored" in result.stderr
+
+
+def test_backend_rollback_fails_closed_on_wrong_restored_image_identity(publisher_fixture):
+    publisher_fixture["env"]["FAKE_COMPOSE_IMAGE_ID"] = (
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    )
+    publisher_fixture["env"]["FAKE_ROLLBACK_IMAGE_ID"] = publisher_fixture["env"]["FAKE_NEW_IMAGE_ID"]
+
+    result = run_publisher(publisher_fixture, "backend/app/main.py")
+
+    assert result.returncode != 0
+    assert "FATAL: backend hotfix rollback failed" in result.stderr
+    assert "rollback completed" not in result.stderr
+    assert "Hotfix publish complete." not in result.stdout
 
 
 def test_frontend_rsync_quotes_remote_path_and_rsh_words(publisher_fixture):
@@ -261,7 +499,7 @@ def test_revoked_only_with_tab_separators_and_crlf_fails_before_transport(publis
 def test_mixed_revoked_and_valid_matches_are_accepted(publisher_fixture):
     install_ssh_keygen_lookup_passthrough(publisher_fixture)
     publisher_fixture["known_hosts"].write_bytes(
-        (f"@revoked\ttest.invalid\t{VALID_HOST_KEY}\r\n" f"test.invalid\t{VALID_HOST_KEY}\r\n").encode()
+        (f"@revoked\ttest.invalid\t{VALID_HOST_KEY}\r\ntest.invalid\t{VALID_HOST_KEY}\r\n").encode()
     )
 
     result = run_publisher(publisher_fixture, "backend/app/main.py")
@@ -375,16 +613,21 @@ def test_hotfix_docs_require_built_dist_frontend_mode():
     section = document.split("## Deploying a Hotfix (small code change)", 1)[1].split(
         "## First-Time Server Bootstrap", 1
     )[0]
+    normalized_section = " ".join(section.split())
 
     assert "frontend/src/" not in section
     assert "cd frontend && npm ci && npm run build" in section
     assert "./scripts/hotfix_publish.sh --frontend" in section
+    assert "atomic rename" not in normalized_section.lower()
+    assert "does not make the overall multi-file and container update atomic" in normalized_section
 
     chinese_section = document.split("## 推送热修（小改动）", 1)[1].split("## 全新服务器初始化", 1)[0]
     assert "frontend/src/" not in chinese_section
     assert "cd frontend && npm ci && npm run build" in chinese_section
     assert "./scripts/hotfix_publish.sh --frontend" in chinese_section
     assert "backend/app/api/v1/course.py" in chinese_section
+    assert "原子重命名" not in chinese_section
+    assert "不承诺整个多文件与容器更新是原子的" in chinese_section
 
 
 def test_deploy_workflow_passes_trusted_known_hosts_without_tofu():
