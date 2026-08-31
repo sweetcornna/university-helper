@@ -7,10 +7,15 @@ from app.services.course.chaoxing.signin import ChaoxingSigninManager
 def _manager(monkeypatch, persisted):
     monkeypatch.setattr(signin_module.task_store, "list_tasks", lambda *args, **kwargs: [])
     monkeypatch.setattr(signin_module.task_store, "list_history", lambda *args, **kwargs: [])
+
+    def persist(_kind, payload):
+        persisted.append(dict(payload))
+        return True
+
     monkeypatch.setattr(
         signin_module.task_store,
         "upsert_task",
-        lambda _kind, payload: persisted.append(dict(payload)),
+        persist,
     )
     return ChaoxingSigninManager()
 

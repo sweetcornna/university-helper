@@ -31,7 +31,7 @@ def _bare_manager() -> ChaoxingLearningManager:
 
 def test_completion_notification_is_sent(monkeypatch):
     m = _bare_manager()
-    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
+    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: True)
     # The SSRF validator does a real DNS lookup (covered by its own tests); here
     # we only exercise the send wiring, so accept the URL.
     monkeypatch.setattr(lm, "validate_notification_url", lambda url: True)
@@ -57,7 +57,7 @@ def test_completion_notification_is_sent(monkeypatch):
 
 def test_completion_notification_blocks_internal_url(monkeypatch):
     m = _bare_manager()
-    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
+    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: True)
 
     factory = mock.Mock()
     monkeypatch.setattr(lm, "NotificationFactory", factory)
@@ -74,7 +74,7 @@ def test_completion_notification_blocks_internal_url(monkeypatch):
 
 def test_completion_notification_validator_failure_is_safe(monkeypatch, caplog):
     m = _bare_manager()
-    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
+    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: True)
     sentinel_url = "https://notify.example/NOTIFICATION_SENTINEL?token=NOTIFICATION_SENTINEL"
     monkeypatch.setattr(lm, "validate_notification_url", mock.Mock(side_effect=RuntimeError(sentinel_url)))
 
@@ -93,7 +93,7 @@ def test_completion_notification_validator_failure_is_safe(monkeypatch, caplog):
 
 def test_completion_notification_noop_without_config(monkeypatch):
     m = _bare_manager()
-    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
+    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: True)
     factory = mock.Mock()
     monkeypatch.setattr(lm, "NotificationFactory", factory)
 
@@ -105,7 +105,7 @@ def test_completion_notification_noop_without_config(monkeypatch):
 
 def test_completion_notification_send_failure_is_swallowed(monkeypatch, caplog):
     m = _bare_manager()
-    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
+    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: True)
     monkeypatch.setattr(lm, "validate_notification_url", lambda url: True)
 
     notifier = mock.Mock()
@@ -132,7 +132,7 @@ def test_completion_notification_send_failure_is_swallowed(monkeypatch, caplog):
 
 def test_completion_notification_skips_unknown_service_without_echoing_input(monkeypatch):
     m = _bare_manager()
-    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: None)
+    monkeypatch.setattr(lm.task_store, "upsert_task", lambda *a, **k: True)
     sentinel_service = "Unknown-NOTIFICATION_SENTINEL"
     sentinel_url = "https://notify.example/NOTIFICATION_SENTINEL?token=NOTIFICATION_SENTINEL"
 

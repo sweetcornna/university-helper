@@ -179,7 +179,7 @@ class ChaoxingLearningManager:
         if persist_request:
             try:
                 persisted = self._persist_task_state(*persist_request)
-                if persisted is False:
+                if persisted is not True:
                     raise RuntimeError(TASK_PERSIST_FAILURE_MESSAGE)
             except Exception:
                 self._record_admission_persist_failure(task_id)
@@ -718,7 +718,7 @@ class ChaoxingLearningManager:
         if not persist_request:
             return
         try:
-            if self._persist_task_state(*persist_request) is False:
+            if self._persist_task_state(*persist_request) is not True:
                 logger.warning("failed to compensate learning task admission: task_id=%s", task_id)
         except Exception:  # pragma: no cover - defensive for patched/custom stores
             logger.warning("failed to compensate learning task admission: task_id=%s", task_id, exc_info=True)
@@ -844,8 +844,7 @@ class ChaoxingLearningManager:
             nonlocal persisted
             try:
                 result = task_store.upsert_task(LEARNING_TASK_KIND, task_state_public)
-                if result is False:
-                    persisted = False
+                persisted = result is True
             except Exception as exc:  # pragma: no cover - defensive fallback
                 persisted = False
                 logger.warning("persist learning task failed: %s", exc)

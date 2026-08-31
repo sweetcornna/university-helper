@@ -38,7 +38,7 @@ def _bare_manager(manager_type):
     manager._lock = threading.Lock()
     manager._tasks = {}
     manager._loaded_task_users = set()
-    manager._persist_task_state = lambda *args, **kwargs: None
+    manager._persist_task_state = lambda *args, **kwargs: True
     if manager_type is ChaoxingSigninManager:
         manager._clients = {}
         manager._history = {}
@@ -262,6 +262,7 @@ def test_write_then_raise_is_compensated_on_restart_without_active_ghost(
             if self.upsert_calls == 2:
                 raise OSError("compensation unavailable")
             self.rows[task["task_id"]] = deepcopy(task)
+            return True
 
         def list_tasks(self, *, task_kind, user_id, limit):
             del limit

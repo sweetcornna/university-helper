@@ -75,13 +75,21 @@ def _decrypt_sensitive(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class TaskStore:
-    def ensure_tables(self) -> None:
-        get_storage().tasks.ensure_tables()
+    def ensure_tables(self) -> bool:
+        try:
+            return get_storage().tasks.ensure_tables()
+        except Exception:  # pragma: no cover - defensive fallback
+            logger.exception("task_store: ensure_tables failed")
+            return False
 
-    def upsert_task(self, task_kind: str, task_state_public: dict[str, Any]) -> None:
+    def upsert_task(self, task_kind: str, task_state_public: dict[str, Any]) -> bool:
         if not task_kind or not isinstance(task_state_public, dict):
-            return
-        get_storage().tasks.upsert_task(task_kind, _encrypt_sensitive(task_state_public))
+            return False
+        try:
+            return get_storage().tasks.upsert_task(task_kind, _encrypt_sensitive(task_state_public))
+        except Exception:  # pragma: no cover - defensive fallback
+            logger.exception("task_store: upsert_task failed: kind=%s", task_kind)
+            return False
 
     def get_task(
         self,

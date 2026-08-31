@@ -11,6 +11,18 @@ import app.services.course.chaoxing.learning_manager as lm
 from app.services.course.chaoxing.learning_manager import ChaoxingLearningManager
 
 
+def _record_payload(target: list[dict], kind, payload) -> bool:
+    del kind
+    target.append(payload)
+    return True
+
+
+def _record_message(target: list[str], kind, payload) -> bool:
+    del kind
+    target.append(payload["message"])
+    return True
+
+
 def _make_task(manager: ChaoxingLearningManager, task_id: str = "t1") -> None:
     manager._tasks[task_id] = {
         "task_id": task_id,
@@ -37,7 +49,7 @@ def test_progress_updates_are_throttled(monkeypatch):
     monkeypatch.setattr(
         lm.task_store,
         "upsert_task",
-        lambda kind, payload: calls.append(payload),
+        lambda kind, payload: _record_payload(calls, kind, payload),
     )
 
     # 50 rapid progress ticks (simulating ~1/sec video callbacks, but instant).
@@ -61,7 +73,7 @@ def test_status_change_forces_persist_with_latest_progress(monkeypatch):
     monkeypatch.setattr(
         lm.task_store,
         "upsert_task",
-        lambda kind, payload: calls.append(payload),
+        lambda kind, payload: _record_payload(calls, kind, payload),
     )
 
     # Throttled progress ticks (most dropped) then a forced terminal status write.
@@ -88,7 +100,7 @@ def test_unchanged_update_task_skips_persist(monkeypatch):
     monkeypatch.setattr(
         lm.task_store,
         "upsert_task",
-        lambda kind, payload: calls.append(payload),
+        lambda kind, payload: _record_payload(calls, kind, payload),
     )
 
     manager._update_task("t1", status="paused", message="Task paused", current_task="paused")
@@ -128,6 +140,7 @@ def test_older_snapshot_cannot_overwrite_newer_snapshot(monkeypatch):
             persisted.update(payload)
         if payload["message"] == "newer":
             newer_write_committed.set()
+        return True
 
     monkeypatch.setattr(lm.task_store, "upsert_task", controlled_upsert)
 
@@ -164,7 +177,7 @@ def test_continuous_updates_persist_in_state_mutation_order(monkeypatch):
     monkeypatch.setattr(
         lm.task_store,
         "upsert_task",
-        lambda kind, payload: persisted_messages.append(payload["message"]),
+        lambda kind, payload: _record_message(persisted_messages, kind, payload),
     )
 
     for index in range(10):
@@ -190,6 +203,7 @@ def test_failed_write_does_not_block_later_snapshot(monkeypatch):
         if len(attempts) == 1:
             raise RuntimeError("temporary store failure")
         persisted.append(dict(payload))
+        return True
 
     monkeypatch.setattr(lm.task_store, "upsert_task", fail_once)
 
@@ -220,6 +234,7 @@ def test_blocked_task_does_not_serialize_other_tasks(monkeypatch):
             release_blocked_write.wait(timeout=2)
         else:
             other_write_committed.set()
+        return True
 
     monkeypatch.setattr(lm.task_store, "upsert_task", controlled_upsert)
 

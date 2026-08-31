@@ -20,12 +20,12 @@ class _PostgresTaskStore:
         self._init_lock = threading.Lock()
         self._initialized = False
 
-    def ensure_tables(self) -> None:
+    def ensure_tables(self) -> bool:
         if self._initialized:
-            return
+            return True
         with self._init_lock:
             if self._initialized:
-                return
+                return True
             try:
                 with get_db_session() as conn:
                     cur = conn.cursor()
@@ -73,25 +73,27 @@ class _PostgresTaskStore:
                     )
                     cur.close()
                 self._initialized = True
+                return True
             except Exception:
                 logger.exception("task_store ensure_tables failed")
+                return False
 
-    def upsert_task(self, task_kind: str, task_state_public: dict[str, Any]) -> None:
+    def upsert_task(self, task_kind: str, task_state_public: dict[str, Any]) -> bool:
         if not task_kind or not isinstance(task_state_public, dict):
-            return
+            return False
         task_id = str(task_state_public.get("task_id") or "").strip()
         user_id = str(task_state_public.get("user_id") or "").strip()
         if not task_id or not user_id:
-            return
+            return False
 
-        status = str(task_state_public.get("status") or "pending")
-        message = str(task_state_public.get("message") or "")
-        started_at = _parse_datetime(task_state_public.get("started_at") or task_state_public.get("created_at"))
-        updated_at = _parse_datetime(task_state_public.get("updated_at")) or started_at or datetime.now(UTC)
-        payload = _normalize_json(task_state_public)
-
-        self.ensure_tables()
         try:
+            if self.ensure_tables() is not True:
+                return False
+            status = str(task_state_public.get("status") or "pending")
+            message = str(task_state_public.get("message") or "")
+            started_at = _parse_datetime(task_state_public.get("started_at") or task_state_public.get("created_at"))
+            updated_at = _parse_datetime(task_state_public.get("updated_at")) or started_at or datetime.now(UTC)
+            payload = _normalize_json(task_state_public)
             with get_db_session() as conn:
                 cur = conn.cursor()
                 cur.execute(
@@ -120,12 +122,14 @@ class _PostgresTaskStore:
                     ),
                 )
                 cur.close()
+            return True
         except Exception:
             logger.exception(
                 "task_store upsert_task failed: kind=%s task_id=%s",
                 task_kind,
                 task_id,
             )
+            return False
 
     def get_task(
         self,
@@ -136,8 +140,9 @@ class _PostgresTaskStore:
         if not task_kind or not task_id:
             return None
 
-        self.ensure_tables()
         try:
+            if self.ensure_tables() is not True:
+                return None
             with get_db_session() as conn:
                 cur = conn.cursor()
                 if user_id:
@@ -204,8 +209,9 @@ class _PostgresTaskStore:
             return []
 
         safe_limit = max(1, min(int(limit or 50), 2000))
-        self.ensure_tables()
         try:
+            if self.ensure_tables() is not True:
+                return []
             with get_db_session() as conn:
                 cur = conn.cursor()
                 if user_id:
@@ -281,8 +287,9 @@ class _PostgresTaskStore:
             payload["timestamp"] = _datetime_to_iso(event_time)
 
         safe_keep = max(1, min(int(max_records or 500), 5000))
-        self.ensure_tables()
         try:
+            if self.ensure_tables() is not True:
+                return
             with get_db_session() as conn:
                 cur = conn.cursor()
                 cur.execute(
@@ -338,8 +345,9 @@ class _PostgresTaskStore:
             return []
 
         safe_limit = max(1, min(int(limit or 500), 5000))
-        self.ensure_tables()
         try:
+            if self.ensure_tables() is not True:
+                return []
             with get_db_session() as conn:
                 cur = conn.cursor()
                 if user_id:

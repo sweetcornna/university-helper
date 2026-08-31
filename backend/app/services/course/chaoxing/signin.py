@@ -1526,7 +1526,7 @@ class ChaoxingSigninManager:
             cleanup_task_records(self._tasks)
         try:
             persisted = self._persist_task_state(self._task_public_payload(task_state))
-            if persisted is False:
+            if persisted is not True:
                 raise RuntimeError(TASK_PERSIST_FAILURE_MESSAGE)
         except Exception:
             self._record_admission_persist_failure(task_id)
@@ -1608,7 +1608,7 @@ class ChaoxingSigninManager:
         if not snapshot:
             return
         try:
-            if self._persist_task_state(snapshot) is False:
+            if self._persist_task_state(snapshot) is not True:
                 logger.warning("failed to compensate signin task admission: task_id=%s", task_id)
         except Exception:  # pragma: no cover - defensive for patched/custom stores
             logger.warning("failed to compensate signin task admission: task_id=%s", task_id, exc_info=True)
@@ -1841,7 +1841,7 @@ class ChaoxingSigninManager:
         except Exception as exc:  # pragma: no cover - defensive fallback
             logger.warning("persist signin task failed: %s", exc)
             return False
-        return result is not False
+        return result is True
 
     def _ensure_tasks_loaded_for_user(self, user_id: str) -> None:
         normalized_user_id = str(user_id or "").strip()

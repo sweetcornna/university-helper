@@ -8,7 +8,13 @@ def test_start_task_marks_failed_when_worker_thread_cannot_start(monkeypatch):
     monkeypatch.setattr(lm.task_store, "list_tasks", lambda *args, **kwargs: [])
 
     persisted: list[dict] = []
-    monkeypatch.setattr(lm.task_store, "upsert_task", lambda kind, payload: persisted.append(dict(payload)))
+
+    def persist(kind, payload):
+        del kind
+        persisted.append(dict(payload))
+        return True
+
+    monkeypatch.setattr(lm.task_store, "upsert_task", persist)
 
     class FailingThread:
         def __init__(self, *args, **kwargs):
