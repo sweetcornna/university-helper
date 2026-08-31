@@ -26,15 +26,36 @@ Docker tags do not allow `+`).
 ## Cutting a release
 
 ```bash
-# 1. Stamp + commit the version BEFORE tagging (the image jobs build the tagged tree;
-#    the desktop legs also re-stamp their checkout, so this is belt-and-suspenders).
+# 1. Stamp + commit the version on main. Push main and wait for the main-branch
+#    CI run to pass before creating any release tag.
 bash scripts/set_version.sh 1.4.0
 git commit -am "chore: v1.4.0"
-git tag v1.4.0
-git push --follow-tags
-# 2. Watch it: gh run watch  → create-release → (app-image + web-image + desktop) → promote-images → publish
-# 3. Verify: gh release view v1.4.0  → installers (.msi/.dmg/.AppImage) + latest.json attached
+MAIN_SHA="$(git rev-parse HEAD)"
+git push origin main
+gh run list --workflow test.yml --branch main --commit "$MAIN_SHA" --limit 5
+gh run watch <main-ci-run-id> --exit-status
+# If this push changed frontend/** (or the deploy workflow), also wait for the
+# frontend production deploy to finish before tagging.
+gh run list --workflow deploy.yml --branch main --commit "$MAIN_SHA" --limit 5
+gh run watch <frontend-deploy-run-id> --exit-status
+
+# 2. Create an annotated tag only after the checks/deploy above succeed, then
+#    push that tag explicitly; keep the tag push as a separate command.
+git tag -a v1.4.0 -m v1.4.0
+git push origin v1.4.0
+
+# 3. Watch the tag-triggered release workflow:
+gh run list --workflow release.yml --limit 5
+gh run watch <release-run-id> --exit-status
+# 4. Verify: gh release view v1.4.0  → installers (.msi/.dmg/.AppImage) + latest.json attached
 ```
+
+In this documented path, the `release` workflow is triggered by the explicitly pushed
+`v1.4.0` tag. Waiting for
+the `main` CI run (and for the frontend production deploy when that workflow is triggered)
+keeps the release build from racing an in-flight main-branch validation or frontend deploy.
+If the push did not match the deploy workflow's `paths` filter, no frontend deploy run is
+expected; still confirm that CI passed before tagging.
 
 ### Immutable-first image promotion and publication
 
@@ -81,7 +102,7 @@ npm run tauri signer generate -- -w ~/.tauri/uh-updater.key
 #   (equivalent: npx @tauri-apps/cli@latest signer generate -w ~/.tauri/uh-updater.key)
 ```
 
-It prompts for a password (recommended) and writes:
+It asks whether to protect the private key and writes:
 - `~/.tauri/uh-updater.key` — **private** key (NEVER commit; becomes a GitHub secret).
 - `~/.tauri/uh-updater.key.pub` — public key (committed inside `tauri.conf.json`).
 
@@ -89,22 +110,27 @@ Store the secrets and wire the public key:
 
 ```bash
 gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/uh-updater.key
-gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD            # prompts; do not echo into history
-gh secret list | grep TAURI_SIGNING
+# Set this only when the private key is password-protected; never echo the value.
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 ```
 
-A default keypair is **already wired**: `frontend/src-tauri/tauri.conf.json`
-`plugins.updater.pubkey` holds a committed public key (no-password key generated at setup),
-so signed releases auto-update out of the box **once you add the matching private key** as the
-`TAURI_SIGNING_PRIVATE_KEY` secret (above). To use your own key instead, regenerate as above and
-paste the new `.pub` content into `plugins.updater.pubkey`; keep `endpoints` at
+The private key supplied to CI must cryptographically match the committed
+`frontend/src-tauri/tauri.conf.json` `plugins.updater.pubkey`. When generating a new pair,
+update the public-key field and the `TAURI_SIGNING_PRIVATE_KEY` secret together; do not mix a
+private key from one pair with a public key from another. If the private key is encrypted,
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` must contain its corresponding password; the workflow
+passes that value through to Tauri. If it is not encrypted, leave the password configuration
+unset according to repository secret policy. Keep `endpoints` at
 `https://github.com/sweetcornna/university-helper/releases/latest/download/latest.json`.
-For production, prefer a **password-protected** key (set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
+
+Whether these secrets are configured is runtime repository/CI configuration. Verify the
+matching pair and the resulting workflow artifacts when cutting a release; do not infer or
+record their current presence or password state in this document.
 
 Checklist:
 - [ ] `chmod 600 ~/.tauri/uh-updater.key`; the key + `.pub` live **outside** the repo (never staged).
-- [ ] `gh secret list` shows `TAURI_SIGNING_PRIVATE_KEY` and `_PASSWORD`.
-- [ ] `tauri.conf.json` `plugins.updater.pubkey` equals the `.pub` content.
+- [ ] `TAURI_SIGNING_PRIVATE_KEY` contains the private key matching `tauri.conf.json` `plugins.updater.pubkey`.
+- [ ] If the private key is encrypted, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is configured with its matching password.
 - [ ] A signed desktop leg emits `*.sig` + `latest.json`; an unsigned leg still produces installers.
 
 ## GHCR: make server images anonymously pullable (one-time)
