@@ -181,13 +181,15 @@ export default function useAuthentication({ stopPolling }) {
       if (!mountedRef.current) return
 
 
+      const loginUsername = username.trim()
+      const loginPassword = password
       setError('')
 
 
       setNotice('')
 
 
-      if (!username.trim() || !password.trim()) {
+      if (!loginUsername || !loginPassword.trim()) {
 
 
         setError('请输入超星账号和密码。')
@@ -211,7 +213,7 @@ export default function useAuthentication({ stopPolling }) {
           method: 'POST',
 
 
-          body: JSON.stringify({ username: username.trim(), password })
+          body: JSON.stringify({ username: loginUsername, password: loginPassword })
 
 
         })
@@ -220,6 +222,8 @@ export default function useAuthentication({ stopPolling }) {
         if (!loginResp || !mountedRef.current) return
 
 
+        setUsername(loginUsername)
+        setPassword(loginPassword)
         await loadCourses()
 
 

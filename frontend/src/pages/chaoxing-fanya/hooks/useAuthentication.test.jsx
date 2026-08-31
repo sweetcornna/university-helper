@@ -38,6 +38,15 @@ function AuthenticationHarness() {
       >
         登录
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          auth.setUsername('user-b')
+          auth.setPassword('pass-b')
+        }}
+      >
+        模拟修改凭据
+      </button>
       <button type="button" onClick={() => void auth.loadCourses()}>
         刷新课程
       </button>
@@ -114,6 +123,59 @@ describe('useAuthentication course refresh errors', () => {
     await waitFor(() => expect(screen.getByTestId('courses')).toHaveTextContent(JSON.stringify(courses)))
     expect(screen.getByTestId('courses-notice')).toHaveTextContent('已获取 1 门课程。')
     expect(screen.getByTestId('courses-error')).toBeEmptyDOMElement()
+  })
+
+  test('keeps the submitted credential snapshot through a successful course load', async () => {
+    const login = deferred()
+    const courses = deferred()
+    api.mockImplementationOnce(() => login.promise).mockImplementationOnce(() => courses.promise)
+
+    const user = userEvent.setup()
+    renderAuthentication()
+    await user.type(screen.getByRole('textbox', { name: '账号' }), 'user-a')
+    await user.type(screen.getByRole('textbox', { name: '密码' }), 'pass-a')
+    await user.click(screen.getByRole('button', { name: '登录' }))
+    await waitFor(() => expect(screen.getByTestId('login-loading')).toHaveTextContent('true'))
+
+    await user.click(screen.getByRole('button', { name: '模拟修改凭据' }))
+    expect(screen.getByRole('textbox', { name: '账号' })).toHaveValue('user-b')
+    expect(screen.getByRole('textbox', { name: '密码' })).toHaveValue('pass-b')
+
+    await act(async () => {
+      login.resolve({ status: true })
+      await login.promise
+    })
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2))
+    expect(JSON.parse(api.mock.calls[0][1].body)).toEqual({ username: 'user-a', password: 'pass-a' })
+
+    await act(async () => {
+      courses.resolve({ courses: [{ courseId: 'course-a', name: '课程 A' }] })
+      await courses.promise
+    })
+    await waitFor(() => expect(screen.getByTestId('courses')).toHaveTextContent('course-a'))
+    expect(screen.getByRole('textbox', { name: '账号' })).toHaveValue('user-a')
+    expect(screen.getByRole('textbox', { name: '密码' })).toHaveValue('pass-a')
+  })
+
+  test('does not restore submitted credentials after a failed login', async () => {
+    const login = deferred()
+    api.mockImplementationOnce(() => login.promise)
+
+    const user = userEvent.setup()
+    renderAuthentication()
+    await user.type(screen.getByRole('textbox', { name: '账号' }), 'user-a')
+    await user.type(screen.getByRole('textbox', { name: '密码' }), 'pass-a')
+    await user.click(screen.getByRole('button', { name: '登录' }))
+    await waitFor(() => expect(screen.getByTestId('login-loading')).toHaveTextContent('true'))
+    await user.click(screen.getByRole('button', { name: '模拟修改凭据' }))
+
+    await act(async () => {
+      login.reject(new Error('登录失败'))
+      await login.promise.catch(() => undefined)
+    })
+    await waitFor(() => expect(screen.getByTestId('courses-error')).toHaveTextContent('登录失败'))
+    expect(screen.getByRole('textbox', { name: '账号' })).toHaveValue('user-b')
+    expect(screen.getByRole('textbox', { name: '密码' })).toHaveValue('pass-b')
   })
 
   test('clears a previous error and updates the notice after a later successful refresh', async () => {
