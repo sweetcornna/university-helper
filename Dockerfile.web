@@ -12,7 +12,7 @@
 #   docker build -f Dockerfile.web --build-arg NPM_REGISTRY=https://registry.npmmirror.com -t university-helper-web .
 
 # ---------- builder ----------
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 
 # Empty default → npm's public registry (best for CI on GitHub-hosted runners).
 # Override with a mirror (e.g. https://registry.npmmirror.com) for builds in CN.
