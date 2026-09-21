@@ -141,6 +141,7 @@ Tauri shell does NOT bundle the Vite dist — it spawns the PyInstaller-frozen `
 
 ## Conventions
 
+- **Commit every change as you make it — do not wait to be asked, and do not leave work uncommitted at the end of a turn.** After each coherent change (a fix, a feature, a doc edit, a config tweak), stage exactly what that change touched and commit it with a Conventional Commit subject. One concern per commit: if a single file carries two unrelated changes, stage them separately rather than bundling. Branch first if you are on `main`.
 - Branches `feat/...`, `fix/issue-123`, `chore/...`; Conventional Commits (`fix(chaoxing): ...`) — they feed the changelog. Add CHANGELOG.md entries under `## [Unreleased]`.
 - New endpoints go in `backend/app/api/v1/`, new business logic in `backend/app/services/`. New public (unauthenticated) routes must be added to `PUBLIC_ROUTES` in `app/config.py` or the middleware 401s them.
 - Comments citing bug/workstream IDs (`(F05)`, `F62`, "workstream F") document invariants — preserve them when editing nearby code.
