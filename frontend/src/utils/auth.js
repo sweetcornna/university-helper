@@ -1,49 +1,47 @@
-// SECURITY TRADEOFF (F61): the access/shuake JWTs are kept in window.sessionStorage,
-// which is JS-readable. This means any successful XSS in this origin can read the
-// bearer token (e.g. `sessionStorage.getItem('auth_token')`) and exfiltrate it.
+// Self-hosted single-user tradeoff: tokens live in localStorage so that
+// reopening a tab / restarting the browser does not force a re-login.
+// Combined with the backend's 7-day ACCESS_TOKEN_EXPIRE_MINUTES this keeps the
+// platform session sticky across restarts.
 //
-// sessionStorage is a deliberate improvement over localStorage: it is scoped to a
-// single tab and cleared when the tab closes, shrinking the token's lifetime and
-// blast radius. The fully XSS-resistant alternative — an httpOnly + Secure +
-// SameSite cookie that JS cannot read — is NOT implemented here because it requires
-// the backend to set/clear the cookie and the API client to stop sending an
-// Authorization header (a cross-cutting backend + frontend change, out of scope for
-// a frontend-only fix). We therefore accept the residual risk and treat eliminating
-// XSS sinks (e.g. the sanitized href helpers in utils/safeUrl.js) as the primary
-// mitigation. Do NOT move these tokens to localStorage (longer-lived, larger blast
-// radius) or expose them on `window`.
+// Residual XSS risk: any successful XSS in this origin can still read
+// `localStorage.getItem('auth_token')` and exfiltrate it. The fully
+// XSS-resistant alternative (httpOnly + Secure + SameSite cookie) would
+// require a backend cookie flow and is out of scope for this self-use setup.
+// Primary mitigation remains eliminating XSS sinks (e.g. the sanitized href
+// helpers in utils/safeUrl.js). Do NOT expose these tokens on `window`.
 const TOKEN_KEY = 'auth_token'
 const SHUAKE_TOKEN_KEY = 'shuake_token'
 
+// Migrate a token left in sessionStorage by an older build into localStorage.
 const readLegacyToken = (key) => {
-  const legacyValue = window.localStorage.getItem(key)
+  const legacyValue = window.sessionStorage.getItem(key)
   if (!legacyValue) return null
-  window.sessionStorage.setItem(key, legacyValue)
-  window.localStorage.removeItem(key)
+  window.localStorage.setItem(key, legacyValue)
+  window.sessionStorage.removeItem(key)
   return legacyValue
 }
 
 export const setToken = (token, shuakeToken) => {
-  window.sessionStorage.setItem(TOKEN_KEY, token)
-  window.localStorage.removeItem(TOKEN_KEY)
+  window.localStorage.setItem(TOKEN_KEY, token)
+  window.sessionStorage.removeItem(TOKEN_KEY)
   if (shuakeToken || token) {
-    window.sessionStorage.setItem(SHUAKE_TOKEN_KEY, shuakeToken || token)
-    window.localStorage.removeItem(SHUAKE_TOKEN_KEY)
+    window.localStorage.setItem(SHUAKE_TOKEN_KEY, shuakeToken || token)
+    window.sessionStorage.removeItem(SHUAKE_TOKEN_KEY)
   }
 }
 
 export const getToken = () => {
-  return window.sessionStorage.getItem(TOKEN_KEY) || readLegacyToken(TOKEN_KEY)
+  return window.localStorage.getItem(TOKEN_KEY) || readLegacyToken(TOKEN_KEY)
 }
 
 export const getShuakeToken = () => {
-  return window.sessionStorage.getItem(SHUAKE_TOKEN_KEY) || readLegacyToken(SHUAKE_TOKEN_KEY)
+  return window.localStorage.getItem(SHUAKE_TOKEN_KEY) || readLegacyToken(SHUAKE_TOKEN_KEY)
 }
 
 export const setShuakeToken = (token) => {
   if (token) {
-    window.sessionStorage.setItem(SHUAKE_TOKEN_KEY, token)
-    window.localStorage.removeItem(SHUAKE_TOKEN_KEY)
+    window.localStorage.setItem(SHUAKE_TOKEN_KEY, token)
+    window.sessionStorage.removeItem(SHUAKE_TOKEN_KEY)
   }
 }
 

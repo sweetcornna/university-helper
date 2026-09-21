@@ -1,7 +1,11 @@
-import { CARD, formatTaskTime } from '../utils'
+import { CARD, formatTaskTime, labelTaskHistory, taskStatusLabel } from '../utils'
 
 
 export default function TaskHistorySection({ taskHistory, taskId, selectTaskFromHistory }) {
+
+  // Sorted newest-first and labelled 任务一, 任务二, … — a raw task_id is an
+  // opaque hex string and a column of them is unreadable.
+  const rows = labelTaskHistory(taskHistory)
 
 
   return (
@@ -20,7 +24,7 @@ export default function TaskHistorySection({ taskHistory, taskId, selectTaskFrom
       </div>
 
 
-      {taskHistory.length === 0 ? (
+      {rows.length === 0 ? (
 
 
         <p className="text-sm text-text-muted">暂无历史任务</p>
@@ -32,7 +36,7 @@ export default function TaskHistorySection({ taskHistory, taskId, selectTaskFrom
         <div className="space-y-2">
 
 
-          {taskHistory.map((task) => {
+          {rows.map((task) => {
 
 
             const selected = task.task_id === taskId
@@ -77,13 +81,17 @@ export default function TaskHistorySection({ taskHistory, taskId, selectTaskFrom
               >
 
 
-                <p className="font-mono text-sm text-text">{task.task_id}</p>
+                <p className="text-sm font-semibold text-text" title={task.task_id}>
+                  {task.label}
+                </p>
 
 
                 <div className="mt-1 flex flex-wrap gap-x-4 text-xs text-text/70">
 
 
-                  <span>状态：{task.status || 'unknown'}</span>
+                  <span title={task.status || 'unknown'}>
+                    状态：{taskStatusLabel(task.status)}
+                  </span>
 
 
                   <span>更新时间：{formatTaskTime(task.updated_at)}</span>

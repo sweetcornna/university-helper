@@ -1,4 +1,5 @@
 import re
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, field_validator
 
@@ -7,10 +8,54 @@ from pydantic import BaseModel, EmailStr, field_validator
 USERNAME_RE = re.compile(r"^[a-z0-9]+$")
 
 
+def normalize_email(v: str) -> str:
+    """Canonicalize an address to `strip().lower()`.
+
+    Applied to EVERY request schema carrying an email so that the whole stack
+    below the edge — `users.email` lookups/updates in AuthService and the
+    `(email, scene)` key of `email_verification_codes` — compares the same
+    bytes. `EmailStr` only lowercases the DOMAIN, so without this a user who
+    registered as `Alice@example.com` could request a reset code (stored
+    lowercase by `email_verification._normalize`), pass verification, and then
+    have the UPDATE match zero rows against the case-sensitive
+    `users.email` column.
+    """
+    return (v or "").strip().lower()
+
+
+def validate_password_rules(v: str) -> str:
+    """Password strength rules, shared by every endpoint that sets a password.
+
+    Registration and password reset both end in a bcrypt hash written to
+    `users.password_hash`; keeping the rules in one function is what stops the
+    reset path from quietly accepting passwords registration would reject.
+    """
+    if not v or len(v) > 128:
+        raise ValueError("密码长度无效")
+    if len(v) < 8:
+        raise ValueError("密码至少 8 个字符")
+    if not re.search(r"[A-Z]", v):
+        raise ValueError("密码需包含至少一个大写字母")
+    if not re.search(r"[a-z]", v):
+        raise ValueError("密码需包含至少一个小写字母")
+    if not re.search(r"\d", v):
+        raise ValueError("密码需包含至少一个数字")
+    return v
+
+
 class RegisterRequest(BaseModel):
     username: str
     email: EmailStr
     password: str
+    # Optional at the schema layer because the field only exists when
+    # EMAIL_VERIFICATION_ENABLED is on. The route enforces its presence in that
+    # case, so deployments with the flag off keep sending today's payload.
+    code: str | None = None
+
+    @field_validator("email")
+    @classmethod
+    def canonicalize_email(cls, v):
+        return normalize_email(v)
 
     @field_validator("username")
     @classmethod
@@ -24,22 +69,43 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password(cls, v):
-        if not v or len(v) > 128:
-            raise ValueError("密码长度无效")
-        if len(v) < 8:
-            raise ValueError("密码至少 8 个字符")
-        if not re.search(r"[A-Z]", v):
-            raise ValueError("密码需包含至少一个大写字母")
-        if not re.search(r"[a-z]", v):
-            raise ValueError("密码需包含至少一个小写字母")
-        if not re.search(r"\d", v):
-            raise ValueError("密码需包含至少一个数字")
-        return v
+        return validate_password_rules(v)
+
+
+class SendCodeRequest(BaseModel):
+    email: EmailStr
+    scene: Literal["register", "reset"]
+
+    @field_validator("email")
+    @classmethod
+    def canonicalize_email(cls, v):
+        return normalize_email(v)
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str
+    new_password: str
+
+    @field_validator("email")
+    @classmethod
+    def canonicalize_email(cls, v):
+        return normalize_email(v)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v):
+        return validate_password_rules(v)
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def canonicalize_email(cls, v):
+        return normalize_email(v)
 
 
 class TokenResponse(BaseModel):

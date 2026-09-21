@@ -36,15 +36,28 @@ pytest --cov=app --cov-report=term-missing  # coverage
 ruff check app/
 ruff format app/
 
-# Database migrations
-alembic upgrade head
+# Database migrations — ALWAYS branch-qualified. There are TWO branches
+# (main_db and tenant_db), so a bare `alembic upgrade head` is ambiguous.
+alembic upgrade main_db@head           # main DB: users, rate_limit_counters,
+                                       #          email_verification_codes
+python scripts/migrate_tenants.py      # every tenant_<username> DB (tenant_db@head)
 alembic revision -m "describe change"  # write SQL via op.execute(...)
 ```
+
+> **`database/*.sql` only runs on an EMPTY Postgres data directory, and nothing
+> runs Alembic for you.** Any database that already has data needs
+> `alembic upgrade main_db@head` by hand after pulling new migrations. In
+> particular, `EMAIL_VERIFICATION_ENABLED=true` requires migration `003`
+> (`email_verification_codes`); without it `/auth/send-code` and
+> `/auth/reset-password` return 503 `邮箱验证服务未初始化，请联系管理员执行数据库迁移`.
 
 Environment variables read by `app/config.py` (see `.env.example` for defaults):
 `MAIN_DB_*`, `SECRET_KEY` (≥ 16 chars), `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`,
 `CORS_ORIGINS`, `ENFORCE_HTTPS`, `BCRYPT_ROUNDS`, `ENV`, `DOCS_ENABLED`,
-`BAIDU_MAP_API_KEY`, `CREDENTIAL_ENCRYPTION_KEY`.
+`BAIDU_MAP_API_KEY`, `CREDENTIAL_ENCRYPTION_KEY`, `EMAIL_VERIFICATION_ENABLED`,
+`SMTP_*`. Note there are **two** `.env.example` files — the root one (Docker
+Compose) and `backend/.env.example` (running `uvicorn` directly); both carry the
+SMTP block.
 
 ## Frontend
 

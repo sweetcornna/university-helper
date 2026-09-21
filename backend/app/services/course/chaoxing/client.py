@@ -52,10 +52,13 @@ class Chaoxing:
         self.rate_limiter = RateLimiter(DEFAULT_RATE_LIMIT)
         self.video_log_limiter = RateLimiter(VIDEO_LOG_RATE_LIMIT)
 
+        # Platform user_id — used to namespace persisted cookies per platform
+        # user so concurrent users don't overwrite each other's login session.
+        self.user_id = kwargs.get("user_id")
         # Each Chaoxing instance owns its own session for multi-tenant isolation.
         self.session_manager = SessionManager()
 
-        self.auth_service = ChaoxingAuthService(account, session_manager=self.session_manager)
+        self.auth_service = ChaoxingAuthService(account, session_manager=self.session_manager, user_id=self.user_id)
         self.course_service = ChaoxingCourseService(session_manager=self.session_manager)
         self.quiz_service = ChaoxingQuizService(tiku, self.rollback_times, kwargs, session_manager=self.session_manager)
 

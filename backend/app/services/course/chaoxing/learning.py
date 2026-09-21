@@ -215,7 +215,13 @@ def init_chaoxing(common_config, tiku_config):
     ai_concurrency = tiku_config.get("ai_concurrency")
 
     # 实例化超星API
-    chaoxing = Chaoxing(account=account, tiku=tiku, query_delay=query_delay, ai_concurrency=ai_concurrency)
+    chaoxing = Chaoxing(
+        account=account,
+        tiku=tiku,
+        query_delay=query_delay,
+        ai_concurrency=ai_concurrency,
+        user_id=common_config.get("user_id"),
+    )
 
     return chaoxing
 

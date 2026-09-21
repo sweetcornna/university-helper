@@ -211,15 +211,28 @@ class AI(Tiku):
         return self._invoke_completion(messages)
 
     def _init_tiku(self):
-        self.endpoint = self._conf["endpoint"]
-        self.key = self._conf["key"]
-        self.model = self._conf["model"]
-        self.http_proxy = self._conf.get("http_proxy")
-        self.min_interval_seconds = float(self._conf.get("min_interval_seconds", 3))
-        self.timeout = float(self._conf.get("timeout", 30))
-        self.max_retries = int(self._conf.get("max_retries", 3))
-        self.retry_delay = float(self._conf.get("retry_delay", 2))
-        self.disable_ssl_verify = str(self._conf.get("disable_ssl_verify", "false")).lower() in {
+        conf = self._conf or {}
+        # Accept a few common aliases so UI/API field names don't crash init.
+        self.endpoint = str(conf.get("endpoint") or conf.get("ai_endpoint") or conf.get("base_url") or "").strip()
+        self.key = str(conf.get("key") or conf.get("ai_key") or conf.get("api_key") or "").strip()
+        self.model = str(conf.get("model") or conf.get("ai_model") or "").strip()
+
+        if not self.endpoint or not self.key or not self.model:
+            # Missing AI credentials must disable this provider, not crash the
+            # whole learning task (was: KeyError 'endpoint').
+            self.DISABLE = True
+            logger.error(
+                "AI 题库缺少 endpoint/key/model，已禁用 AI 答题。"
+                "请在前端「自定义 AI 供应商」填写请求地址、密钥和模型名。"
+            )
+            return
+
+        self.http_proxy = conf.get("http_proxy")
+        self.min_interval_seconds = float(conf.get("min_interval_seconds", 3))
+        self.timeout = float(conf.get("timeout", 30))
+        self.max_retries = int(conf.get("max_retries", 3))
+        self.retry_delay = float(conf.get("retry_delay", 2))
+        self.disable_ssl_verify = str(conf.get("disable_ssl_verify", "false")).lower() in {
             "1",
             "true",
             "yes",
@@ -227,7 +240,7 @@ class AI(Tiku):
             "y",
         }
         # 允许通过 ai_concurrency 配置最大同时在请求中的题目数量；缺省为 3
-        max_req_raw = self._conf.get("ai_concurrency")
+        max_req_raw = conf.get("ai_concurrency")
         try:
             self.max_active_requests = int(max_req_raw) if max_req_raw is not None else 3
         except (TypeError, ValueError):

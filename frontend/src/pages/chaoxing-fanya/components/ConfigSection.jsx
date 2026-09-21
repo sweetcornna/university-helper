@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { api } from '../../../utils/api'
 import { CARD, toNum } from '../utils'
 
 const UNOPENED_STRATEGIES = [
@@ -138,6 +140,12 @@ export default function ConfigSection({
   setTikuProvider,
   tikuToken,
   setTikuToken,
+  aiEndpoint,
+  setAiEndpoint,
+  aiKey,
+  setAiKey,
+  aiModel,
+  setAiModel,
   coverageThreshold,
   setCoverageThreshold,
   correctOptions,
@@ -151,6 +159,40 @@ export default function ConfigSection({
   notifyUrl,
   setNotifyUrl,
 }) {
+  const [aiProbeLoading, setAiProbeLoading] = useState(false)
+  const [aiProbeResult, setAiProbeResult] = useState(null)
+
+  const probeAi = async () => {
+    const endpoint = (aiEndpoint || '').trim()
+    const key = (aiKey || '').trim()
+    const model = (aiModel || '').trim()
+    if (!endpoint || !key || !model) {
+      setAiProbeResult({ ok: false, message: '请先填写请求地址、密钥和模型名' })
+      return
+    }
+    setAiProbeLoading(true)
+    setAiProbeResult(null)
+    try {
+      const resp = await api('/course/ai/test', {
+        method: 'POST',
+        body: JSON.stringify({ endpoint, key, model }),
+        timeoutMs: 30000,
+      })
+      const reply = resp?.data?.reply || resp?.reply || ''
+      setAiProbeResult({
+        ok: true,
+        message: `测活成功${reply ? `：模型回复「${reply}」` : ''}`,
+      })
+    } catch (err) {
+      setAiProbeResult({
+        ok: false,
+        message: err?.message || '测活失败',
+      })
+    } finally {
+      setAiProbeLoading(false)
+    }
+  }
+
   return (
     <section className={`${CARD} space-y-6`}>
       {/* Everyday playback settings */}
@@ -229,6 +271,73 @@ export default function ConfigSection({
               value={tikuToken}
               onChange={(event) => setTikuToken(event.target.value)}
             />
+          </div>
+
+          {/* Always show AI config so it is not hidden by stale PWA caches or
+              unexpected provider state. Required only when AI is selected. */}
+          <div className="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <p className="text-sm font-medium text-text/80">
+              自定义 AI 供应商配置（OpenAI 兼容协议）
+            </p>
+            <p className="text-xs text-text-muted">
+              支持 DeepSeek、通义千问、OpenAI、本地 Ollama 等。勾选「AI 智能答题」时三项必填；未勾选可留空。
+            </p>
+            <div>
+              <label htmlFor="fanya-ai-endpoint" className="mb-1 block text-sm font-medium text-text/80">
+                请求地址 (Endpoint)
+              </label>
+              <input
+                id="fanya-ai-endpoint"
+                className="w-full rounded-xl border border-border bg-surface px-4 py-3"
+                placeholder="https://api.deepseek.com/v1/chat/completions"
+                value={aiEndpoint}
+                onChange={(event) => setAiEndpoint(event.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="fanya-ai-key" className="mb-1 block text-sm font-medium text-text/80">
+                密钥 (API Key)
+              </label>
+              <input
+                id="fanya-ai-key"
+                type="password"
+                className="w-full rounded-xl border border-border bg-surface px-4 py-3"
+                placeholder="sk-..."
+                value={aiKey}
+                onChange={(event) => setAiKey(event.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="fanya-ai-model" className="mb-1 block text-sm font-medium text-text/80">
+                模型名 (Model)
+              </label>
+              <input
+                id="fanya-ai-model"
+                className="w-full rounded-xl border border-border bg-surface px-4 py-3"
+                placeholder="如 deepseek-chat、qwen-plus、gpt-4o-mini"
+                value={aiModel}
+                onChange={(event) => setAiModel(event.target.value)}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={probeAi}
+                disabled={aiProbeLoading}
+                className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {aiProbeLoading ? '测活中…' : '测活 AI'}
+              </button>
+              {aiProbeResult && (
+                <span
+                  className={`text-sm ${
+                    aiProbeResult.ok ? 'text-success' : 'text-red-500'
+                  }`}
+                >
+                  {aiProbeResult.message}
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="space-y-2">

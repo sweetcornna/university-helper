@@ -11,6 +11,14 @@ from pydantic import BaseModel
 
 from app.dependencies import get_current_user
 from app.services.course.chaoxing.course_portal_service import chaoxing_course_portal_service
+from app.services.course.chaoxing.preferences import (
+    build_notify_config,
+    build_tiku_config,
+    has_answer_bank,
+    load_preferences,
+    masked_preferences,
+    save_preferences,
+)
 from app.services.course.chaoxing.signin import signin_manager
 from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
 from app.services.notification import NotificationFactory
@@ -36,13 +44,36 @@ THREAD_START_FAILURE_DETAIL = (
 class CourseStartRequest(BaseModel):
     platform: str
     username: str
-    password: str
+    # Optional: learning_manager reuses a stored session for this username when
+    # the password is absent (see learning_manager._run_task_worker). The
+    # username stays required — it binds the reused jar to an account.
+    password: str = ""
     course_ids: Optional[List[str]] = None
     speed: float = 1.0
     concurrency: int = 4
     unopened_strategy: str = "retry"
     tiku_config: Optional[dict] = None
     notify_config: Optional[dict] = None
+
+
+class ChaoxingPreferencesRequest(BaseModel):
+    """Saved task settings. Every field is optional: one that is absent (or null)
+    leaves the stored value untouched. See preferences.save_preferences."""
+
+    speed: Optional[float] = None
+    concurrency: Optional[int] = None
+    unopened_strategy: Optional[str] = None
+    tiku_provider: Optional[List[str]] = None
+    tiku_token: Optional[str] = None
+    ai_endpoint: Optional[str] = None
+    ai_key: Optional[str] = None
+    ai_model: Optional[str] = None
+    coverage_threshold: Optional[float] = None
+    correct_options: Optional[str] = None
+    wrong_options: Optional[str] = None
+    submit_mode: Optional[str] = None
+    notify_service: Optional[str] = None
+    notify_url: Optional[str] = None
 
 
 class CourseStatusResponse(BaseModel):
@@ -116,6 +147,51 @@ async def _run_blocking(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
+# Fields of CourseStartRequest that saved preferences can supply a default for.
+_PREFERENCE_BACKED_FIELDS = frozenset(
+    {"speed", "concurrency", "unopened_strategy", "tiku_config", "notify_config"}
+)
+
+
+async def _start_task_payload(request: CourseStartRequest, user_id: str) -> Dict[str, Any]:
+    """Build the learning-manager payload, filling omitted fields from saved prefs.
+
+    ``model_fields_set`` records what the client actually sent, so an explicitly
+    supplied value always wins and a full payload takes exactly the old path —
+    the stored preferences are not even read.
+    """
+    supplied = request.model_fields_set
+    payload: Dict[str, Any] = {
+        "platform": request.platform,
+        "username": request.username,
+        "password": request.password,
+        "course_ids": request.course_ids or [],
+        "speed": request.speed,
+        "concurrency": request.concurrency,
+        "unopened_strategy": request.unopened_strategy,
+        "tiku_config": request.tiku_config or {},
+        "notify_config": request.notify_config or {},
+    }
+    if _PREFERENCE_BACKED_FIELDS.issubset(supplied):
+        return payload
+
+    stored = await _run_blocking(load_preferences, user_id)
+    if not stored:
+        return payload
+
+    if "speed" not in supplied and stored.get("speed") is not None:
+        payload["speed"] = float(stored["speed"])
+    if "concurrency" not in supplied and stored.get("concurrency") is not None:
+        payload["concurrency"] = int(stored["concurrency"])
+    if "unopened_strategy" not in supplied and stored.get("unopened_strategy"):
+        payload["unopened_strategy"] = str(stored["unopened_strategy"])
+    if "tiku_config" not in supplied:
+        payload["tiku_config"] = build_tiku_config(stored)
+    if "notify_config" not in supplied:
+        payload["notify_config"] = build_notify_config(stored)
+    return payload
+
+
 @router.post("/start", response_model=CourseStatusResponse)
 async def start_course_learning(
     request: CourseStartRequest,
@@ -127,20 +203,11 @@ async def start_course_learning(
     user_id = _current_user_id(current_user)
     try:
         learning_manager = _get_learning_manager()
+        payload = await _start_task_payload(request, user_id)
         task_id = await _run_blocking(
             learning_manager.start_task,
             user_id=user_id,
-            payload={
-                "platform": request.platform,
-                "username": request.username,
-                "password": request.password,
-                "course_ids": request.course_ids or [],
-                "speed": request.speed,
-                "concurrency": request.concurrency,
-                "unopened_strategy": request.unopened_strategy,
-                "tiku_config": request.tiku_config or {},
-                "notify_config": request.notify_config or {},
-            },
+            payload=payload,
         )
         progress = {
             "total": len(request.course_ids or []),
@@ -1005,6 +1072,39 @@ async def get_courses(
     }
 
 
+@router.get("/chaoxing/preferences")
+async def get_chaoxing_preferences(current_user: dict = Depends(get_current_user)):
+    """Return the caller's saved task settings, with secrets masked.
+
+    ``has_answer_bank`` lets the SPA warn that a one-click run would otherwise
+    watch videos WITHOUT answering a single quiz.
+    """
+    user_id = _current_user_id(current_user)
+    stored = await _run_blocking(load_preferences, user_id)
+    return {
+        "status": "success",
+        "preferences": masked_preferences(stored) if stored else None,
+        "has_answer_bank": has_answer_bank(stored),
+    }
+
+
+@router.put("/chaoxing/preferences")
+async def update_chaoxing_preferences(
+    request: ChaoxingPreferencesRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Save the caller's task settings. Never starts a task.
+
+    ``exclude_unset`` keeps "field omitted" distinguishable from "field cleared":
+    only what the client actually sent reaches the store.
+    """
+    user_id = _current_user_id(current_user)
+    saved = await _run_blocking(save_preferences, user_id, request.model_dump(exclude_unset=True))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Failed to save Chaoxing task preferences")
+    return {"status": "success"}
+
+
 @router.get("/chaoxing/tabs")
 async def chaoxing_course_tabs(current_user: dict = Depends(get_current_user)):
     _current_user_id(current_user)
@@ -1163,3 +1263,116 @@ async def test_notification(request: dict, current_user: dict = Depends(get_curr
         )
 
     return {"status": "success", "message": f"Test notification sent via {service}"}
+
+
+class AiProbeRequest(BaseModel):
+    endpoint: str
+    key: str
+    model: str
+
+
+def _validate_ai_endpoint(url: str) -> bool:
+    """Allow public http(s) AI endpoints. For self-host we also accept localhost
+    (e.g. Ollama) but still reject empty / non-http schemes."""
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    lower = raw.lower()
+    if not (lower.startswith("http://") or lower.startswith("https://")):
+        return False
+    # Reuse the notification SSRF guard for public hosts; if that rejects
+    # localhost/private ranges, still allow common local LLM ports explicitly.
+    if validate_notification_url(raw):
+        return True
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(raw).hostname or "").lower()
+    except Exception:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+@router.post("/ai/test")
+async def test_ai_provider(request: AiProbeRequest, current_user: dict = Depends(get_current_user)):
+    """Probe an OpenAI-compatible chat completions endpoint with a tiny request.
+
+    Used by the frontend "测活" button so users can verify endpoint/key/model
+    before starting a learning task.
+    """
+    _current_user_id(current_user)
+
+    endpoint = str(request.endpoint or "").strip()
+    key = str(request.key or "").strip()
+    model = str(request.model or "").strip()
+
+    if not endpoint or not key or not model:
+        raise HTTPException(status_code=400, detail="endpoint、key、model 均不能为空")
+    if not _validate_ai_endpoint(endpoint):
+        raise HTTPException(
+            status_code=400,
+            detail="endpoint 必须是 http(s) 地址（支持公网或本机 Ollama）",
+        )
+
+    def _probe() -> dict[str, Any]:
+        import httpx
+
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a connectivity probe. Reply with exactly: OK"},
+                {"role": "user", "content": "ping"},
+            ],
+            "max_tokens": 16,
+            "temperature": 0,
+        }
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(endpoint, headers=headers, json=payload)
+        body_text = (resp.text or "")[:500]
+        reply = ""
+        try:
+            data = resp.json()
+            reply = (
+                (((data.get("choices") or [{}])[0]).get("message") or {}).get("content")
+                or data.get("error", {}).get("message")
+                or ""
+            )
+            if isinstance(reply, str):
+                reply = reply.strip()[:200]
+        except Exception:
+            reply = body_text[:200]
+
+        return {
+            "http_status": resp.status_code,
+            "ok": resp.status_code == 200 and bool(reply),
+            "reply": reply,
+            "raw_preview": body_text if resp.status_code != 200 else "",
+        }
+
+    try:
+        result = await _run_blocking(_probe)
+    except Exception as exc:
+        logger.warning("AI probe failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"请求 AI 接口失败: {exc}") from exc
+
+    if not result.get("ok"):
+        detail = result.get("reply") or result.get("raw_preview") or "unknown error"
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI 测活失败 (HTTP {result.get('http_status')}): {detail}",
+        )
+
+    return {
+        "status": "success",
+        "message": "AI 测活成功",
+        "data": {
+            "model": model,
+            "endpoint": endpoint,
+            "reply": result.get("reply"),
+            "http_status": result.get("http_status"),
+        },
+    }

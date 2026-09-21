@@ -13,6 +13,7 @@ import { isAuthenticated } from './utils/auth'
 
 const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const ChaoxingSignin = lazy(() => import('./pages/ChaoxingSignin'))
 const ChaoxingFanya = lazy(() => import('./pages/ChaoxingFanya'))
@@ -30,6 +31,7 @@ function App() {
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
               <Route
                 element={
                   <PrivateRoute>

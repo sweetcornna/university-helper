@@ -7,7 +7,7 @@ import {
   clampCheckInterval,
 } from '../utils'
 
-export default function useAutoSignin(form, executeSignin, requestChaoxingApi, { setResultType, setResultMessage, setSigninTasks, redirectingRef }) {
+export default function useAutoSignin(form, executeSignin, requestChaoxingApi, { setResultType, setResultMessage, setSigninTasks, redirectingRef, sessionActive = false }) {
   const autoCheckRef = useRef(null)
   const countdownRef = useRef(null)
   const autoSignedTaskCacheRef = useRef(new Map())
@@ -72,9 +72,13 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
 
     const username = form.username.trim()
     const password = form.password
-    if (!username || !password) {
+    // Same rule as the manual actions: a server-held session removes the
+    // password requirement, never the username.
+    if (!username || (!sessionActive && !password)) {
       setResultType('error')
-      setResultMessage('自动签到已开启，但账号或密码为空。')
+      setResultMessage(
+        sessionActive ? '自动签到已开启，但学习通账号为空。' : '自动签到已开启，但账号或密码为空。'
+      )
       return
     }
 
@@ -122,7 +126,7 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
     } finally {
       autoSigningRef.current = false
     }
-  }, [autoSignin, autoSignFilter, executeSignin, form.password, form.username, requestChaoxingApi, setResultType, setResultMessage, setSigninTasks, redirectingRef])
+  }, [autoSignin, autoSignFilter, executeSignin, form.password, form.username, requestChaoxingApi, sessionActive, setResultType, setResultMessage, setSigninTasks, redirectingRef])
 
   // Auto-signin cycle + countdown effect
   useEffect(() => {

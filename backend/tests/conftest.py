@@ -5,9 +5,21 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Set test environment variables before any imports
+# Set test environment variables before any imports.
+# These duplicate the `env =` block in pytest.ini on purpose: that block needs
+# the pytest-env plugin, which is not in requirements-dev.txt, so pytest ignores
+# it (it warns "Unknown config option: env"). Seeding here is what actually
+# takes effect. Settings() rejects a postgres backend without DB credentials, so
+# any test that imports the app in the default server profile needs these two.
 os.environ.setdefault("SECRET_KEY", "test_secret_key_for_testing_only_min_32_chars")
 os.environ.setdefault("CORS_ORIGINS", '["http://localhost:3000"]')
+os.environ.setdefault("MAIN_DB_USER", "test_user")
+os.environ.setdefault("MAIN_DB_PASSWORD", "test_password")
+# Without this the HTTPS-redirect middleware 301s every plain-http test request.
+# httpx follows the redirect and downgrades POST to GET, which then misses the
+# POST-only route and lands on the SPA catch-all — a 200 of index.html instead
+# of the JSON the test asserted on.
+os.environ.setdefault("ENFORCE_HTTPS", "false")
 
 
 @pytest.fixture
@@ -21,9 +33,24 @@ def client():
 
 
 @pytest.fixture(autouse=True)
-def reset_auth_rate_limiter():
-    from app.middleware.rate_limiter import rate_limiter
+def reset_auth_rate_limiter(monkeypatch):
+    """Give every test a limiter with an empty, in-memory-only counter.
 
+    `rate_limiter.reset()` clears the in-memory cache and NOTHING else. When a
+    Postgres is reachable (CI provisions one as a service container) the limiter
+    prefers its durable `rate_limit_counters` path, which `reset()` cannot touch
+    — so a module firing more than 5 requests per client_id inside one 60s window
+    passes locally and 429s in CI.
+
+    Forcing `_check_via_db` to report "unavailable" pins the limiter to the
+    in-memory path that `reset()` actually controls, so the suite behaves the
+    same whether or not a database happens to be up. Tests that want the durable
+    path monkeypatch it back themselves (their patch is applied after this one
+    and undone before it).
+    """
+    from app.middleware.rate_limiter import RateLimiter, rate_limiter
+
+    monkeypatch.setattr(RateLimiter, "_check_via_db", lambda self, client_id, now: None)
     rate_limiter.reset()
     yield
     rate_limiter.reset()

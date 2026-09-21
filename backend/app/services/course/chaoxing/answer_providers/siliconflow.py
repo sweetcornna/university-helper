@@ -80,12 +80,19 @@ class SiliconFlow(Tiku):
         return None
 
     def _init_tiku(self):
-        # 从配置文件读取参数
-        self.api_endpoint = self._conf.get("siliconflow_endpoint", "https://api.siliconflow.cn/v1/chat/completions")
-        self.api_key = self._conf["siliconflow_key"]
-        self.model_name = self._conf.get("siliconflow_model", "deepseek-ai/DeepSeek-V3")
-        self.min_interval = int(self._conf.get("min_interval_seconds", 3))
-        self.timeout = int(self._conf.get("timeout", 30))
-        self.max_retries = int(self._conf.get("max_retries", 3))
-        self.retry_delay = float(self._conf.get("retry_delay", 2))
+        # 从配置文件读取参数。缺 key 时禁用本 provider，避免整条刷课任务崩溃。
+        conf = self._conf or {}
+        self.api_endpoint = str(
+            conf.get("siliconflow_endpoint") or conf.get("endpoint") or "https://api.siliconflow.cn/v1/chat/completions"
+        ).strip()
+        self.api_key = str(conf.get("siliconflow_key") or conf.get("key") or conf.get("token") or "").strip()
+        self.model_name = str(conf.get("siliconflow_model") or conf.get("model") or "deepseek-ai/DeepSeek-V3").strip()
+        if not self.api_key:
+            self.DISABLE = True
+            logger.error("硅基流动题库缺少 API Key，已禁用。请填写 Token/密钥。")
+            return
+        self.min_interval = int(conf.get("min_interval_seconds", 3))
+        self.timeout = int(conf.get("timeout", 30))
+        self.max_retries = int(conf.get("max_retries", 3))
+        self.retry_delay = float(conf.get("retry_delay", 2))
         self._session = requests.Session()

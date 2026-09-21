@@ -6,11 +6,13 @@ import { CARD, getCourseId, mergeTaskHistory } from './chaoxing-fanya/utils'
 
 
 import useTaskConfig from './chaoxing-fanya/hooks/useTaskConfig'
+import useTaskPreferences from './chaoxing-fanya/hooks/useTaskPreferences'
 import useTaskExecution from './chaoxing-fanya/hooks/useTaskExecution'
 import useAuthentication from './chaoxing-fanya/hooks/useAuthentication'
 
 
 import LoginSection from './chaoxing-fanya/components/LoginSection'
+import OneClickSection from './chaoxing-fanya/components/OneClickSection'
 import CourseListSection from './chaoxing-fanya/components/CourseListSection'
 import CoursePortalSection from './chaoxing-fanya/components/CoursePortalSection'
 import ConfigSection from './chaoxing-fanya/components/ConfigSection'
@@ -42,6 +44,10 @@ export default function ChaoxingFanya() {
   const toast = useToast()
 
   const taskConfig = useTaskConfig()
+
+  // Server-held task settings (answer-bank credentials included). The one-click
+  // run reads these to say what it will actually do before it starts.
+  const prefs = useTaskPreferences()
 
 
   const auth = useAuthentication({ stopPolling })
@@ -108,8 +114,14 @@ export default function ChaoxingFanya() {
     auth.setNotice('')
 
 
-    if (!auth.username.trim() || !auth.password.trim()) {
-      auth.setError('请先填写账号和密码。')
+    // The username is always required: the backend binds the reused cookie jar
+    // to it, so without it a task could adopt a session for another account.
+    // The password is only needed when there is NO server-held session — the
+    // backend accepts an empty one once a session bound to this account exists
+    // (learning_manager._run_task_worker). Demanding it unconditionally here
+    // would make the persisted 7-day login pointless at the moment it matters.
+    if (!auth.username.trim() || (auth.sessionStatus !== 'active' && !auth.password.trim())) {
+      auth.requireCredentials()
       return
     }
     if (selectedCourses.length === 0) {
@@ -140,8 +152,14 @@ export default function ChaoxingFanya() {
             provider: (Array.isArray(taskConfig.tikuProvider)
               ? taskConfig.tikuProvider
               : [taskConfig.tikuProvider]
-            ).join(','),
+            ).filter(Boolean).join(','),
             token: taskConfig.tikuToken.trim(),
+            // Always send AI fields; backend disables AI provider when empty.
+            endpoint: (taskConfig.aiEndpoint || '').trim(),
+            key: (taskConfig.aiKey || '').trim(),
+            model: (taskConfig.aiModel || '').trim(),
+            // SiliconFlow can reuse the same key field / token as fallback.
+            siliconflow_key: (taskConfig.aiKey || taskConfig.tikuToken || '').trim(),
             coverage_threshold: taskConfig.coverageThreshold,
             judge_mapping: {
               correct: taskConfig.correctOptions
@@ -210,17 +228,38 @@ export default function ChaoxingFanya() {
         </section>
 
 
-        {auth.courses.length === 0 ? (
-          <LoginSection
-            username={auth.username}
-            setUsername={auth.setUsername}
-            password={auth.password}
-            setPassword={auth.setPassword}
-            loginLoading={auth.loginLoading}
-            handleLogin={auth.handleLogin}
-          />
-        ) : (
+        <LoginSection
+          username={auth.username}
+          setUsername={auth.setUsername}
+          password={auth.password}
+          setPassword={auth.setPassword}
+          loginLoading={auth.loginLoading}
+          handleLogin={auth.handleLogin}
+          sessionStatus={auth.sessionStatus}
+          sessionUsername={auth.sessionUsername}
+          sessionExpiresAt={auth.sessionExpiresAt}
+          switchAccount={auth.switchAccount}
+          switchLoading={auth.switchLoading}
+          credentialsRequired={auth.credentialsRequired}
+          qrRequest={auth.callChaoxingApi}
+          onQrSuccess={auth.handleQrSuccess}
+        />
+
+        {auth.authenticated && (
           <>
+            <OneClickSection
+              courses={auth.courses}
+              selectedCourses={selectedCourses}
+              setSelectedCourses={setSelectedCourses}
+              startTask={startTask}
+              loading={taskExec.loading}
+              authenticated={auth.authenticated}
+              preferences={prefs.preferences}
+              hasAnswerBank={prefs.hasAnswerBank}
+              preferencesLoading={prefs.loading}
+              preferencesError={prefs.loadError}
+            />
+
             <CourseListSection
               courses={auth.courses}
               selectedCourses={selectedCourses}

@@ -15,13 +15,22 @@ export default function useTaskConfig() {
 
   // Ordered list of answer-bank providers; sent to the backend as a
   // comma-separated `provider` (单个=单题库，多个=按顺序回退). Default chain:
-  // 言溪 first (best, if a token is set), then the free GO题库 — so 答题 still
-  // works without a Token. (The shared answer cache is always consulted first,
-  // so adding 本地缓存 as an extra link would be redundant.)
-  const [tikuProvider, setTikuProvider] = useState(['TikuYanxi', 'TikuGo'])
+  // AI first: the owner answers with their own LLM API, and the AI provider is
+  // the only link that can attempt a question it has never seen. 言溪 and GO题库
+  // stay behind it as free fallbacks for questions the banks already know, so a
+  // missing AI key degrades instead of failing. (The shared answer cache is
+  // always consulted before any provider, so 本地缓存 here would be redundant.)
+  const [tikuProvider, setTikuProvider] = useState(['AI', 'TikuYanxi', 'TikuGo'])
 
 
   const [tikuToken, setTikuToken] = useState('')
+
+
+  // 自定义 AI 供应商配置（OpenAI 兼容协议）。仅当题库来源含 "AI" 时生效。
+  // endpoint: 完整 chat completions 地址；key: API Key；model: 模型名。
+  const [aiEndpoint, setAiEndpoint] = useState('')
+  const [aiKey, setAiKey] = useState('')
+  const [aiModel, setAiModel] = useState('')
 
 
   const [coverageThreshold, setCoverageThreshold] = useState(0.9)
@@ -48,6 +57,9 @@ export default function useTaskConfig() {
     unopenedStrategy, setUnopenedStrategy,
     tikuProvider, setTikuProvider,
     tikuToken, setTikuToken,
+    aiEndpoint, setAiEndpoint,
+    aiKey, setAiKey,
+    aiModel, setAiModel,
     coverageThreshold, setCoverageThreshold,
     correctOptions, setCorrectOptions,
     wrongOptions, setWrongOptions,

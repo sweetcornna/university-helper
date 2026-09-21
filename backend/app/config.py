@@ -6,6 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PUBLIC_ROUTES = [
     "/api/v1/auth/register",
     "/api/v1/auth/login",
+    "/api/v1/auth/send-code",
+    "/api/v1/auth/reset-password",
+    "/api/v1/auth/config",
     "/api/v1/chaoxing/location/geocode",
     "/api/v1/chaoxing/location/search",
     "/api/v1/chaoxing/location/reverse-geocode",
@@ -46,7 +49,10 @@ class Settings(BaseSettings):
     # JWT
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # 7-day access token for the self-hosted single-user scenario so that
+    # restarting the service or reopening the browser tab does not force a
+    # re-login. There is no refresh-token flow; the token simply lives longer.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
 
     # CORS
     CORS_ORIGINS: list[str] = []
@@ -62,6 +68,21 @@ class Settings(BaseSettings):
     DOCS_ENABLED: bool = False
 
     BAIDU_MAP_API_KEY: str | None = None
+
+    # SMTP / outbound mail. Empty SMTP_HOST or SMTP_FROM means "not configured"
+    # and app.core.mailer refuses to send (see mailer.is_configured).
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 465
+    SMTP_SSL: bool = True
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_FROM_NAME: str = "学道"
+
+    # Master switch for email verification codes on register / password reset.
+    # Off by default so existing deploys (and the local desktop profile, which
+    # has no main_db) keep the current password-only flow.
+    EMAIL_VERIFICATION_ENABLED: bool = False
 
     # Optional bearer token guarding the /metrics endpoint. When set, requests
     # to /metrics must present `Authorization: Bearer <METRICS_TOKEN>`. When
