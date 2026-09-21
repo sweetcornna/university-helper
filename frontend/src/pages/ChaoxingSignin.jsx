@@ -1440,15 +1440,23 @@ export default function ChaoxingSignin() {
 
           {activeTab === 'signin' && (
             <div id="cx-panel-signin" role="tabpanel" aria-labelledby="cx-tab-signin" tabIndex="0" className="mt-6 space-y-4">
-              <AutoSigninBanner
-                signinTasks={signinTasks}
-                form={form}
-                submitting={submitting}
-                onApplyTask={applyDetectedTask}
-                onApplyAndSubmit={applyAndSubmitDetectedTask}
-                onRefresh={fetchSigninTasks}
-                refreshing={refreshingSigninTasks}
-              />
+              {/* Nothing in here can work without a 学习通 session: the tasks
+                  come from the server-held cookie jar, and with none the
+                  endpoint answers with an empty list rather than an error, so
+                  the banner would offer a refresh that can never find
+                  anything. The credential form below is the useful surface
+                  until then. */}
+              {chaoxingSession.authenticated && (
+                <AutoSigninBanner
+                  signinTasks={signinTasks}
+                  form={form}
+                  submitting={submitting}
+                  onApplyTask={applyDetectedTask}
+                  onApplyAndSubmit={applyAndSubmitDetectedTask}
+                  onRefresh={fetchSigninTasks}
+                  refreshing={refreshingSigninTasks}
+                />
+              )}
 
               {chaoxingSession.authenticated && (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/30 bg-surface/60 px-4 py-3">
