@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
+import { ThemeToggle } from '../components'
 import { api } from '../utils/api'
 
 // Seven ambient "chapter" tracks. Widths, delays and the fill loop all live in
@@ -116,6 +117,10 @@ export default function ForgotPassword() {
 
   return (
     <main className="auth-page">
+      <div className="absolute right-4 top-4 z-20">
+        <ThemeToggle />
+      </div>
+
       <section className="auth-pitch">
         <div className="auth-pitch__inner">
           <p className="auth-eyebrow auth-rise">学道</p>
