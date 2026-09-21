@@ -1418,10 +1418,20 @@ async def test_ai_provider(request: AiProbeRequest, current_user: dict = Depends
     if not endpoint or not key or not model:
         raise HTTPException(status_code=400, detail="endpoint、key、model 均不能为空")
     if not _validate_ai_endpoint(endpoint):
-        raise HTTPException(
-            status_code=400,
-            detail="endpoint 必须是 http(s) 地址（支持公网或本机 Ollama）",
-        )
+        # Two very different causes, and the old scheme-only wording hid the
+        # second one: a host that does not resolve to a PUBLIC address is
+        # refused by the SSRF guard even though the URL is well-formed. That is
+        # what a local proxy answering with a fake/reserved IP looks like, and
+        # "must be an http(s) address" sent people looking in the wrong place.
+        if not endpoint.lower().startswith(("http://", "https://")):
+            detail = "endpoint 必须是 http(s) 地址（支持公网或本机 Ollama）"
+        else:
+            detail = (
+                "无法使用该 endpoint：域名没有解析到公网地址。"
+                "请检查本机 DNS 与代理设置——代理的 fake-ip 会把域名解析成保留地址，"
+                "从而被服务端的安全校验拒绝。"
+            )
+        raise HTTPException(status_code=400, detail=detail)
 
     def _probe() -> dict[str, Any]:
         import httpx
@@ -1436,7 +1446,11 @@ async def test_ai_provider(request: AiProbeRequest, current_user: dict = Depends
                 {"role": "system", "content": "You are a connectivity probe. Reply with exactly: OK"},
                 {"role": "user", "content": "ping"},
             ],
-            "max_tokens": 16,
+            # No max_tokens cap on purpose. A reasoning model spends its budget
+            # on reasoning tokens BEFORE emitting any content, so a small cap
+            # returns a well-formed 200 with an empty `content` — which this
+            # probe then reports as a failure. The answering path (ai.py) sends
+            # no cap either, so omitting it also matches what we are verifying.
             "temperature": 0,
         }
         with httpx.Client(timeout=20.0) as client:
@@ -1445,8 +1459,14 @@ async def test_ai_provider(request: AiProbeRequest, current_user: dict = Depends
         reply = ""
         try:
             data = resp.json()
+            message = ((data.get("choices") or [{}])[0]).get("message") or {}
             reply = (
-                (((data.get("choices") or [{}])[0]).get("message") or {}).get("content")
+                message.get("content")
+                # A reasoning model can leave `content` empty. Non-empty
+                # reasoning still proves the endpoint, key and model all work,
+                # which is the whole of what this probe claims to verify.
+                or message.get("reasoning")
+                or message.get("reasoning_content")
                 or data.get("error", {}).get("message")
                 or ""
             )
