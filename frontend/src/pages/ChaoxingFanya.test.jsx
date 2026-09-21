@@ -12,13 +12,32 @@ const mocks = vi.hoisted(() => ({
     setError: vi.fn(),
     setNotice: vi.fn(),
     loadCourses: vi.fn(),
+    // The merged page gates its authenticated sections on these (shared-session
+    // work), so the mock has to supply them or the task controls never render.
+    authenticated: true,
+    sessionStatus: 'active',
+    sessionUsername: 'test-user',
+    sessionExpiresAt: '',
+    switchAccount: vi.fn(),
+    switchLoading: false,
+    credentialsRequired: false,
+    requireCredentials: vi.fn(),
+    loginLoading: false,
+    handleLogin: vi.fn(),
+    handleQrSuccess: vi.fn(),
+    setPassword: vi.fn(),
+    setUsername: vi.fn(),
+    callChaoxingApi: vi.fn(),
   },
   toast: { error: vi.fn(), success: vi.fn() },
 }))
 
-vi.mock('../components', () => ({
-  useToast: () => mocks.toast,
-}))
+// Keep the real components (the page renders Button/Input from this barrel)
+// and override only the toast.
+vi.mock('../components', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, useToast: () => mocks.toast }
+})
 
 vi.mock('./chaoxing-fanya/hooks/useAuthentication', () => {
   function useMockAuthentication() {

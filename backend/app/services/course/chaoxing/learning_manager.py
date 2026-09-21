@@ -10,6 +10,7 @@ from app.services.notification import NotificationFactory
 from app.services.notification.providers import validate_notification_url
 
 from ..task_store import task_store
+from .cookies import load_session
 from .endpoint_security import validate_tiku_config
 from .learning import ChapterTask, JobProcessor, init_chaoxing
 from .payload_mapper import normalize_tiku_config
@@ -338,8 +339,18 @@ class ChaoxingLearningManager:
     def _run_task_worker(self, task_id: str, user_id: str, payload: dict[str, Any]) -> None:
         username = str(payload.get("username") or "").strip()
         password = str(payload.get("password") or "").strip()
-        if not username or not password:
+        # The username is always required: it is what binds the reused cookie
+        # jar to an account, so without it we could adopt a session belonging to
+        # a different Chaoxing account (see cookies.load_session).
+        if not username:
             self._fail_task(task_id, "Missing username or password")
+            return
+        # The password may be omitted when a stored session already exists FOR
+        # THIS ACCOUNT — that is the whole point of persisting the login. Without
+        # this branch `use_cookies: True` below is unreachable and the user has
+        # to retype their password on every task despite a valid session.
+        if not password and not load_session(user_id, expected_username=username):
+            self._fail_task(task_id, "学习通登录态已失效，请重新输入密码后再开始任务")
             return
 
         course_list = payload.get("course_ids") or payload.get("course_list") or []
@@ -360,7 +371,14 @@ class ChaoxingLearningManager:
             "notopen_action": str(payload.get("unopened_strategy") or payload.get("notopen_action") or "retry")
             .strip()
             .lower(),
-            "use_cookies": False,
+            # Reuse the persisted Chaoxing login session (per-user cookie file)
+            # across tasks instead of forcing a password login every time. On
+            # cookie failure the auth layer falls back to password login and
+            # re-persists the fresh cookies. See auth_service.ChaoxingAuthService.
+            "use_cookies": True,
+            # Namespace the cookie file per platform user so concurrent users
+            # don't overwrite each other's session.
+            "user_id": user_id,
         }
         if common_config["notopen_action"] not in {"retry", "ask", "continue"}:
             common_config["notopen_action"] = "retry"
@@ -389,7 +407,7 @@ class ChaoxingLearningManager:
             return
 
         try:
-            login_state = chaoxing.login(login_with_cookies=False)
+            login_state = chaoxing.login(login_with_cookies=common_config.get("use_cookies", False))
         except Exception as exc:
             self._fail_task(task_id, f"Login request failed: {exc}")
             return

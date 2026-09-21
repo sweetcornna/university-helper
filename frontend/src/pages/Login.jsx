@@ -1,9 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { BookOpen, Eye, EyeOff } from 'lucide-react'
-import { Button, Card, Input, ThemeToggle, useRuntimeProfile } from '../components'
+import { Eye, EyeOff, Loader2 } from 'lucide-react'
+
+import { ThemeToggle, useRuntimeProfile } from '../components'
 import { api, LOCAL_PROFILE_AUTH_CODE } from '../utils/api'
 import { setToken } from '../utils/auth'
+
+// Seven ambient "chapter" tracks, same scaffolding ForgotPassword uses; widths,
+// delays and the fill loop live in index.css (.auth-bar*).
+const CHAPTER_BARS = [0, 1, 2, 3, 4, 5, 6]
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -13,10 +18,32 @@ export default function Login() {
   const [fieldErrors, setFieldErrors] = useState({})
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // The whole reset flow runs on /auth/send-code, which hard-fails 503 unless
+  // EMAIL_VERIFICATION_ENABLED is on — and off is the default. So the link is
+  // opt-in: only a config response that says "enabled" renders it. A failed or
+  // in-flight request leaves it hidden, because the flow behind it provably
+  // cannot succeed in that state.
+  const [resetEnabled, setResetEnabled] = useState(false)
   const navigate = useNavigate()
   const { markLocal } = useRuntimeProfile()
   const location = useLocation()
   const from = location.state?.from || '/dashboard'
+  // Set by ForgotPassword after a successful reset.
+  const notice = location.state?.notice || ''
+
+  useEffect(() => {
+    let active = true
+    api('/auth/config')
+      .then((resp) => {
+        if (active) setResetEnabled(Boolean(resp?.email_verification_enabled))
+      })
+      .catch(() => {
+        // Intentionally silent — hiding the link is the safe default.
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -52,69 +79,136 @@ export default function Login() {
   }
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center bg-background px-4 py-20 sm:px-8">
-      <div className="absolute right-4 top-4 z-20"><ThemeToggle /></div>
-      <section className="w-full max-w-md">
-        <Card padding="spacious" tone="elevated">
-          <Link to="/login" className="mb-7 flex w-fit items-center gap-3" aria-label="学道登录页">
-            <span className="relative grid h-11 w-11 place-items-center overflow-hidden rounded-xl bg-secondary text-background dark:text-text">
-              <BookOpen className="h-5 w-5" aria-hidden="true" />
-              <span className="absolute bottom-0 right-0 h-2.5 w-2.5 bg-cta" aria-hidden="true" />
-            </span>
-            <span className="text-xl font-black tracking-[0.18em]">学道</span>
-          </Link>
+    <main className="auth-page">
+      <div className="absolute right-4 top-4 z-20">
+        <ThemeToggle />
+      </div>
 
-          <h1 className="text-3xl font-black tracking-tight text-text">登录</h1>
+      <section className="auth-pitch">
+        <div className="auth-pitch__inner">
+          <p className="auth-eyebrow auth-rise">学道</p>
+          <h1 className="auth-headline auth-rise auth-delay-1">回来接着上课。</h1>
+          <p className="auth-lede auth-rise auth-delay-2">
+            登录后，课程进度、任务日志和答题设置都在原处等你，接着上次的地方继续。
+          </p>
+          <div className="auth-bars auth-rise auth-delay-3" aria-hidden="true">
+            {CHAPTER_BARS.map((index) => (
+              <div key={index} className="auth-bar">
+                <div className="auth-bar__fill" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
-          <form onSubmit={handleSubmit} className="mt-7 space-y-5" noValidate>
-            <Input
-              id="login-email"
-              label="邮箱"
-              type="email"
-              autoComplete="email"
-              inputMode="email"
-              value={form.email}
-              onChange={(event) => {
-                setForm((previous) => ({ ...previous, email: event.target.value }))
-                setFieldErrors((previous) => ({ ...previous, email: '' }))
-              }}
-              error={fieldErrors.email}
-              required
-            />
-            <Input
-              id="login-password"
-              label="密码"
-              type={showPassword ? 'text' : 'password'}
-              autoComplete="current-password"
-              value={form.password}
-              onChange={(event) => {
-                setForm((previous) => ({ ...previous, password: event.target.value }))
-                setFieldErrors((previous) => ({ ...previous, password: '' }))
-              }}
-              error={fieldErrors.password}
-              trailing={(
+      <section className="auth-panel">
+        <div className="auth-panel__inner">
+          <h2 className="auth-form-title auth-rise auth-delay-2">登录</h2>
+          <p className="auth-form-hint auth-rise auth-delay-2">用注册时的邮箱和密码。</p>
+
+          {/* Outside the form swap on purpose, same as ForgotPassword: a live
+              region nested inside would be freshly inserted at the exact moment
+              the notice appears and go unannounced. */}
+          <div aria-live="polite">
+            {notice && !error ? <p className="auth-notice mt-6">{notice}</p> : null}
+          </div>
+
+          <form onSubmit={handleSubmit} className="auth-form" noValidate>
+            <div className="auth-field auth-rise auth-delay-3">
+              <label className="auth-label" htmlFor="login-email">
+                邮箱
+              </label>
+              <input
+                id="login-email"
+                className="auth-input"
+                type="email"
+                autoComplete="email"
+                inputMode="email"
+                value={form.email}
+                onChange={(event) => {
+                  setForm((previous) => ({ ...previous, email: event.target.value }))
+                  setFieldErrors((previous) => ({ ...previous, email: '' }))
+                }}
+                required
+              />
+              {fieldErrors.email && (
+                <p role="alert" className="auth-error">
+                  {fieldErrors.email}
+                </p>
+              )}
+            </div>
+
+            <div className="auth-field auth-rise auth-delay-4">
+              <label className="auth-label" htmlFor="login-password">
+                密码
+              </label>
+              <div className="auth-code-row">
+                <input
+                  id="login-password"
+                  className="auth-input flex-1 min-w-0"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={form.password}
+                  onChange={(event) => {
+                    setForm((previous) => ({ ...previous, password: event.target.value }))
+                    setFieldErrors((previous) => ({ ...previous, password: '' }))
+                  }}
+                  required
+                />
                 <button
                   type="button"
+                  className="auth-ghost-button px-3"
                   onClick={() => setShowPassword((visible) => !visible)}
                   aria-label={showPassword ? '隐藏密码' : '显示密码'}
-                  className="grid h-10 w-10 place-items-center rounded-lg text-text-muted hover:bg-surface-hover hover:text-text focus-visible:ring-offset-0"
+                  aria-pressed={showPassword}
                 >
-                  {showPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Eye className="h-4 w-4" aria-hidden="true" />
+                  )}
                 </button>
+              </div>
+              {fieldErrors.password && (
+                <p role="alert" className="auth-error">
+                  {fieldErrors.password}
+                </p>
               )}
-              required
-            />
-            {error && <p role="alert" className="rounded-xl border border-danger/30 bg-danger-surface px-3 py-2.5 text-sm text-danger">{error}</p>}
-            <Button type="submit" variant="cta" size="lg" className="w-full gap-2" loading={submitting} loadingLabel="正在登录…">
-              登录学道
-            </Button>
+            </div>
+
+            {error && (
+              <p role="alert" className="auth-error">
+                {error}
+              </p>
+            )}
+
+            <div className="auth-rise auth-delay-5">
+              <button
+                type="submit"
+                className="auth-submit"
+                disabled={submitting}
+                aria-busy={submitting}
+              >
+                {submitting && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
+                {submitting ? '正在登录…' : '登录学道'}
+              </button>
+            </div>
           </form>
 
-          <p className="mt-6 text-center text-sm text-text-muted">
-            还没有账号？{' '}
-            <Link to="/register" className="font-bold text-primary hover:underline">创建账号</Link>
-          </p>
-        </Card>
+          <div className="auth-meta auth-rise auth-delay-6">
+            <span>
+              还没有账号？{' '}
+              <Link to="/register" className="auth-link font-medium">
+                创建账号
+              </Link>
+            </span>
+            {resetEnabled && (
+              <Link to="/forgot-password" className="auth-link">
+                忘记密码
+              </Link>
+            )}
+          </div>
+        </div>
       </section>
     </main>
   )

@@ -153,22 +153,30 @@ class SiliconFlow(Tiku):
         return None
 
     def _init_tiku(self):
-        # 从配置文件读取参数
-        self.api_endpoint = assert_public_endpoint(
-            self._conf.get("siliconflow_endpoint", "https://api.siliconflow.cn/v1/chat/completions")
-        )
-        self.api_key = self._conf["siliconflow_key"]
-        self.model_name = self._conf.get("siliconflow_model", "deepseek-ai/DeepSeek-V3")
-        raw_proxy = self._conf.get("http_proxy")
+        # 从配置文件读取参数。缺 key 时禁用本 provider，避免整条刷课任务崩溃。
+        conf = self._conf or {}
+        raw_endpoint = str(
+            conf.get("siliconflow_endpoint") or conf.get("endpoint") or "https://api.siliconflow.cn/v1/chat/completions"
+        ).strip()
+        raw_key = str(conf.get("siliconflow_key") or conf.get("key") or conf.get("token") or "").strip()
+        raw_model = str(conf.get("siliconflow_model") or conf.get("model") or "deepseek-ai/DeepSeek-V3").strip()
+        if not raw_key:
+            self.DISABLE = True
+            logger.error("硅基流动题库缺少 API Key，已禁用。请填写 Token/密钥。")
+            return
+        self.api_endpoint = assert_public_endpoint(raw_endpoint)
+        self.api_key = raw_key
+        self.model_name = raw_model
+        raw_proxy = conf.get("http_proxy")
         self.http_proxy = assert_public_endpoint(raw_proxy) if raw_proxy else None
         self.min_interval = _parse_non_negative_finite(
-            self._conf.get("min_interval_seconds", _DEFAULT_MIN_INTERVAL),
+            conf.get("min_interval_seconds", _DEFAULT_MIN_INTERVAL),
             _DEFAULT_MIN_INTERVAL,
         )
-        self.timeout = int(self._conf.get("timeout", 30))
-        self.max_retries = _parse_attempt_count(self._conf.get("max_retries", _DEFAULT_MAX_RETRIES))
+        self.timeout = int(conf.get("timeout", 30))
+        self.max_retries = _parse_attempt_count(conf.get("max_retries", _DEFAULT_MAX_RETRIES))
         self.retry_delay = _parse_non_negative_finite(
-            self._conf.get("retry_delay", _DEFAULT_RETRY_DELAY),
+            conf.get("retry_delay", _DEFAULT_RETRY_DELAY),
             _DEFAULT_RETRY_DELAY,
         )
         self._session = requests.Session()

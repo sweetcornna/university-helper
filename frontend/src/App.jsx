@@ -15,6 +15,7 @@ import { isAuthenticated } from './utils/auth'
 
 const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const ChaoxingSignin = lazy(() => import('./pages/ChaoxingSignin'))
 const ChaoxingFanya = lazy(() => import('./pages/ChaoxingFanya'))
@@ -37,6 +38,10 @@ function RuntimeRoutes() {
           <Route
             path="/register"
             element={isLocal ? <Navigate to="/dashboard" replace /> : <Register />}
+          />
+          <Route
+            path="/forgot-password"
+            element={isLocal ? <Navigate to="/dashboard" replace /> : <ForgotPassword />}
           />
           <Route
             element={

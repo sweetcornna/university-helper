@@ -56,6 +56,19 @@ directory, so run later commands from there.
 | `--no-tls` | with `--domain`, skip the nginx template |
 | `-y`, `--yes` | answer yes to every prompt |
 
+> **`--build` requires BuildKit.** The root `.dockerignore` excludes `frontend/` (the backend
+> image has no use for it), but `Dockerfile.web` copies `frontend/package.json`. CI resolves
+> that with a per-Dockerfile ignore file — `Dockerfile.web.dockerignore` — which **BuildKit**
+> picks up automatically for `-f Dockerfile.web` builds. The legacy builder only ever reads
+> `.dockerignore`, so the web image fails with
+> `COPY failed: ... frontend/package.json: file does not exist`. Install the buildx component
+> and enable BuildKit for the build:
+>
+> ```bash
+> sudo apt-get install -y docker-buildx      # Debian/Ubuntu; or docker-buildx-plugin from Docker's repo
+> DOCKER_BUILDKIT=1 bash scripts/deploy_server.sh --build --host <ip> -y
+> ```
+
 Without `--domain` or `--host`, the site is only reachable locally at `http://localhost:8080`.
 With `--host` and no `--allowed-hosts`, an empty `ALLOWED_HOSTS` is filled with the server's own
 IPv4 addresses (Linux only).
@@ -202,6 +215,43 @@ docker-compose -p university-helper \
 
 ---
 
+## ⚠️ Database Migrations — REQUIRED on every existing deployment
+
+**`database/*.sql` runs ONLY on an empty Postgres data directory.** Nothing in
+`Dockerfile.server`, the compose files, or the deploy workflow runs Alembic, so
+on any server whose volume already has data, **new tables do not appear until you
+run the migration by hand.**
+
+This repo has **two** migration branches (`main_db` and `tenant_db`), so an
+unqualified head target is ambiguous. Always branch-qualify:
+
+```bash
+# Main database (users, rate_limit_counters, email_verification_codes)
+docker compose -f docker-compose.server.yml exec app alembic upgrade main_db@head
+
+# Tenant databases (per-user todos/attachments/sessions)
+docker compose -f docker-compose.server.yml exec app python scripts/migrate_tenants.py
+```
+
+All migrations use idempotent DDL, so re-running is safe.
+
+### Before turning on `EMAIL_VERIFICATION_ENABLED`
+
+Registration codes and password reset store rows in `email_verification_codes`,
+which is created by migration `003`. Run
+
+```bash
+docker compose -f docker-compose.server.yml exec app alembic upgrade main_db@head
+```
+
+**before** setting `EMAIL_VERIFICATION_ENABLED=true`. If the flag is on and the
+table is missing, `/api/v1/auth/send-code` and `/api/v1/auth/reset-password`
+answer **503 `邮箱验证服务未初始化，请联系管理员执行数据库迁移`** and the app log
+carries `email_verification_codes table is missing; run 'alembic upgrade
+main_db@head' against the main database`.
+
+---
+
 ## Deploying a Hotfix (small code change)
 
 This is the only supported way to ship ongoing changes. The script's production defaults are
@@ -345,7 +395,8 @@ AGE_RECIPIENT=age1xxxxxx... ./scripts/db_backup.sh
 # - dumps pg_dumpall through age → /opt/backups/university-helper/uh-<stamp>.sql.gz.age
 # - refuses to write plaintext .env snapshots unless ALLOW_UNENCRYPTED=1
 
-# Alembic migrations (idempotent baselines; the heads are independent)
+# Alembic migrations (idempotent baselines). ALWAYS branch-qualified — there are
+# two branches (main_db / tenant_db) and a bare `upgrade head` is ambiguous.
 # Shared users/rate-limit schema in main_db:
 docker-compose -p university-helper \
   -f docker-compose.server.yml -f docker-compose.newhost.yml exec app \
@@ -467,6 +518,18 @@ app、postgres 和 web，等 `/health` 通过，并确认数据库已经可以�
 | `--build` | 从源码构建镜像，不从 GHCR 拉取 |
 | `--no-tls` | 与 `--domain` 同用时，不生成 nginx 模板 |
 | `-y`, `--yes` | 所有提示都回答 yes |
+
+> **`--build` 需要 BuildKit。** 根目录的 `.dockerignore` 排除了 `frontend/`（后端镜像用不到），
+> 而 `Dockerfile.web` 要 `COPY frontend/package.json`。CI 靠的是 **BuildKit 会为
+> `-f Dockerfile.web` 自动选用同名忽略文件** `Dockerfile.web.dockerignore`；而 legacy builder
+> 只读 `.dockerignore`，于是 web 镜像会以
+> `COPY failed: ... frontend/package.json: file does not exist` 失败。装上 buildx 组件并
+> 显式启用 BuildKit 即可：
+>
+> ```bash
+> sudo apt-get install -y docker-buildx      # Debian/Ubuntu；或 Docker 源里的 docker-buildx-plugin
+> DOCKER_BUILDKIT=1 bash scripts/deploy_server.sh --build --host <ip> -y
+> ```
 
 不带 `--domain` 或 `--host` 时，站点只能在本机通过 `http://localhost:8080` 访问。
 带 `--host` 但没带 `--allowed-hosts` 时，如果 `ALLOWED_HOSTS` 为空，脚本会填入本机的
@@ -599,6 +662,40 @@ app 容器只在创建时读取 `.env`。改了值之后要重建它：
 docker-compose -p university-helper \
   -f docker-compose.server.yml -f docker-compose.newhost.yml up -d app
 ```
+
+---
+
+## ⚠️ 数据库迁移 —— 老部署必须手动执行
+
+**`database/*.sql` 只会在 Postgres 数据目录为空时执行。** `Dockerfile.server`、
+各 compose 文件、部署流水线都**不会**运行 Alembic，所以只要数据卷里已经有数据，
+**新表就不会自动出现，必须手动跑迁移。**
+
+本仓库有 **两条** 迁移分支（`main_db` 与 `tenant_db`），因此不带分支的 head
+目标是有歧义的，务必带上分支名：
+
+```bash
+# 主库（users、rate_limit_counters、email_verification_codes）
+docker compose -f docker-compose.server.yml exec app alembic upgrade main_db@head
+
+# 各租户库（每个用户的 todos/attachments/sessions）
+docker compose -f docker-compose.server.yml exec app python scripts/migrate_tenants.py
+```
+
+所有迁移都使用幂等 DDL，重复执行是安全的。
+
+### 开启 `EMAIL_VERIFICATION_ENABLED` 之前
+
+注册验证码与找回密码会写入 `email_verification_codes` 表，该表由迁移 `003` 创建。
+在把 `EMAIL_VERIFICATION_ENABLED` 置为 `true` **之前**，先执行：
+
+```bash
+docker compose -f docker-compose.server.yml exec app alembic upgrade main_db@head
+```
+
+若开关已打开但表不存在，`/api/v1/auth/send-code` 与 `/api/v1/auth/reset-password`
+会返回 **503 `邮箱验证服务未初始化，请联系管理员执行数据库迁移`**，同时应用日志会打印
+`email_verification_codes table is missing; run 'alembic upgrade main_db@head' against the main database`。
 
 ---
 

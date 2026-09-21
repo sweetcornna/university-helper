@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -269,6 +270,31 @@ async def app_exception_handler(request: Request, exc: AppException):
             "message": str(exc),
         },
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """422 body without the rejected input echoed back.
+
+    FastAPI's default handler serializes `exc.errors()` verbatim, and under
+    pydantic v2 every entry carries an "input" key holding the value that failed
+    validation — for /auth/reset-password and /auth/register that is the
+    PLAINTEXT PASSWORD, returned in the HTTP response. "ctx" can carry the same
+    value inside the originating exception, so it goes too.
+
+    Only "loc"/"msg"/"type" survive, which is the shape frontend/src/utils/api.js
+    already renders (`formatDetail` joins `loc` and `msg` per entry), so the SPA
+    keeps showing the same Chinese validation messages.
+    """
+    detail = [
+        {
+            "loc": list(error.get("loc", ())),
+            "msg": error.get("msg", ""),
+            "type": error.get("type", ""),
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.exception_handler(Exception)

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, StringConstraints, ValidationError, field
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.dependencies import get_current_user_id
-from app.services.course.chaoxing.signin import signin_manager
+from app.services.course.chaoxing.signin import QR_SESSION_NOT_FOUND, signin_manager
 from app.services.course.chaoxing.task_admission import TaskAdmissionError
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,13 @@ class _ChaoxingCredentials(BaseModel):
 
 
 class _ChaoxingPhotoPayload(_ChaoxingCredentials):
+    # The sign-in and task routes may omit the password: the server then reuses
+    # the stored session bound to `username` (see
+    # ChaoxingSigninManager._resolve_client). The username stays required — it
+    # is what binds a reused cookie jar to an account, and adopting a jar
+    # without it could silently act as a different Chaoxing account.
+    # ChaoxingLoginRequest keeps min_length=1: it IS the password path.
+    password: Annotated[str, StringConstraints(max_length=512)] = ""
     photo_base64: str | None = None
     photo: str | None = None
 
@@ -471,6 +478,77 @@ async def chaoxing_login(
     }
 
 
+@router.get("/session")
+async def chaoxing_session(user_id: str = Depends(get_current_user_id)):
+    """Report whether a stored Chaoxing session is usable. Never returns cookies."""
+    state = await _run_blocking(signin_manager.get_session_state, user_id)
+    return {
+        "active": bool(state.get("active")),
+        "username": state.get("username"),
+        "expires_at": state.get("expires_at"),
+    }
+
+
+@router.delete("/session")
+async def chaoxing_drop_session(user_id: str = Depends(get_current_user_id)):
+    await _run_blocking(signin_manager.drop_session, user_id)
+    return {"status": "success"}
+
+
+def _qr_response(result: dict[str, Any]) -> dict[str, Any]:
+    """Shape a manager QR result for the SPA.
+
+    An unknown session id and one belonging to another user are both reported
+    404 by the manager, so this cannot distinguish — and does not leak — which.
+    """
+    qr_status = str(result.get("qr_status") or "failed")
+    if qr_status == QR_SESSION_NOT_FOUND:
+        raise HTTPException(status_code=404, detail="二维码登录会话不存在或已过期")
+    return {
+        "session_id": result.get("session_id") or "",
+        "status": qr_status,
+        "message": result.get("message") or "",
+        "qr_code": result.get("qr_code"),
+        "qr_content_type": result.get("qr_content_type") or "",
+        "username": result.get("username"),
+    }
+
+
+@router.post("/qr-login")
+async def chaoxing_qr_login(user_id: str = Depends(get_current_user_id)):
+    """Start a 学习通 QR-code login and return the first image.
+
+    The image comes back as base64 PNG in ``qr_code``; the SPA renders it as a
+    data URI and then polls the status route below.
+    """
+    result = await _run_blocking(signin_manager.start_qr_login, user_id)
+    if result.get("qr_status") == "failed" and not result.get("session_id"):
+        # Nothing was created, so there is no session id to poll: this is
+        # upstream refusing to hand out a QR, not a client error.
+        raise HTTPException(status_code=502, detail=result.get("message") or "无法生成二维码")
+    return _qr_response(result)
+
+
+@router.get("/qr-login/{session_id}")
+async def chaoxing_qr_login_status(session_id: str, user_id: str = Depends(get_current_user_id)):
+    """Poll one QR login.
+
+    ``status`` is one of ``pending`` / ``scanned`` / ``success`` / ``failed``.
+    A refreshed ``qr_code`` rides along when the previous code expired, so the
+    browser can keep showing a scannable image without a new round trip.
+    """
+    result = await _run_blocking(signin_manager.poll_qr_login, user_id, session_id)
+    return _qr_response(result)
+
+
+@router.delete("/qr-login/{session_id}")
+async def chaoxing_qr_login_cancel(session_id: str, user_id: str = Depends(get_current_user_id)):
+    dropped = await _run_blocking(signin_manager.cancel_qr_login, user_id, session_id)
+    if not dropped:
+        raise HTTPException(status_code=404, detail="二维码登录会话不存在或已过期")
+    return {"status": "success"}
+
+
 @router.get("/courses")
 async def chaoxing_courses(user_id: str = Depends(get_current_user_id)):
     courses = await _run_blocking(signin_manager.get_courses, user_id)
@@ -479,6 +557,17 @@ async def chaoxing_courses(user_id: str = Depends(get_current_user_id)):
         "message": "ok",
         "data": courses,
         "courses": courses,
+    }
+
+
+@router.get("/courses/grouped")
+async def chaoxing_grouped_courses(user_id: str = Depends(get_current_user_id)):
+    groups = await _run_blocking(signin_manager.get_grouped_courses, user_id)
+    return {
+        "status": "success",
+        "message": "Grouped courses loaded",
+        "data": groups,
+        "groups": groups,
     }
 
 

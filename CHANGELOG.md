@@ -6,6 +6,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- SMTP email delivery (`app/core/mailer.py`) and an email verification-code
+  service (`app/services/email_verification.py`) backed by a new
+  `email_verification_codes` table in the main database. Codes are stored as
+  SHA-256 hashes, expire after 10 minutes, are single-use, are compared in
+  constant time, and lock out after 5 failed attempts.
+- `GET /auth/config`, `POST /auth/send-code` and `POST /auth/reset-password`
+  endpoints, plus an optional `code` field on `POST /auth/register`. All are
+  gated behind `EMAIL_VERIFICATION_ENABLED`, which defaults to false so
+  existing deploys and the local desktop profile are unaffected.
+- A password-reset flow in the SPA at `/forgot-password`.
+
+- A durable, account-bound Chaoxing login session. The cookie jar is stored
+  Fernet-encrypted through `task_store` (kind `chaoxing_session`) instead of as
+  plaintext under `/tmp`, which in production is a tmpfs wiped on every
+  container restart, and carries a rolling 7-day TTL. `GET`/`DELETE
+  /chaoxing/session` let the SPA skip the credential form and switch accounts.
+- `GET /chaoxing/courses/grouped`, which preserves the Chaoxing course-folder
+  each course was listed under so the SPA can group them. The flat
+  `/chaoxing/courses` response is unchanged.
+- 学习通 QR-code login (`POST` / `GET` / `DELETE /chaoxing/qr-login`), as an
+  alternative to typing the password. The server drives the passport QR flow
+  and hands back a base64 PNG, so the SPA renders it directly and needs no QR
+  generation library. An expired code is replaced in place, and a confirmed
+  scan produces the same stored session a password login does.
+
+### Fixed
+- A reused Chaoxing session was never checked against the account it belonged
+  to, so after switching Chaoxing accounts a task would silently run on the
+  previous one — enumerating its courses and submitting quiz answers there,
+  without the newly supplied password ever being sent. Stored sessions are now
+  bound to their Chaoxing username, and an unbound record is refused rather
+  than adopted.
+- Starting a task required a password even when a valid stored session existed,
+  which made the persisted login unreachable. The password is now optional when
+  a session bound to that account exists; the username is still mandatory.
+- The OCR image fetch read the legacy shared `/tmp/cookies.json`, a cross-user
+  contamination path left over from the per-user cookie split. It no longer
+  sends cookies at all.
+- 学习通签到 never asked the server whether a Chaoxing session already existed,
+  so a login made on 学习通泛雅 was invisible to it and the password had to be
+  retyped. Two causes: every sign-in route declared `password` as required, and
+  `sign_once` / `sign_class_once` / `_run_task_worker` began with a full
+  password login per action. Sign-in routes now accept an empty password and
+  reuse the session bound to the supplied username
+  (`ChaoxingSigninManager._resolve_client`).
+
+### Changed
+- Redesigned the sign-in, registration and password-reset pages around
+  Apple's marketing-site visual language: a dedicated auth palette for light
+  and dark themes, an Apple/PingFang SC system font stack, a two-column
+  layout, and an ambient chapter-progress animation that respects
+  `prefers-reduced-motion`.
+
 ## [1.4.7] - 2026-09-16
 
 ### Fixed

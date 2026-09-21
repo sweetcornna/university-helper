@@ -77,6 +77,35 @@ const deferred = () => {
   return { promise, resolve, reject }
 }
 
+/**
+ * Route mocked API replies by ENDPOINT, not by call order.
+ *
+ * The hook probes `GET /chaoxing/session` once on mount (the shared-session
+ * work), which shifts every positional `mockImplementationOnce` chain by one.
+ * `routes` maps an endpoint fragment to responders consumed in order; the last
+ * one repeats. Anything unrouted gets a benign payload, and an unrouted session
+ * probe reports "no stored session" so the credential form behaves as before.
+ */
+const routeApi = (routes = {}) => {
+  const queues = new Map(
+    Object.entries(routes).map(([fragment, responders]) => [fragment, [...responders]])
+  )
+  api.mockImplementation((endpoint) => {
+    const path = String(endpoint)
+    for (const [fragment, queue] of queues) {
+      if (!path.includes(fragment) || queue.length === 0) continue
+      const responder = queue.length > 1 ? queue.shift() : queue[0]
+      return responder()
+    }
+    if (path.includes('/chaoxing/session')) return Promise.resolve({ active: false })
+    return Promise.resolve({ status: true, data: [] })
+  })
+}
+
+/** Calls made to a given endpoint fragment, in order. */
+const callsTo = (fragment) =>
+  api.mock.calls.filter(([endpoint]) => String(endpoint).includes(fragment))
+
 describe('useAuthentication course refresh errors', () => {
   beforeEach(() => {
     api.mockReset()
@@ -128,7 +157,7 @@ describe('useAuthentication course refresh errors', () => {
   test('keeps the submitted credential snapshot through a successful course load', async () => {
     const login = deferred()
     const courses = deferred()
-    api.mockImplementationOnce(() => login.promise).mockImplementationOnce(() => courses.promise)
+    routeApi({ '/chaoxing/login': [() => login.promise], '/chaoxing/courses': [() => courses.promise] })
 
     const user = userEvent.setup()
     renderAuthentication()
@@ -145,8 +174,15 @@ describe('useAuthentication course refresh errors', () => {
       login.resolve({ status: true })
       await login.promise
     })
-    await waitFor(() => expect(api).toHaveBeenCalledTimes(2))
-    expect(JSON.parse(api.mock.calls[0][1].body)).toEqual({ username: 'user-a', password: 'pass-a' })
+    // Count only the endpoints under test: the mount-time session probe is a
+    // third call and is not what this test is about.
+    await waitFor(() =>
+      expect(callsTo('/chaoxing/login').length + callsTo('/chaoxing/courses').length).toBe(2)
+    )
+    expect(JSON.parse(callsTo('/chaoxing/login')[0][1].body)).toEqual({
+      username: 'user-a',
+      password: 'pass-a',
+    })
 
     await act(async () => {
       courses.resolve({ courses: [{ courseId: 'course-a', name: '课程 A' }] })
@@ -159,7 +195,7 @@ describe('useAuthentication course refresh errors', () => {
 
   test('does not restore submitted credentials after a failed login', async () => {
     const login = deferred()
-    api.mockImplementationOnce(() => login.promise)
+    routeApi({ '/chaoxing/login': [() => login.promise] })
 
     const user = userEvent.setup()
     renderAuthentication()
@@ -180,9 +216,12 @@ describe('useAuthentication course refresh errors', () => {
 
   test('clears a previous error and updates the notice after a later successful refresh', async () => {
     const courses = [{ courseId: 'course-2', name: '大学英语' }]
-    api
-      .mockRejectedValueOnce(new Error('第一次刷新失败'))
-      .mockResolvedValueOnce({ courses })
+    routeApi({
+      '/chaoxing/courses': [
+        () => Promise.reject(new Error('第一次刷新失败')),
+        () => Promise.resolve({ courses }),
+      ],
+    })
 
     const user = userEvent.setup()
     renderAuthentication()
@@ -198,9 +237,12 @@ describe('useAuthentication course refresh errors', () => {
   })
 
   test('clears a previous notice when a later refresh fails', async () => {
-    api
-      .mockResolvedValueOnce({ courses: [{ courseId: 'course-3', name: '操作系统' }] })
-      .mockRejectedValueOnce(new Error('第二次刷新失败'))
+    routeApi({
+      '/chaoxing/courses': [
+        () => Promise.resolve({ courses: [{ courseId: 'course-3', name: '操作系统' }] }),
+        () => Promise.reject(new Error('第二次刷新失败')),
+      ],
+    })
 
     const user = userEvent.setup()
     renderAuthentication()
@@ -219,7 +261,7 @@ describe('useAuthentication course refresh errors', () => {
     const second = deferred()
     const coursesA = [{ courseId: 'course-a', name: '旧课程' }]
     const coursesB = [{ courseId: 'course-b', name: '新课程' }]
-    api.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+    routeApi({ '/chaoxing/courses': [() => first.promise, () => second.promise] })
 
     const user = userEvent.setup()
     renderAuthentication()
@@ -250,7 +292,7 @@ describe('useAuthentication course refresh errors', () => {
     const first = deferred()
     const second = deferred()
     const coursesB = [{ courseId: 'course-b', name: '新课程' }]
-    api.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+    routeApi({ '/chaoxing/courses': [() => first.promise, () => second.promise] })
 
     const user = userEvent.setup()
     renderAuthentication()
@@ -275,10 +317,10 @@ describe('useAuthentication course refresh errors', () => {
     const loginCourses = deferred()
     const manualRefresh = deferred()
     const coursesB = [{ courseId: 'course-b', name: '新课程' }]
-    api
-      .mockImplementationOnce(() => login)
-      .mockImplementationOnce(() => loginCourses.promise)
-      .mockImplementationOnce(() => manualRefresh.promise)
+    routeApi({
+      '/chaoxing/login': [() => login],
+      '/chaoxing/courses': [() => loginCourses.promise, () => manualRefresh.promise],
+    })
 
     const user = userEvent.setup()
     renderAuthentication()
@@ -306,7 +348,7 @@ describe('useAuthentication course refresh errors', () => {
 
   test('does not render again when a pending course load settles after unmount', async () => {
     const pending = deferred()
-    api.mockImplementationOnce(() => pending.promise)
+    routeApi({ '/chaoxing/courses': [() => pending.promise] })
     let renderCount = 0
     const HarnessWithRenderCount = () => {
       renderCount += 1

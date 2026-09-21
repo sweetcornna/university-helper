@@ -297,6 +297,34 @@ class AuthService:
             )
             return cur.fetchone()
 
+    def email_exists(self, email: str) -> bool:
+        """Synchronous DB block — must be called from a worker thread.
+
+        `email` MUST already be canonical (lowercased/stripped). `users.email` is
+        a case-sensitive VARCHAR, so the request schemas normalize at the edge
+        (`app.schemas.auth.normalize_email`) and every comparison below — here,
+        _fetch_login_row, _update_password_row — relies on that.
+
+        Only ever used to decide whether a verification code is worth sending;
+        callers must not turn the result into a distinguishable response on the
+        password-reset path (see the send-code handler).
+        """
+        with get_db_session() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM users WHERE email = %s", (email,))
+            return cur.fetchone() is not None
+
+    def _update_password_row(self, email: str, password_hash: str) -> bool:
+        """Synchronous DB block — must be called from a worker thread.
+
+        `email` MUST already be canonical — see email_exists.
+        """
+        with get_db_session() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET password_hash = %s WHERE email = %s",
+                (password_hash, email),
+            )
+            return cur.rowcount > 0
+
     async def login_user(self, email: str, password: str) -> dict:
         # Both the DB roundtrip and bcrypt verification are blocking; offload
         # so the event loop stays responsive.
@@ -312,3 +340,20 @@ class AuthService:
         if not row or not password_ok:
             raise ValueError("Invalid credentials")
         return self._build_auth_response(row["id"], row["tenant_db_name"])
+
+    async def reset_password(self, email: str, new_password: str) -> None:
+        """Overwrite the password hash for an already-verified email.
+
+        The caller MUST have consumed a valid reset code for this address first
+        — nothing here re-authenticates the user. Strength is re-checked because
+        the schema caps length in characters while bcrypt truncates at 72
+        *bytes*; only _validate_password_strength enforces the byte cap.
+        """
+        self._validate_password_strength(new_password)
+        password_hash = await asyncio.to_thread(hash_password, new_password)
+        updated = await asyncio.to_thread(self._update_password_row, email, password_hash)
+        if not updated:
+            # The code verified, so it really was issued for this address; the
+            # row must have been deleted in between. Say so rather than
+            # reporting a success that changed nothing.
+            raise ValueError("账号不存在，请重新注册")

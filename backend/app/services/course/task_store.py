@@ -16,6 +16,18 @@ _SENSITIVE_FIELDS: tuple[str, ...] = (
     "password",
     "user_password",
     "third_party_password",
+    # A persisted Chaoxing cookie jar (stored as a JSON string) is a full
+    # credential — strictly stronger than the password, because it authenticates
+    # with neither a password prompt nor MFA. It is encrypted at rest exactly
+    # like the stored passwords, and dropped rather than persisted in plaintext
+    # if encryption fails.
+    "chaoxing_cookies",
+    # Saved Chaoxing task preferences carry the user's answer-bank credentials:
+    # the 题库 token and the AI provider API key. Both are third-party secrets, so
+    # they are encrypted at rest here and dropped rather than persisted in
+    # plaintext if encryption fails. See chaoxing/preferences.py.
+    "tiku_token",
+    "ai_key",
 )
 # Nested containers that may hold credentials. We recurse one level into them.
 _SENSITIVE_CONTAINERS: tuple[str, ...] = ("credentials",)

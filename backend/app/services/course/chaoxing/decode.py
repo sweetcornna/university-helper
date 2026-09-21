@@ -25,7 +25,6 @@ from api.logger import logger
 
 from ..common.ocr import is_vision_ocr_enabled, vision_ocr
 from .config import GlobalConst as gc
-from .cookies import use_cookies
 from .font_decoder import FontDecoder
 
 try:
@@ -613,10 +612,12 @@ def _ocr_image_to_text(img_url: str) -> str:
     session = None
     resp = None
     try:
-        # 使用带登录 Cookie 的会话下载图片，避免 403
+        # 这里没有任何用户上下文（decode_questions_info 只拿到 HTML），因此不能读取
+        # cookie。旧实现调用 use_cookies() 会读到全局共享的 /tmp/cookies.json，
+        # 在多用户部署下等于拿别人的登录态去下载图片（跨用户污染）。
+        # 现在改为 fail closed：不带 cookie 下载，遇到 403 时放弃 OCR。
         session = requests.Session()
         session.headers.update(gc.HEADERS)
-        session.cookies.update(use_cookies())
 
         # 对超星图片域名补充一个简单 Referer，进一步降低 403 概率
         extra_headers = {}

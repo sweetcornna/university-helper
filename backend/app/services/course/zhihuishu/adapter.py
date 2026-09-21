@@ -13,7 +13,7 @@ from .learning import ZhihuishuLearning
 
 logger = logging.getLogger(__name__)
 UNEXPECTED_TASK_ERROR_PREFIX = "Unexpected task failure"
-TASK_CONFLICT_DETAIL = "An active task already exists for this user"
+TASK_CONFLICT_DETAIL = "已有任务正在运行，请先点「停止」结束后再开始新任务。"
 ACTIVE_TASK_STATUSES = frozenset({"pending", "running", "paused", "cancelling", "stopping"})
 THREAD_START_FAILURE_MESSAGE = (
     "Server cannot start a new background thread. Stop existing tasks and retry, "

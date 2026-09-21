@@ -15,6 +15,9 @@ import requests
 from bs4 import BeautifulSoup
 
 from ..task_store import task_store
+from . import qr_login
+from .auth_service import validate_session_cookies
+from .cookies import delete_session, load_session, save_session, session_metadata, touch_session
 from .task_admission import (
     MAX_ACTIVE_TASKS,
     TaskAlreadyActiveError,
@@ -69,6 +72,24 @@ BACKGROUND_TASK_ACTIVE_STATUSES = {"running", "pending", "paused", "cancelling",
 TASK_FEED_FALLBACK_LIMIT = 3
 TASK_PERSIST_FAILURE_MESSAGE = "Failed to persist signin task state"
 
+# Course-folder grouping. Folder 0 is the Chaoxing root ("ungrouped").
+ROOT_COURSE_FOLDER_ID = "0"
+ROOT_COURSE_FOLDER_NAME = "我的课程"
+# A folder name scraped from the interaction page longer than this is markup
+# noise, not a label — fall back to the generic name rather than fabricate one.
+_MAX_FOLDER_NAME_LENGTH = 60
+# How often a still-cached session may roll its TTL forward. Bounds the extra
+# storage writes to one per user per hour instead of one per request.
+SESSION_TOUCH_INTERVAL_SECONDS = 3600
+
+# How long an unfinished QR login is kept before it is swept. Comfortably
+# longer than the upstream QR's own lifetime, so the browser's poll always
+# finds its session; short enough that abandoned scans do not accumulate.
+QR_SESSION_TTL_SECONDS = 10 * 60
+# Reported for an unknown session id AND for one belonging to another user, so
+# the endpoint cannot be used to probe for live sessions. The route maps it 404.
+QR_SESSION_NOT_FOUND = "not_found"
+
 # Character windows used by the fallback parsers in _parse_courses to bound
 # how far apart related tokens (course id / class id / cpi / name) may appear
 # within the raw HTML+JS response before they are treated as unrelated.
@@ -84,6 +105,12 @@ _FALLBACK_HIDDEN_INPUT_AFTER = 1400
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _mask_user_id(user_id: str) -> str:
+    """Mask a platform user id so logs never carry a full identifier."""
+    value = str(user_id or "")
+    return f"{value[:4]}***" if len(value) > 4 else "***"
 
 
 def _extract_enc(qr_code: str) -> str:
@@ -121,6 +148,94 @@ def _as_filter_set(values: Any | None) -> set[str]:
         return set()
     source = values if isinstance(values, list) else [values]
     return {str(item or "").strip() for item in source if str(item or "").strip()}
+
+
+def _folder_fallback_name(folder_id: str) -> str:
+    """Generic label for a folder whose display name the markup didn't carry."""
+    if str(folder_id) == ROOT_COURSE_FOLDER_ID:
+        return ROOT_COURSE_FOLDER_NAME
+    return f"文件夹 {folder_id}"
+
+
+def _folder_display_name(node: Any) -> str:
+    """Extract a folder's display name from its interaction-page node.
+
+    Returns "" when the markup carries no usable label — callers fall back to a
+    generic name rather than invent one.
+    """
+    rename_input = node.select_one("input.rename-input, input[class*='rename']")
+    if rename_input:
+        value = str(rename_input.get("value") or "").strip()
+        if value:
+            return html.unescape(value)
+
+    candidates = [str(node.get("title") or "").strip()]
+    for child in node.select("[title]"):
+        candidates.append(str(child.get("title") or "").strip())
+    for candidate in candidates:
+        if candidate:
+            return html.unescape(candidate)
+
+    text = node.get_text(" ", strip=True)
+    if text and len(text) <= _MAX_FOLDER_NAME_LENGTH:
+        return html.unescape(text)
+    return ""
+
+
+def _extract_course_folders(content: str) -> list[dict[str, str]]:
+    """Parse ``{"id", "name"}`` for every course folder on the interaction page.
+
+    Names come from the folder markup where it carries one (the rename input /
+    title attribute / label text); ids found only inside script blobs keep the
+    generic fallback name.
+    """
+    names: dict[str, str] = {}
+
+    try:
+        soup = BeautifulSoup(content, "lxml")
+    except Exception:
+        soup = None
+
+    if soup is not None:
+        for node in soup.select("[fileid], [data-fileid]"):
+            folder_id = str(node.get("fileid") or node.get("data-fileid") or "").strip()
+            if not folder_id.isdigit():
+                continue
+            name = _folder_display_name(node)
+            if folder_id not in names or (name and not names[folder_id]):
+                names[folder_id] = name
+
+    for pattern in (
+        r'fileid=["\'](\d+)["\']',
+        r'data-fileid=["\'](\d+)["\']',
+        r'courseFolderId["\']?\s*[:=]\s*["\']?(\d+)["\']?',
+    ):
+        for match in re.finditer(pattern, content, flags=re.IGNORECASE):
+            names.setdefault(match.group(1), "")
+
+    return [{"id": folder_id, "name": name or _folder_fallback_name(folder_id)} for folder_id, name in names.items()]
+
+
+def group_courses_by_folder(courses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group folder-tagged courses, with the ungrouped (root) bucket last."""
+    groups: dict[str, dict[str, Any]] = {}
+    for course in courses:
+        folder_id = str(course.get("folderId") or ROOT_COURSE_FOLDER_ID)
+        group = groups.get(folder_id)
+        if group is None:
+            group = {
+                "id": folder_id,
+                "name": str(course.get("folderName") or "").strip() or _folder_fallback_name(folder_id),
+                "courses": [],
+            }
+            groups[folder_id] = group
+        group["courses"].append(course)
+
+    ordered = [group for folder_id, group in groups.items() if folder_id != ROOT_COURSE_FOLDER_ID]
+    root_group = groups.get(ROOT_COURSE_FOLDER_ID)
+    if root_group is not None:
+        ordered.append(root_group)
+    return ordered
 
 
 def _course_selector(course: dict[str, Any]) -> str:
@@ -338,18 +453,21 @@ class ChaoxingSigninClient:
         return html.unescape(name_match.group(1).strip())
 
     def get_courses(self) -> list[dict[str, Any]]:
-        course_folders = [0]
-        course_folders.extend(self._parse_course_folders())
+        course_folders: list[dict[str, str]] = [
+            {"id": ROOT_COURSE_FOLDER_ID, "name": ROOT_COURSE_FOLDER_NAME},
+            *self._parse_course_folders(),
+        ]
 
         seen_folders: set[str] = set()
         seen_courses: set[tuple[str, str]] = set()
         merged_courses: list[dict[str, Any]] = []
 
-        for folder_id in course_folders:
-            folder_key = str(folder_id)
+        for folder in course_folders:
+            folder_key = str(folder.get("id") or "")
             if not folder_key or folder_key in seen_folders:
                 continue
             seen_folders.add(folder_key)
+            folder_name = str(folder.get("name") or "") or _folder_fallback_name(folder_key)
 
             try:
                 resp = self.session.post(
@@ -373,30 +491,20 @@ class ChaoxingSigninClient:
                 if not course_id or not class_id or key in seen_courses:
                     continue
                 seen_courses.add(key)
+                # Keep the folder the course was actually listed under; the flat
+                # list keeps its shape, the grouped endpoint reads these two.
+                course["folderId"] = folder_key
+                course["folderName"] = folder_name
                 merged_courses.append(course)
 
         return merged_courses
 
-    def _parse_course_folders(self) -> list[str]:
+    def _parse_course_folders(self) -> list[dict[str, str]]:
         try:
             resp = self.session.get(INTERACTION_URL, timeout=12)
         except requests.RequestException:
             return []
-
-        content = resp.text or ""
-        seen: set[str] = set()
-        folders: list[str] = []
-        for pattern in (
-            r'fileid=["\'](\d+)["\']',
-            r'data-fileid=["\'](\d+)["\']',
-            r'courseFolderId["\']?\s*[:=]\s*["\']?(\d+)["\']?',
-        ):
-            for match in re.finditer(pattern, content, flags=re.IGNORECASE):
-                folder_id = match.group(1)
-                if folder_id not in seen:
-                    seen.add(folder_id)
-                    folders.append(folder_id)
-        return folders
+        return _extract_course_folders(resp.text or "")
 
     def _parse_courses(self, content: str) -> list[dict[str, Any]]:
         course_index: dict[tuple[str, str], int] = {}
@@ -1212,10 +1320,15 @@ class ChaoxingSigninManager:
     def __init__(self):
         self._lock = threading.Lock()
         self._clients: dict[str, ChaoxingSigninClient] = {}
+        self._session_touched_at: dict[str, float] = {}
         self._history: dict[str, list[dict[str, Any]]] = {}
         self._tasks: dict[str, dict[str, Any]] = {}
         self._loaded_task_users: set[str] = set()
         self._loaded_history_users: set[str] = set()
+        # In-flight QR logins, keyed by an opaque session id. Process-local on
+        # purpose: a half-finished scan is browser-tied and worthless after a
+        # restart, unlike the session it eventually produces.
+        self._qr_sessions: dict[str, dict[str, Any]] = {}
         self._restore_tasks_from_store()
         self._restore_history_from_store()
 
@@ -1223,22 +1336,348 @@ class ChaoxingSigninManager:
         client = ChaoxingSigninClient()
         result = client.login(username=username, password=password)
         if result.get("status"):
+            normalized_user_id = str(user_id or "").strip()
             with self._lock:
-                self._clients[user_id] = client
+                self._clients[normalized_user_id] = client
+                self._session_touched_at[normalized_user_id] = time.monotonic()
+            # Bound to the Chaoxing account that produced it, so a later login as
+            # a different account can never reuse this jar.
+            save_session(normalized_user_id, username, client.session.cookies.get_dict())
         return result
 
+    def _resolve_client(
+        self,
+        user_id: str,
+        username: str,
+        password: str,
+    ) -> tuple[ChaoxingSigninClient | None, dict[str, Any]]:
+        """Authenticate for one action, reusing the stored session when possible.
+
+        Returns ``(client, error)``. A supplied password always wins — it is an
+        explicit re-authentication, and it is what the form posts on first use.
+        Without one we fall back to the durable cookie session, which is the
+        whole point of persisting the login: switching between the 签到 and 泛雅
+        pages must not ask for the password again.
+
+        The username is REQUIRED in both branches. It is what binds a reused jar
+        to a Chaoxing account, so without it a jar belonging to a different
+        account could be adopted silently (cookies.load_session enforces the
+        match).
+        """
+        normalized_username = str(username or "").strip()
+        if not normalized_username:
+            return None, {"status": False, "message": "Missing username", "data": []}
+
+        if str(password or "").strip():
+            login_result = self.login(user_id, normalized_username, password)
+            if not login_result.get("status"):
+                return None, login_result
+        else:
+            try:
+                stored = load_session(user_id, expected_username=normalized_username)
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger.warning("load stored chaoxing session failed: user=%s err=%s", _mask_user_id(user_id), exc)
+                stored = None
+            if not stored:
+                # Deliberately actionable: the SPA re-shows the credential form
+                # on this message rather than dead-ending the action.
+                return None, {
+                    "status": False,
+                    "message": "学习通登录态已失效，请重新输入密码",
+                    "data": [],
+                }
+
+        client = self._get_client(user_id)
+        if client is None:
+            return None, {"status": False, "message": "Login state unavailable", "data": []}
+
+        # `self._clients` is keyed by platform user only, so a cached client can
+        # belong to a DIFFERENT Chaoxing account than the one just requested
+        # (switch accounts, then act, without re-entering a password). Confirm
+        # identity before acting as it.
+        resolved_username = str(client.username or "").strip()
+        if resolved_username and resolved_username != normalized_username:
+            return None, {
+                "status": False,
+                "message": "学习通登录态已失效，请重新输入密码",
+                "data": [],
+            }
+        return client, {}
+
     def _get_client(self, user_id: str) -> ChaoxingSigninClient | None:
+        normalized_user_id = str(user_id or "").strip()
         with self._lock:
-            return self._clients.get(user_id)
+            client = self._clients.get(normalized_user_id)
+        if client is not None:
+            self._maybe_touch_session(normalized_user_id)
+            return client
+        return self._rehydrate_client(normalized_user_id)
+
+    def _rehydrate_client(self, user_id: str) -> ChaoxingSigninClient | None:
+        """Rebuild a client from the durable session after a restart.
+
+        The stored jar is validated against Chaoxing before it is trusted (same
+        probe as the task-path cookie login). A jar that no longer authenticates
+        is deleted so the SPA falls back to the login form.
+        """
+        if not user_id:
+            return None
+        try:
+            stored = load_session(user_id)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.warning("load stored chaoxing session failed: user=%s err=%s", _mask_user_id(user_id), exc)
+            return None
+        if not stored:
+            return None
+
+        if not validate_session_cookies(stored.get("cookies") or {}):
+            logger.info("stored chaoxing session rejected upstream, dropping it: user=%s", _mask_user_id(user_id))
+            delete_session(user_id)
+            return None
+
+        client = ChaoxingSigninClient()
+        client.session.cookies.update(stored["cookies"])
+        client.username = str(stored.get("username") or "")
+        with self._lock:
+            existing = self._clients.get(user_id)
+            if existing is not None:
+                return existing
+            self._clients[user_id] = client
+            self._session_touched_at[user_id] = time.monotonic()
+        touch_session(user_id)
+        return client
+
+    def _maybe_touch_session(self, user_id: str) -> None:
+        """Roll the stored session's TTL forward, at most once per interval."""
+        if not user_id:
+            return
+        now = time.monotonic()
+        with self._lock:
+            last = self._session_touched_at.get(user_id)
+            if last is not None and now - last < SESSION_TOUCH_INTERVAL_SECONDS:
+                return
+            self._session_touched_at[user_id] = now
+        try:
+            touch_session(user_id)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.warning("refresh chaoxing session failed: user=%s err=%s", _mask_user_id(user_id), exc)
 
     def get_client(self, user_id: str) -> ChaoxingSigninClient | None:
         return self._get_client(user_id)
+
+    def get_session_state(self, user_id: str) -> dict[str, Any]:
+        """Session status for the SPA. Never exposes cookies.
+
+        Cheap by design: a cached client answers without any Chaoxing round-trip;
+        only a cache miss (i.e. after a restart) pays for one validation probe.
+        """
+        client = self._get_client(user_id)
+        if client is None:
+            return {"active": False, "username": None, "expires_at": None}
+        metadata = session_metadata(user_id) or {}
+        username = str(client.username or metadata.get("username") or "").strip()
+        return {
+            "active": True,
+            "username": username or None,
+            "expires_at": str(metadata.get("expires_at") or "") or None,
+        }
+
+    def drop_session(self, user_id: str) -> None:
+        """Forget the stored session ("switch account")."""
+        normalized_user_id = str(user_id or "").strip()
+        with self._lock:
+            self._clients.pop(normalized_user_id, None)
+            self._session_touched_at.pop(normalized_user_id, None)
+        delete_session(normalized_user_id)
+
+    # --- QR-code login ---------------------------------------------------------
+    #
+    # QR login is a second way to reach the SAME durable session a password
+    # login produces: the phone scan authenticates the jar, then we persist it
+    # exactly as login() does. Nothing downstream is QR-aware.
+
+    def _cleanup_qr_sessions(self) -> None:
+        """Sweep QR logins past their TTL. Called on every QR request."""
+        cutoff = time.monotonic() - QR_SESSION_TTL_SECONDS
+        with self._lock:
+            stale = [
+                session_id
+                for session_id, entry in self._qr_sessions.items()
+                if float(entry.get("created_at") or 0.0) < cutoff
+            ]
+            for session_id in stale:
+                self._qr_sessions.pop(session_id, None)
+
+    @staticmethod
+    def _qr_payload(qr: dict[str, Any]) -> dict[str, Any]:
+        """Base64-encode a QR image for transport.
+
+        The browser renders this as a data URI, so the app needs no QR
+        generation library (same approach as the Zhihuishu login).
+        """
+        return {
+            "qr_code": base64.b64encode(qr["image"]).decode("ascii"),
+            "qr_content_type": qr.get("content_type") or "image/png",
+        }
+
+    @staticmethod
+    def _qr_failure(message: str, session_id: str = "", qr_status: str = "failed") -> dict[str, Any]:
+        return {
+            "session_id": session_id,
+            "qr_status": qr_status,
+            "message": message,
+            "qr_code": None,
+            "qr_content_type": "",
+        }
+
+    def start_qr_login(self, user_id: str) -> dict[str, Any]:
+        """Begin a QR login and return the first image."""
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            return self._qr_failure("Missing user")
+        self._cleanup_qr_sessions()
+
+        client = ChaoxingSigninClient()
+        try:
+            qr = qr_login.create_qr_session(client.session)
+        except qr_login.ChaoxingQrError as exc:
+            return self._qr_failure(str(exc))
+
+        session_id = uuid4().hex
+        with self._lock:
+            self._qr_sessions[session_id] = {
+                "user_id": normalized_user_id,
+                "uuid": qr["uuid"],
+                "enc": qr["enc"],
+                "client": client,
+                "created_at": time.monotonic(),
+            }
+        return {
+            "session_id": session_id,
+            "qr_status": qr_login.QR_STATUS_PENDING,
+            "message": "请使用学习通 App 扫描二维码",
+            **self._qr_payload(qr),
+        }
+
+    def poll_qr_login(self, user_id: str, session_id: str) -> dict[str, Any]:
+        """Advance one QR login by one poll."""
+        normalized_user_id = str(user_id or "").strip()
+        normalized_session_id = str(session_id or "").strip()
+        self._cleanup_qr_sessions()
+
+        with self._lock:
+            entry = self._qr_sessions.get(normalized_session_id)
+        if entry is None or entry.get("user_id") != normalized_user_id:
+            return self._qr_failure("二维码登录会话不存在或已过期", normalized_session_id, QR_SESSION_NOT_FOUND)
+
+        client: ChaoxingSigninClient = entry["client"]
+        try:
+            state = qr_login.poll_qr_login(client.session, entry["uuid"], entry["enc"])
+        except qr_login.ChaoxingQrError as exc:
+            with self._lock:
+                self._qr_sessions.pop(normalized_session_id, None)
+            return self._qr_failure(str(exc), normalized_session_id)
+
+        if state == qr_login.QR_STATUS_EXPIRED:
+            return self._refresh_qr_session(normalized_session_id, entry)
+
+        if state in (qr_login.QR_STATUS_PENDING, qr_login.QR_STATUS_SCANNED):
+            return {
+                "session_id": normalized_session_id,
+                "qr_status": state,
+                "message": "已扫码，请在手机上确认" if state == qr_login.QR_STATUS_SCANNED else "等待扫码",
+                "qr_code": None,
+                "qr_content_type": "",
+            }
+
+        return self._complete_qr_login(normalized_user_id, normalized_session_id, client)
+
+    def _refresh_qr_session(self, session_id: str, entry: dict[str, Any]) -> dict[str, Any]:
+        """Mint a fresh QR in place for an expired one.
+
+        The browser keeps polling the same session id, so the replacement image
+        rides back on this response instead of costing another round trip.
+        """
+        client: ChaoxingSigninClient = entry["client"]
+        try:
+            qr = qr_login.create_qr_session(client.session)
+        except qr_login.ChaoxingQrError as exc:
+            with self._lock:
+                self._qr_sessions.pop(session_id, None)
+            return self._qr_failure(str(exc), session_id)
+
+        with self._lock:
+            entry["uuid"] = qr["uuid"]
+            entry["enc"] = qr["enc"]
+            entry["created_at"] = time.monotonic()
+        return {
+            "session_id": session_id,
+            "qr_status": qr_login.QR_STATUS_PENDING,
+            "message": "二维码已过期，已为你刷新，请重新扫描",
+            **self._qr_payload(qr),
+        }
+
+    def _complete_qr_login(self, user_id: str, session_id: str, client: ChaoxingSigninClient) -> dict[str, Any]:
+        """Persist a confirmed scan as the durable session."""
+        try:
+            profile = qr_login.fetch_profile(client.session)
+        except qr_login.ChaoxingQrError as exc:
+            with self._lock:
+                self._qr_sessions.pop(session_id, None)
+            return self._qr_failure(str(exc), session_id)
+
+        # ChaoxingSigninClient.uid reads the `_uid` cookie and every later
+        # sign-in request carries it, but the QR flow does not always set it —
+        # seed it from the profile rather than proceed with an empty uid.
+        if not client.session.cookies.get("_uid") and not client.session.cookies.get("UID"):
+            client.session.cookies.set("_uid", profile["uid"], domain=".chaoxing.com", path="/")
+
+        cookies = client.session.cookies.get_dict()
+        if not validate_session_cookies(cookies):
+            with self._lock:
+                self._qr_sessions.pop(session_id, None)
+            return self._qr_failure("扫码登录校验失败，请重试", session_id)
+
+        # Prefer the login name: it is what the user would otherwise type into
+        # the password form, and what a later passwordless request will send as
+        # `username` for load_session's account-binding check.
+        account = profile["uname"] or profile["name"] or profile["uid"]
+        client.username = account
+        client.account_name = profile["name"] or account
+        with self._lock:
+            self._clients[user_id] = client
+            self._session_touched_at[user_id] = time.monotonic()
+            self._qr_sessions.pop(session_id, None)
+        save_session(user_id, account, cookies)
+        logger.info("chaoxing qr login succeeded: user=%s", _mask_user_id(user_id))
+        return {
+            "session_id": session_id,
+            "qr_status": "success",
+            "message": "扫码登录成功",
+            "username": account,
+            "qr_code": None,
+            "qr_content_type": "",
+        }
+
+    def cancel_qr_login(self, user_id: str, session_id: str) -> bool:
+        """Forget an in-flight QR login. True when one was actually dropped."""
+        normalized_user_id = str(user_id or "").strip()
+        normalized_session_id = str(session_id or "").strip()
+        with self._lock:
+            entry = self._qr_sessions.get(normalized_session_id)
+            if entry is None or entry.get("user_id") != normalized_user_id:
+                return False
+            self._qr_sessions.pop(normalized_session_id, None)
+        return True
 
     def get_courses(self, user_id: str) -> list[dict[str, Any]]:
         client = self._get_client(user_id)
         if not client:
             return []
         return client.get_courses()
+
+    def get_grouped_courses(self, user_id: str) -> list[dict[str, Any]]:
+        return group_courses_by_folder(self.get_courses(user_id))
 
     def get_classes(self, user_id: str) -> list[dict[str, Any]]:
         client = self._get_client(user_id)
@@ -1400,13 +1839,9 @@ class ChaoxingSigninManager:
         course_id: str | None = None,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        login_result = self.login(user_id, username, password)
-        if not login_result.get("status"):
-            return login_result
-
-        client = self._get_client(user_id)
-        if client is None:
-            return {"status": False, "message": "Login state unavailable"}
+        client, error = self._resolve_client(user_id, username, password)
+        if error:
+            return error
 
         filters = [course_id] if course_id else None
         try:
@@ -1449,13 +1884,9 @@ class ChaoxingSigninManager:
         if not normalized_class_id:
             return {"status": False, "message": "class_id is required", "data": []}
 
-        login_result = self.login(user_id, username, password)
-        if not login_result.get("status"):
-            return login_result
-
-        client = self._get_client(user_id)
-        if client is None:
-            return {"status": False, "message": "Login state unavailable"}
+        client, error = self._resolve_client(user_id, username, password)
+        if error:
+            return error
 
         course_filters = [course_id] if course_id else None
         try:
@@ -1638,19 +2069,11 @@ class ChaoxingSigninManager:
             "code": payload.get("code"),
         }
 
-        login_result = self.login(user_id, username, password)
-        if not login_result.get("status"):
-            self._update_task(
-                task_id,
-                status="error",
-                message=login_result.get("message", "Login failed"),
-            )
-            self._append_task_log(task_id, f"Login failed: {login_result.get('message', '')}", "error")
-            return
-
-        client = self._get_client(user_id)
-        if client is None:
-            self._update_task(task_id, status="error", message="Login state unavailable")
+        client, error = self._resolve_client(user_id, username, password)
+        if error:
+            message = error.get("message", "Login failed")
+            self._update_task(task_id, status="error", message=message)
+            self._append_task_log(task_id, f"Login failed: {message}", "error")
             return
 
         self._append_task_log(task_id, "Login successful")

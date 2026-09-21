@@ -278,22 +278,38 @@ class AI(Tiku):
         return self._invoke_completion(messages)
 
     def _init_tiku(self):
-        self.endpoint = assert_public_endpoint(self._conf["endpoint"])
-        self.key = self._conf["key"]
-        self.model = self._conf["model"]
-        raw_proxy = self._conf.get("http_proxy")
+        # Accept a few common aliases so UI/API field names don't crash init.
+        conf = self._conf or {}
+        raw_endpoint = str(conf.get("endpoint") or conf.get("ai_endpoint") or conf.get("base_url") or "").strip()
+        raw_key = str(conf.get("key") or conf.get("ai_key") or conf.get("api_key") or "").strip()
+        raw_model = str(conf.get("model") or conf.get("ai_model") or "").strip()
+
+        if not raw_endpoint or not raw_key or not raw_model:
+            # Missing AI credentials must disable this provider, not crash the
+            # whole learning task (was: KeyError 'endpoint').
+            self.DISABLE = True
+            logger.error(
+                "AI 题库缺少 endpoint/key/model，已禁用 AI 答题。"
+                "请在前端「自定义 AI 供应商」填写请求地址、密钥和模型名。"
+            )
+            return
+
+        self.endpoint = assert_public_endpoint(raw_endpoint)
+        self.key = raw_key
+        self.model = raw_model
+        raw_proxy = conf.get("http_proxy")
         self.http_proxy = assert_public_endpoint(raw_proxy) if raw_proxy else None
         self.min_interval_seconds = _parse_non_negative_finite(
-            self._conf.get("min_interval_seconds", _DEFAULT_MIN_INTERVAL_SECONDS),
+            conf.get("min_interval_seconds", _DEFAULT_MIN_INTERVAL_SECONDS),
             _DEFAULT_MIN_INTERVAL_SECONDS,
         )
-        self.timeout = float(self._conf.get("timeout", 30))
-        self.max_retries = _parse_attempt_count(self._conf.get("max_retries", _DEFAULT_MAX_RETRIES))
+        self.timeout = float(conf.get("timeout", 30))
+        self.max_retries = _parse_attempt_count(conf.get("max_retries", _DEFAULT_MAX_RETRIES))
         self.retry_delay = _parse_non_negative_finite(
-            self._conf.get("retry_delay", _DEFAULT_RETRY_DELAY),
+            conf.get("retry_delay", _DEFAULT_RETRY_DELAY),
             _DEFAULT_RETRY_DELAY,
         )
-        self.disable_ssl_verify = str(self._conf.get("disable_ssl_verify", "false")).lower() in {
+        self.disable_ssl_verify = str(conf.get("disable_ssl_verify", "false")).lower() in {
             "1",
             "true",
             "yes",
@@ -301,7 +317,7 @@ class AI(Tiku):
             "y",
         }
         # 允许通过 ai_concurrency 配置最大同时在请求中的题目数量；缺省为 3
-        max_req_raw = self._conf.get("ai_concurrency")
+        max_req_raw = conf.get("ai_concurrency")
         try:
             self.max_active_requests = int(max_req_raw) if max_req_raw is not None else 3
         except (TypeError, ValueError):

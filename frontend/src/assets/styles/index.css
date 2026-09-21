@@ -20,6 +20,27 @@
     --color-danger-surface: 253 237 235;
     --color-warning: 190 87 38;
     --color-warning-surface: 255 240 230;
+
+    /* Auth-page palette (apple.com reference). Deliberately a separate
+       namespace from the --color-* tokens above: the sign-in surface has its
+       own art direction and must not drag the rest of the app with it. */
+    --auth-bg: 251 251 253;              /* #FBFBFD */
+    --auth-surface: 255 255 255;         /* #FFFFFF */
+    --auth-text: 29 29 31;               /* #1D1D1F */
+    /* Apple's secondary grey. #86868B (the display grey) is only 3.62:1 on
+       #FFFFFF, and every consumer here — labels, hints, the lede, placeholders,
+       the meta row — is body-sized text that must clear AA 4.5:1. #6E6E73
+       measures 5.07:1 on #FFFFFF and 4.91:1 on the #FBFBFD pitch column. */
+    --auth-muted: 110 110 115;           /* #6E6E73 */
+    --auth-accent: 0 113 227;            /* #0071E3 */
+    --auth-accent-solid: 0 113 227;      /* #0071E3 */
+    /* Text blue for copy sitting on a 10% accent tint: #0071E3 there is only
+       4.10:1. #0066CC is 4.81:1 on the tint and 5.57:1 on plain #FFFFFF. */
+    --auth-accent-ink: 0 102 204;        /* #0066CC */
+    /* Same story for the error block: #DC2626 on its own 10% tint is 4.14:1.
+       #C81E1E measures 4.87:1 on that tint. */
+    --auth-danger: 200 30 30;            /* #C81E1E */
+    --auth-hairline: 210 210 215;        /* #D2D2D7 */
   }
 
   .dark {
@@ -39,6 +60,21 @@
     --color-danger-surface: 86 39 43;
     --color-warning: 255 163 112;
     --color-warning-surface: 91 51 33;
+
+    /* Auth-page palette, dark. True black behind the pitch column the way
+       apple.com does it; --auth-accent lightens for text/links while
+       --auth-accent-solid holds so white-on-blue buttons still pass AA. */
+    --auth-bg: 0 0 0;                    /* #000000 */
+    --auth-surface: 29 29 31;            /* #1D1D1F */
+    --auth-text: 245 245 247;            /* #F5F5F7 */
+    /* Already compliant on this bg: 5.80:1 on #000000, 4.65:1 on #1D1D1F. */
+    --auth-muted: 134 134 139;           /* #86868B */
+    --auth-accent: 41 151 255;           /* #2997FF */
+    --auth-accent-solid: 0 113 227;      /* #0071E3 */
+    /* On dark the accent already reads on its own tint (4.88:1), so ink == accent. */
+    --auth-accent-ink: 41 151 255;       /* #2997FF */
+    --auth-danger: 248 113 113;          /* #F87171 */
+    --auth-hairline: 66 66 69;           /* #424245 */
   }
 
   html {
@@ -115,6 +151,243 @@
   .skip-link:focus-visible {
     transform: translateY(0);
   }
+
+  /* ---------------------------------------------------------------------
+   * Auth pages (login / register / forgot-password).
+   *
+   * These deliberately do NOT reuse .clay-* or the shared Button/Input/Card
+   * components: the sign-in surface has its own art direction, and the rest
+   * of the app depends on those components staying put.
+   * ------------------------------------------------------------------- */
+  .auth-page {
+    @apply min-h-screen w-full font-display text-[17px] leading-normal antialiased
+           bg-auth-bg text-auth-text
+           lg:grid lg:grid-cols-[55fr_45fr];
+  }
+
+  /* Left column — the thesis. Padding is deliberately tight below `sm`: on a
+     375x667 phone the stacked pitch used to push the login submit button below
+     the fold. The ambient bars are already `hidden sm:flex`. */
+  .auth-pitch {
+    @apply flex items-center px-6 pb-6 pt-8 sm:px-10 sm:pb-10 sm:pt-16 lg:px-14 lg:py-16 xl:px-20;
+  }
+
+  .auth-pitch__inner {
+    @apply w-full max-w-[34rem] lg:mx-auto;
+  }
+
+  .auth-eyebrow {
+    @apply text-[13px] font-medium tracking-[0.02em] text-auth-muted;
+  }
+
+  .auth-headline {
+    @apply mt-4 font-semibold tracking-[-0.025em] text-auth-text;
+    font-size: clamp(2rem, 5.2vw, 3.75rem);
+    line-height: 1.05;
+  }
+
+  .auth-lede {
+    @apply mt-3 max-w-[30rem] text-[15px] leading-relaxed text-auth-muted
+           sm:mt-5 sm:text-[17px];
+  }
+
+  /* Right column — the form, on the surface colour. */
+  .auth-panel {
+    @apply flex items-center justify-center border-t border-auth-hairline bg-auth-surface
+           px-6 pb-12 pt-8 sm:px-10 sm:pb-16 sm:pt-10 lg:border-l lg:border-t-0 lg:px-14 lg:py-16;
+  }
+
+  .auth-panel__inner {
+    @apply w-full max-w-[400px];
+  }
+
+  .auth-form-title {
+    @apply text-[28px] font-semibold tracking-[-0.02em] text-auth-text;
+  }
+
+  .auth-form-hint {
+    @apply mt-2 text-[15px] leading-relaxed text-auth-muted;
+  }
+
+  .auth-form {
+    @apply mt-6 space-y-4 sm:mt-8 sm:space-y-5;
+  }
+
+  .auth-field {
+    @apply space-y-2;
+  }
+
+  .auth-label {
+    @apply block text-[13px] font-medium text-auth-muted;
+  }
+
+  .auth-input {
+    @apply w-full rounded-xl border border-auth-hairline bg-auth-surface px-4 py-3 text-[17px]
+           text-auth-text placeholder:text-auth-muted
+           transition duration-200 ease-[cubic-bezier(0.28,0.11,0.32,1)]
+           focus:border-auth-accent focus:ring-4 focus:ring-auth-accent/20
+           disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .auth-code-row {
+    @apply flex items-stretch gap-2;
+  }
+
+  .auth-submit {
+    @apply w-full rounded-xl bg-auth-accent-solid px-5 py-3.5 text-[17px] font-medium text-white
+           inline-flex items-center justify-center gap-2
+           transition duration-200 ease-[cubic-bezier(0.28,0.11,0.32,1)]
+           hover:brightness-90 active:scale-[0.98]
+           focus-visible:ring-4 focus-visible:ring-auth-accent/35
+           disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:brightness-100
+           disabled:active:scale-100;
+  }
+
+  .auth-ghost-button {
+    @apply shrink-0 whitespace-nowrap rounded-xl border border-auth-hairline bg-transparent px-4
+           text-[15px] font-medium text-auth-accent-ink
+           transition duration-200 ease-[cubic-bezier(0.28,0.11,0.32,1)]
+           hover:bg-auth-accent-ink/10 active:scale-[0.98]
+           focus-visible:ring-4 focus-visible:ring-auth-accent/25
+           disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent
+           disabled:active:scale-100;
+  }
+
+  .auth-link {
+    @apply rounded text-auth-accent hover:underline;
+  }
+
+  /*
+   * Focus. The translucent rings above are decoration — at 20-35% alpha they
+   * cannot carry WCAG 2.2 SC 1.4.11 (3:1 for non-text indicators) on their own,
+   * least of all on the dark theme. The real indicator is a 2px solid accent
+   * outline offset 2px, which lands on the surrounding surface: #0071E3 on
+   * #FFFFFF is 4.70:1 and #2997FF on #1D1D1F is 5.58:1.
+   *
+   * Written as plain rules rather than `focus-visible:` utilities so the
+   * cascade order is explicit: `:focus` clears the UA ring, `:focus-visible`
+   * comes after and re-draws ours.
+   */
+  .auth-input:focus,
+  .auth-submit:focus,
+  .auth-ghost-button:focus,
+  .auth-link:focus {
+    outline: none;
+  }
+
+  .auth-input:focus-visible,
+  .auth-submit:focus-visible,
+  .auth-ghost-button:focus-visible,
+  .auth-link:focus-visible {
+    outline: 2px solid rgb(var(--auth-accent));
+    outline-offset: 2px;
+  }
+
+  .auth-meta {
+    @apply mt-8 flex flex-wrap items-center justify-between gap-3 text-[13px] text-auth-muted;
+  }
+
+  /* Both blocks are token-coloured text on a 10% tint of the same hue, so the
+     text token has to be dark enough to survive its own wash. Light mode:
+     #C81E1E on the danger tint is 4.87:1, #0066CC on the accent tint is 4.81:1.
+     Dark mode keeps #F87171 (5.27:1) and #2997FF (4.88:1). */
+  .auth-error {
+    @apply rounded-xl border border-auth-danger/30 bg-auth-danger/10 px-4 py-3 text-[15px]
+           leading-relaxed text-auth-danger;
+  }
+
+  .auth-notice {
+    @apply rounded-xl border border-auth-accent-ink/25 bg-auth-accent-ink/10 px-4 py-3 text-[15px]
+           leading-relaxed text-auth-accent-ink;
+  }
+
+  /* ---------------------------------------------------------------------
+   * Signature element: chapters completing on their own. Six thin tracks of
+   * varied widths, each slowly filling with the accent on a 14s loop offset
+   * 1.5s apart. scaleX (not width) keeps every frame on the compositor.
+   * ------------------------------------------------------------------- */
+  .auth-bars {
+    @apply mt-12 hidden w-full max-w-[26rem] flex-col gap-3 sm:flex lg:mt-16;
+  }
+
+  .auth-bar {
+    @apply h-1.5 overflow-hidden rounded-full bg-auth-hairline/60;
+  }
+
+  .auth-bar__fill {
+    @apply h-full w-full rounded-full bg-auth-accent animate-auth-chapter;
+    transform: scaleX(0);
+    transform-origin: left center;
+  }
+
+  .auth-bar:nth-child(1) {
+    width: 88%;
+  }
+  .auth-bar:nth-child(2) {
+    width: 62%;
+  }
+  .auth-bar:nth-child(3) {
+    width: 100%;
+  }
+  .auth-bar:nth-child(4) {
+    width: 46%;
+  }
+  .auth-bar:nth-child(5) {
+    width: 76%;
+  }
+  .auth-bar:nth-child(6) {
+    width: 54%;
+  }
+  .auth-bar:nth-child(7) {
+    width: 92%;
+  }
+
+  .auth-bar:nth-child(2) .auth-bar__fill {
+    animation-delay: 1.5s;
+  }
+  .auth-bar:nth-child(3) .auth-bar__fill {
+    animation-delay: 3s;
+  }
+  .auth-bar:nth-child(4) .auth-bar__fill {
+    animation-delay: 4.5s;
+  }
+  .auth-bar:nth-child(5) .auth-bar__fill {
+    animation-delay: 6s;
+  }
+  .auth-bar:nth-child(6) .auth-bar__fill {
+    animation-delay: 7.5s;
+  }
+  .auth-bar:nth-child(7) .auth-bar__fill {
+    animation-delay: 9s;
+  }
+
+  /* Staggered entrance. Delays are classes rather than inline styles so the
+     whole sequence stays in CSS. */
+  .auth-rise {
+    @apply animate-auth-rise;
+  }
+
+  .auth-delay-1 {
+    animation-delay: 70ms;
+  }
+  .auth-delay-2 {
+    animation-delay: 140ms;
+  }
+  .auth-delay-3 {
+    animation-delay: 210ms;
+  }
+  .auth-delay-4 {
+    animation-delay: 280ms;
+  }
+  .auth-delay-5 {
+    animation-delay: 350ms;
+  }
+  .auth-delay-6 {
+    animation-delay: 420ms;
+  }
+  .auth-delay-7 {
+    animation-delay: 490ms;
+  }
 }
 
 @layer utilities {
@@ -131,5 +404,42 @@
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * The global block above only collapses durations. That is not enough for the
+ * auth pages: the entrance stagger would still hold elements invisible for its
+ * animation-delay, and the ambient chapter bars would settle on their base
+ * `scaleX(0)` — empty tracks that read as broken. Kill both animations outright
+ * and paint a deliberate static state instead: a snapshot of chapters at mixed
+ * progress, which is what the loop is depicting anyway.
+ *
+ * Must stay after the global block and outside @layer so it wins on order.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .auth-rise {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+
+  .auth-bar__fill {
+    animation: none !important;
+    opacity: 1;
+    transform: scaleX(1);
+  }
+
+  .auth-bar:nth-child(2) .auth-bar__fill {
+    transform: scaleX(0.55);
+  }
+  .auth-bar:nth-child(3) .auth-bar__fill {
+    transform: scaleX(0.82);
+  }
+  .auth-bar:nth-child(5) .auth-bar__fill {
+    transform: scaleX(0.4);
+  }
+  .auth-bar:nth-child(6) .auth-bar__fill {
+    transform: scaleX(0.68);
   }
 }

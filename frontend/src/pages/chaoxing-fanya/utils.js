@@ -222,3 +222,52 @@ export const formatTaskTime = (value) => {
 
 
 }
+
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+
+// 1 -> 一, 11 -> 十一, 21 -> 二十一. Past 99 the numeral stops being readable,
+// so fall back to the plain number rather than emitting 三百二十一.
+export const toChineseNumeral = (value) => {
+  const n = Math.trunc(Number(value))
+  if (!Number.isFinite(n) || n < 1) return String(value ?? '')
+  if (n < 10) return CN_DIGITS[n]
+  if (n === 10) return '十'
+  if (n < 20) return `十${CN_DIGITS[n - 10]}`
+  if (n < 100) {
+    const tens = Math.floor(n / 10)
+    const ones = n % 10
+    return `${CN_DIGITS[tens]}十${ones ? CN_DIGITS[ones] : ''}`
+  }
+  return String(n)
+}
+
+// Chinese labels for a task's raw status. The raw value stays available
+// (rendered as a tooltip) so the English token is still recoverable for
+// debugging, but the list itself reads in the same language as the rest of the
+// page.
+const TASK_STATUS_TEXT = {
+  started: '运行中',
+  running: '运行中',
+  pending: '等待中',
+  paused: '已暂停',
+  cancelling: '取消中',
+  cancelled: '已取消',
+  completed: '已完成',
+  failed: '失败',
+  error: '失败',
+}
+
+export const taskStatusLabel = (status) => {
+  const raw = String(status || '').toLowerCase()
+  return TASK_STATUS_TEXT[raw] || raw || '未知'
+}
+
+// Newest first, each row carrying a sequential 任务一 / 任务二 / … label.
+//
+// The label exists because `task_id` is an opaque 32-char hex string: it says
+// nothing to a reader and a column of them is unreadable. Numbering follows the
+// displayed order so the labels run top-to-bottom in step with the list.
+export const labelTaskHistory = (taskHistory) =>
+  [...(taskHistory || [])]
+    .sort((a, b) => toTimestamp(b?.updated_at) - toTimestamp(a?.updated_at))
+    .map((task, index) => ({ ...task, label: `任务${toChineseNumeral(index + 1)}` }))

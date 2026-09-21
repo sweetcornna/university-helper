@@ -32,6 +32,28 @@ CREATE TABLE IF NOT EXISTS rate_limit_counters (
 CREATE INDEX IF NOT EXISTS ix_rate_limit_counters_window_start
     ON rate_limit_counters (window_start);
 
+-- Email verification codes for registration / password reset (app/services/
+-- email_verification.py writes/reads this against the MAIN pool). Same
+-- intentional duplication as rate_limit_counters above: alembic migration 003
+-- (main_db branch) creates it too, but the docker-entrypoint deploy path runs
+-- these *.sql files without necessarily running alembic. Both definitions are
+-- IF NOT EXISTS and identical, so they are mutually idempotent in any order.
+--
+-- PRIMARY KEY (email, scene) is deliberate: a resend UPSERTs over the previous
+-- code, which bounds rows per address and invalidates the old code.
+CREATE TABLE IF NOT EXISTS email_verification_codes (
+    email VARCHAR(255) NOT NULL,
+    scene VARCHAR(32) NOT NULL,
+    code_hash CHAR(64) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    last_sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (email, scene)
+);
+
+CREATE INDEX IF NOT EXISTS ix_email_verification_codes_expires_at
+    ON email_verification_codes (expires_at);
+
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN

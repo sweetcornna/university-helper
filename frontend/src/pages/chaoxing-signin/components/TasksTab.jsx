@@ -17,7 +17,14 @@ const getSignTypeIcon = (type) => {
   }
 }
 
-export default function TasksTab({ signinTasks, fetchSigninTasks, openBackgroundTask, executeSignin, executeClassSignin }) {
+export default function TasksTab({
+  signinTasks,
+  fetchSigninTasks,
+  openBackgroundTask,
+  executeSignin,
+  executeClassSignin,
+  refreshing = false,
+}) {
   return (
     <div className="mt-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -26,10 +33,12 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
           type="button"
           variant="secondary"
           aria-label="刷新签到任务"
-          className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
+          aria-busy={refreshing}
+          className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
           onClick={fetchSigninTasks}
+          disabled={refreshing}
         >
-          <RefreshCw className="h-4 w-4" aria-hidden="true" />
+          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
         </Button>
       </div>
       {signinTasks.length === 0 ? (

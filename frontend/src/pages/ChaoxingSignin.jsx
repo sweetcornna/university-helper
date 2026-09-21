@@ -56,6 +56,10 @@ import AutoSigninBanner from './chaoxing-signin/components/AutoSigninBanner'
 
 import { readLastUsername, saveLastUsername } from '../utils/chaoxingCreds'
 
+import useChaoxingSession from './chaoxing-shared/hooks/useChaoxingSession'
+import QrLoginPanel from './chaoxing-shared/components/QrLoginPanel'
+import { isChaoxingSessionLost, SESSION_LOST_MESSAGE } from './chaoxing-shared/utils'
+
 export default function ChaoxingSignin() {
   const navigate = useNavigate()
   const { isLocal } = useRuntimeProfile()
@@ -91,6 +95,12 @@ export default function ChaoxingSignin() {
   const [classSubjects, setClassSubjects] = useState([])
 
   const [signinTasks, setSigninTasks] = useState([])
+
+  // Drives the refresh spinner in the banner and the tasks tab. Both call
+  // fetchSigninTasks, and without this a manual refresh gave no feedback at
+  // all: an empty result renders exactly like the state before the click, so
+  // the button looked dead.
+  const [refreshingSigninTasks, setRefreshingSigninTasks] = useState(false)
 
   const [signinHistory, setSigninHistory] = useState([])
 
@@ -129,6 +139,11 @@ export default function ChaoxingSignin() {
 
     gesturePattern: '',
   }))
+
+  // Two ways to reach the same server-held session: type the password, or scan
+  // with the 学习通 App. Whichever is used, the session is persisted server-side
+  // and inherited by the 泛雅 page.
+  const [loginMode, setLoginMode] = useState('password')
 
   const photoPreviewUrl = useMemo(
     () => (form.photoFile ? URL.createObjectURL(form.photoFile) : ''),
@@ -232,6 +247,33 @@ export default function ChaoxingSignin() {
     [isLocal, redirectToLogin]
   )
 
+  // The shared session hooks speak `(path, options)`; this page's wrapper takes
+  // `(path, body, options)`. Adapt here rather than duplicate the hook.
+  const requestJson = useCallback(
+    (path, options = {}) => requestChaoxingApi(path, options.body ?? null, options),
+    [requestChaoxingApi]
+  )
+
+  // The 学习通 session lives on the server and is shared with the 泛雅 page.
+  // Probing it here is what stops this page asking for a password the user
+  // already gave on the other page — the bug this hook exists to fix.
+  const chaoxingSession = useChaoxingSession({ request: requestJson })
+
+  // Pulled out because they are stable useCallbacks, while the session object
+  // itself is rebuilt every render — using it directly as a dep would churn.
+  const { adoptSession, markSessionLost, switchAccount: switchChaoxingAccount } = chaoxingSession
+
+  // Adopt the session's account into the form: every action posts `username`,
+  // and the backend only reuses a session bound to that exact account
+  // (cookies.load_session). `prev` is returned unchanged when it already
+  // matches, so this cannot loop.
+  useEffect(() => {
+    const account = String(chaoxingSession.sessionUsername || '').trim()
+    if (!account) return
+    setForm((prev) => (prev.username === account ? prev : { ...prev, username: account }))
+    saveLastUsername(account)
+  }, [chaoxingSession.sessionUsername])
+
   // ── Hooks ──────────────────────────────────────────────────────────────────
 
   const backgroundTasks = useBackgroundTasks(requestChaoxingApi)
@@ -316,6 +358,8 @@ export default function ChaoxingSignin() {
   }, [requestChaoxingApi])
 
   const fetchSigninTasks = useCallback(async () => {
+    setRefreshingSigninTasks(true)
+
     try {
       const resp = await requestChaoxingApi('/tasks')
 
@@ -324,6 +368,8 @@ export default function ChaoxingSignin() {
       if (!redirectingRef.current) {
         console.error('Failed to fetch signin tasks:', err)
       }
+    } finally {
+      setRefreshingSigninTasks(false)
     }
   }, [requestChaoxingApi])
 
@@ -454,8 +500,14 @@ export default function ChaoxingSignin() {
       try {
         const username = form.username.trim()
 
-        if (!username || !form.password) {
-          throw new Error('请输入账号和密码。')
+        // The password exists only to CREATE a session; once the server holds
+        // one it is reused (signin_manager._resolve_client), so a page the user
+        // already logged in on must not ask for it again. The username stays
+        // required — it binds the reused session to an account.
+        if (!username || (!chaoxingSession.authenticated && !form.password)) {
+          throw new Error(
+            chaoxingSession.authenticated ? '缺少学习通账号，请重新登录。' : '请输入账号和密码。'
+          )
         }
 
         const { payload, signType } = buildSigninPayload(courseId, signTypeOverride)
@@ -476,7 +528,11 @@ export default function ChaoxingSignin() {
 
         return { status: true, message }
       } catch (err) {
-        const message = err.message || '签到失败。'
+        // A dead server-side session must send the user back to the credential
+        // form instead of failing opaquely.
+        const sessionLost = isChaoxingSessionLost(err)
+        if (sessionLost) markSessionLost()
+        const message = sessionLost ? SESSION_LOST_MESSAGE : err.message || '签到失败。'
 
         if (!silent) {
           setResultType('error')
@@ -494,9 +550,11 @@ export default function ChaoxingSignin() {
     [
       applySigninAssets,
       buildSigninPayload,
+      chaoxingSession.authenticated,
       fetchSigninHistory,
       form.password,
       form.username,
+      markSessionLost,
       requestChaoxingApi,
     ]
   )
@@ -508,6 +566,7 @@ export default function ChaoxingSignin() {
     setResultMessage,
     setSigninTasks,
     redirectingRef,
+    sessionActive: chaoxingSession.authenticated,
   })
   const {
     autoSignin,
@@ -750,8 +809,12 @@ export default function ChaoxingSignin() {
       try {
         const username = form.username.trim()
 
-        if (!username || !form.password) {
-          throw new Error('请输入账号和密码。')
+        // See executeSignin: a server-held session removes the password, never
+        // the username.
+        if (!username || (!chaoxingSession.authenticated && !form.password)) {
+          throw new Error(
+            chaoxingSession.authenticated ? '缺少学习通账号，请重新登录。' : '请输入账号和密码。'
+          )
         }
 
         if (!classOption?.classId) {
@@ -784,7 +847,10 @@ export default function ChaoxingSignin() {
 
         return { status: true, message }
       } catch (err) {
-        const message = err.message || '班级签到失败。'
+        // See executeSignin.
+        const sessionLost = isChaoxingSessionLost(err)
+        if (sessionLost) markSessionLost()
+        const message = sessionLost ? SESSION_LOST_MESSAGE : err.message || '班级签到失败。'
 
         if (!silent) {
           setResultType('error')
@@ -802,9 +868,11 @@ export default function ChaoxingSignin() {
     [
       applySigninAssets,
       buildSigninPayload,
+      chaoxingSession.authenticated,
       fetchSigninHistory,
       form.password,
       form.username,
+      markSessionLost,
       requestChaoxingApi,
     ]
   )
@@ -928,6 +996,33 @@ export default function ChaoxingSignin() {
     [applyDetectedTask, executeClassSignin, executeSignin]
   )
 
+  // A confirmed scan yields the same server-held session a password login does,
+  // so it is adopted exactly the same way.
+  const handleQrSuccess = useCallback(
+    (resp) => {
+      const account = String(resp?.username || '').trim()
+      if (account) saveLastUsername(account)
+      adoptSession(account)
+      setResultType('success')
+
+      setResultMessage('扫码登录成功。')
+
+      void fetchCourses()
+
+      void fetchClasses()
+    },
+    [adoptSession, fetchCourses, fetchClasses]
+  )
+
+  const handleSwitchAccount = async () => {
+    const result = await switchChaoxingAccount()
+    setResultType(result.ok ? 'success' : 'error')
+    setResultMessage(result.ok ? '已退出当前学习通账号，请使用新账号登录。' : result.error)
+    setForm((prev) => ({ ...prev, password: '' }))
+    setCourses([])
+    setClassSubjects([])
+  }
+
   const verifyAccount = async (event) => {
     event.preventDefault()
 
@@ -936,6 +1031,21 @@ export default function ChaoxingSignin() {
     const username = form.username.trim()
 
     const password = form.password
+
+    // With a session already held there is nothing to verify, and POST /login
+    // would fail regardless — it is the password path specifically. Report the
+    // existing session so the button never looks broken.
+    if (chaoxingSession.authenticated && !password) {
+      setResultType('success')
+
+      setResultMessage(`已登录学习通账号 ${username || chaoxingSession.sessionUsername}，无需再次验证。`)
+
+      void fetchCourses()
+
+      void fetchClasses()
+
+      return
+    }
 
     if (!username || !password) {
       setResultType('error')
@@ -981,10 +1091,12 @@ export default function ChaoxingSignin() {
 
     const password = form.password
 
-    if (!username || !password) {
+    // A server-held session removes the password requirement, never the
+    // username (see executeSignin).
+    if (!username || (!chaoxingSession.authenticated && !password)) {
       setResultType('error')
 
-      setResultMessage('请输入账号和密码。')
+      setResultMessage(chaoxingSession.authenticated ? '缺少学习通账号，请重新登录。' : '请输入账号和密码。')
 
       return
     }
@@ -1107,10 +1219,12 @@ export default function ChaoxingSignin() {
 
     const password = form.password
 
-    if (!username || !password) {
+    // A server-held session removes the password requirement, never the
+    // username (see executeSignin).
+    if (!username || (!chaoxingSession.authenticated && !password)) {
       setResultType('error')
 
-      setResultMessage('请输入账号和密码。')
+      setResultMessage(chaoxingSession.authenticated ? '缺少学习通账号，请重新登录。' : '请输入账号和密码。')
 
       return
     }
@@ -1326,16 +1440,90 @@ export default function ChaoxingSignin() {
 
           {activeTab === 'signin' && (
             <div id="cx-panel-signin" role="tabpanel" aria-labelledby="cx-tab-signin" tabIndex="0" className="mt-6 space-y-4">
-              <AutoSigninBanner
-                signinTasks={signinTasks}
-                form={form}
-                submitting={submitting}
-                onApplyTask={applyDetectedTask}
-                onApplyAndSubmit={applyAndSubmitDetectedTask}
-                onRefresh={fetchSigninTasks}
-              />
+              {/* Nothing in here can work without a 学习通 session: the tasks
+                  come from the server-held cookie jar, and with none the
+                  endpoint answers with an empty list rather than an error, so
+                  the banner would offer a refresh that can never find
+                  anything. The credential form below is the useful surface
+                  until then. */}
+              {chaoxingSession.authenticated && (
+                <AutoSigninBanner
+                  signinTasks={signinTasks}
+                  form={form}
+                  submitting={submitting}
+                  onApplyTask={applyDetectedTask}
+                  onApplyAndSubmit={applyAndSubmitDetectedTask}
+                  onRefresh={fetchSigninTasks}
+                  refreshing={refreshingSigninTasks}
+                />
+              )}
 
-              <form className="grid grid-cols-1 gap-4 md:grid-cols-2" onSubmit={verifyAccount}>
+              {chaoxingSession.authenticated && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/30 bg-surface/60 px-4 py-3">
+                  <p className="text-sm text-text">
+                    已登录学习通账号
+                    <span className="mx-1 font-semibold">
+                      {chaoxingSession.sessionUsername || form.username || '（已保存的账号）'}
+                    </span>
+                    <span className="block text-xs text-text-muted sm:mt-1">
+                      登录态由服务器保存，签到与泛雅两页通用，期间无需再次输入密码。
+                    </span>
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={handleSwitchAccount}
+                    disabled={chaoxingSession.switchLoading}
+                    aria-busy={chaoxingSession.switchLoading}
+                    className="min-h-[44px] cursor-pointer rounded-lg border border-border px-4 text-sm text-text/80 transition duration-200 hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {chaoxingSession.switchLoading ? '切换中...' : '切换账号'}
+                  </button>
+                </div>
+              )}
+
+              {!chaoxingSession.authenticated && (
+                <div
+                  className="inline-flex rounded-xl border border-border p-1"
+                  role="tablist"
+                  aria-label="登录方式"
+                >
+                  {[
+                    { key: 'password', label: '账号密码' },
+                    { key: 'qr', label: '扫码登录' },
+                  ].map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      role="tab"
+                      aria-selected={loginMode === tab.key}
+                      onClick={() => setLoginMode(tab.key)}
+                      className={`min-h-[40px] cursor-pointer rounded-lg px-4 text-sm font-medium transition-colors ${
+                        loginMode === tab.key
+                          ? 'bg-primary text-white'
+                          : 'text-text-muted hover:bg-surface-hover'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {loginMode === 'qr' && !chaoxingSession.authenticated && (
+                <div className="rounded-xl border border-border/30 bg-surface/60 p-4">
+                  <QrLoginPanel chaoxingRequest={requestJson} onSuccess={handleQrSuccess} />
+                </div>
+              )}
+
+              {/* `hidden` rather than unmounting: the form keeps whatever the
+                  user already chose (courses, sign type) while they try 扫码. */}
+              <form
+                className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${
+                  loginMode === 'qr' && !chaoxingSession.authenticated ? 'hidden' : ''
+                }`}
+                onSubmit={verifyAccount}
+              >
                 <Input
                   id="cx-username"
                   label="账号 / 手机号"
@@ -1349,18 +1537,22 @@ export default function ChaoxingSignin() {
                   required
                 />
 
-                <Input
-                  id="cx-password"
-                  label="密码"
-                  type="password"
-                  name="cx-password"
-                  autoComplete="current-password"
-                  value={form.password}
-                  onChange={(event) =>
-                    setForm((prev) => ({ ...prev, password: event.target.value }))
-                  }
-                  required
-                />
+                {/* No password to enter while the server holds a session — it
+                    is only needed to CREATE one. */}
+                {!chaoxingSession.authenticated && (
+                  <Input
+                    id="cx-password"
+                    label="密码"
+                    type="password"
+                    name="cx-password"
+                    autoComplete="current-password"
+                    value={form.password}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, password: event.target.value }))
+                    }
+                    required
+                  />
+                )}
 
                 <div className="md:col-span-2">
                   <Select
@@ -1948,6 +2140,7 @@ export default function ChaoxingSignin() {
               <TasksTab
                 signinTasks={signinTasks}
                 fetchSigninTasks={fetchSigninTasks}
+                refreshing={refreshingSigninTasks}
                 openBackgroundTask={(tid) =>
                   openBackgroundTask(tid, {
                     setResultType,
