@@ -17,8 +17,11 @@ MAX_ACTIVE_TASKS = 64
 MAX_TASK_RECORDS = 256
 TASK_RECORD_TTL_SECONDS = 2 * 60 * 60
 
-TASK_ALREADY_ACTIVE_DETAIL = "An active task already exists for this user"
-TASK_CAPACITY_DETAIL = "Task capacity reached; retry later"
+# Surfaced to the user verbatim — the SPA shows `detail` as-is — so these
+# follow the rest of the API's 4xx copy and are written in Chinese, naming the
+# control the user actually has to reach for.
+TASK_ALREADY_ACTIVE_DETAIL = "已有任务正在运行，请先点「停止」结束后再开始新任务。"
+TASK_CAPACITY_DETAIL = "当前运行中的任务数已达上限，请稍后再试。"
 
 
 class TaskAdmissionError(RuntimeError):
