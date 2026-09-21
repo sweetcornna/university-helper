@@ -1,5 +1,5 @@
 /* University Helper · 展示页「一夜」动效
-   滚动 = 22:00 → 06:00；GSAP 未加载时整页保持静态可读。 */
+   滚动 = 22:00 → 06:00；GSAP 或 ScrollTrigger 未加载时整页保持静态可读。 */
 (function () {
   'use strict';
 
@@ -26,9 +26,29 @@
     starsBox.appendChild(frag);
   }
 
-  if (!window.gsap) return; // CDN 失效：保持静态页面
-  gsap.registerPlugin(ScrollTrigger);
-  document.documentElement.classList.add('js-anim');
+  function initCopyButtons() {
+    document.querySelectorAll('.copy-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var text = btn.getAttribute('data-copy') || '';
+        navigator.clipboard.writeText(text).then(function () {
+          btn.textContent = '已复制 ✓';
+          btn.classList.add('copied');
+          setTimeout(function () {
+            btn.textContent = '复制';
+            btn.classList.remove('copied');
+          }, 1800);
+        });
+      });
+    });
+  }
+
+  var gsap = window.gsap;
+  var ScrollTrigger = window.ScrollTrigger;
+  var canAnimate = Boolean(gsap && ScrollTrigger);
+  if (canAnimate) {
+    gsap.registerPlugin(ScrollTrigger);
+    document.documentElement.classList.add('js-anim');
+  }
 
   var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -165,6 +185,9 @@
   window.addEventListener('scroll', onNightScroll, { passive: true });
   window.addEventListener('resize', onNightScroll, { passive: true });
   onNightScroll();
+  initCopyButtons();
+
+  if (!canAnimate) return; // CDN 失效：保持静态页面
 
   if (reduced) {
     /* 减弱动效：全部呈现最终状态，仅保留滚动联动的时钟天色 */
@@ -374,18 +397,4 @@
   /* ---------- 03:50 跑马灯 ---------- */
   gsap.to('#marquee-track', { xPercent: -50, repeat: -1, ease: 'none', duration: 36 });
 
-  /* ---------- 复制按钮 ---------- */
-  document.querySelectorAll('.copy-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var text = btn.getAttribute('data-copy') || '';
-      navigator.clipboard.writeText(text).then(function () {
-        btn.textContent = '已复制 ✓';
-        btn.classList.add('copied');
-        setTimeout(function () {
-          btn.textContent = '复制';
-          btn.classList.remove('copied');
-        }, 1800);
-      });
-    });
-  });
 })();

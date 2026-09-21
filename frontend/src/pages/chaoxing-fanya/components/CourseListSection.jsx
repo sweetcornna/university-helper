@@ -49,6 +49,21 @@ export default function CourseListSection({
   const [collapsed, setCollapsed] = useState(() => new Set())
   const panelPrefix = useId()
 
+  // Refresh hardening: only one course fetch in flight at a time, and no state
+  // write after unmount.
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshInFlightRef = useRef(false)
+  const mountedRef = useRef(true)
+
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+
   const loadGroups = useCallback(async () => {
     setGroupsLoading(true)
     try {
@@ -65,6 +80,20 @@ export default function CourseListSection({
       setGroupsLoading(false)
     }
   }, [])
+
+
+  const handleRefresh = async () => {
+    if (refreshInFlightRef.current) return
+
+    refreshInFlightRef.current = true
+    setRefreshing(true)
+    try {
+      await loadCourses()
+    } finally {
+      refreshInFlightRef.current = false
+      if (mountedRef.current) setRefreshing(false)
+    }
+  }
 
   useEffect(() => {
     void loadGroups()
@@ -169,12 +198,14 @@ export default function CourseListSection({
           <button
             type="button"
             className="min-h-[44px] cursor-pointer rounded-lg border border-border px-3 text-sm focus-visible:ring-2 focus-visible:ring-primary/40"
+            disabled={refreshing}
+            aria-busy={refreshing}
             onClick={() => {
-              void loadCourses()
+              void handleRefresh()
               void loadGroups()
             }}
           >
-            刷新课程
+            {refreshing ? '刷新中...' : '刷新课程'}
           </button>
 
         </div>
@@ -240,8 +271,13 @@ export default function CourseListSection({
                     </span>
                   </button>
 
+                  {/* The visible label stays short, but the accessible name has
+                      to name the group: there is one of these per section and
+                      they would otherwise be indistinguishable in the a11y tree
+                      (and from the page-level 全选课程 control). */}
                   <button
                     type="button"
+                    aria-label={`${groupAllSelected ? '取消全选' : '全选'} ${group.name}`}
                     className="min-h-[44px] cursor-pointer rounded-lg border border-border px-3 text-sm focus-visible:ring-2 focus-visible:ring-primary/40"
                     onClick={() => setGroupSelection(groupCourseIds, !groupAllSelected)}
                   >

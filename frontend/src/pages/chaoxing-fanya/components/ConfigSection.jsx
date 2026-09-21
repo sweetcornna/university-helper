@@ -13,11 +13,8 @@ const SUBMIT_MODES = [
   { value: 'save', label: '仅保存' },
 ]
 
-// User-facing names for the answer-source providers. The raw code (the `value`)
-// is kept as a sub-label so it stays unambiguous, but the cryptic identifiers
-// no longer face the student directly.
 const TIKU_PROVIDERS = [
-  { value: 'TikuYanxi', label: '言溪题库', hint: '通用题库（需 Token）', recommended: true },
+  { value: 'TikuYanxi', label: '言溪题库', hint: '通用题库（需 Token）' },
   { value: 'TikuGo', label: 'GO 题库', hint: '免费搜题源' },
   { value: 'TikuLike', label: 'Like 题库', hint: '备用题库（需 Token）' },
   { value: 'TikuAdapter', label: '题库适配器', hint: '自定义适配' },
@@ -47,15 +44,6 @@ function PillGroup({ label, options, value, onChange }) {
             >
               <span className="flex items-center gap-1.5">
                 {opt.label}
-                {opt.recommended && (
-                  <span
-                    className={`rounded-full px-1.5 py-0.5 text-[10px] ${
-                      active ? 'bg-surface/20 text-white' : 'bg-success-surface text-success'
-                    }`}
-                  >
-                    推荐
-                  </span>
-                )}
               </span>
               {opt.hint && (
                 <span className={`text-[11px] ${active ? 'text-white/70' : 'text-text-muted'}`}>
@@ -70,10 +58,6 @@ function PillGroup({ label, options, value, onChange }) {
   )
 }
 
-// Ordered multi-select pill group. `value` is an array of selected option
-// values in fallback order; clicking toggles membership (append on select,
-// remove on deselect). Selected pills show their ①②③ position so the user can
-// see the 多题库回退 order at a glance.
 function MultiPillGroup({ label, options, value, onChange, hint }) {
   const toggle = (optValue) => {
     if (value.includes(optValue)) {
@@ -82,7 +66,6 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
       onChange([...value, optValue])
     }
   }
-  const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨']
   return (
     <div role="group" aria-label={label}>
       <span className="mb-2 block text-sm font-medium text-text/80">{label}</span>
@@ -95,6 +78,7 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
               key={opt.value}
               type="button"
               aria-pressed={active}
+              aria-label={`${opt.label}${active ? `，回退顺序 ${order + 1}` : ''}`}
               onClick={() => toggle(opt.value)}
               className={`flex flex-col items-start rounded-xl border px-4 py-2 text-sm font-medium transition-all duration-200 cursor-pointer ${
                 active
@@ -103,17 +87,15 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
               }`}
             >
               <span className="flex items-center gap-1.5">
-                {active && <span className="text-xs">{CIRCLED[order] || `(${order + 1})`}</span>}
-                {opt.label}
-                {opt.recommended && (
+                {active && (
                   <span
-                    className={`rounded-full px-1.5 py-0.5 text-[10px] ${
-                      active ? 'bg-surface/20 text-white' : 'bg-success-surface text-success'
-                    }`}
+                    aria-hidden="true"
+                    className="inline-grid min-w-5 place-items-center rounded-full border border-current/40 px-1 text-[11px] leading-4"
                   >
-                    推荐
+                    {order + 1}
                   </span>
                 )}
+                {opt.label}
               </span>
               {opt.hint && (
                 <span className={`text-[11px] ${active ? 'text-white/70' : 'text-text-muted'}`}>
@@ -253,11 +235,11 @@ export default function ConfigSection({
 
         <div className="mt-4 space-y-4">
           <MultiPillGroup
-            label="题库来源（可多选，按点击顺序回退）"
+            label="题库来源（按选择顺序回退）"
             options={TIKU_PROVIDERS}
             value={tikuProvider}
             onChange={setTikuProvider}
-            hint="可选多个题库：前一个未命中时自动回退到下一个。例如「言溪 → GO 题库」。"
+            hint="前一个题库未命中时，按选择顺序回退到下一个。"
           />
 
           <div>

@@ -13,10 +13,22 @@ from .learning import ZhihuishuLearning
 
 logger = logging.getLogger(__name__)
 UNEXPECTED_TASK_ERROR_PREFIX = "Unexpected task failure"
+TASK_CONFLICT_DETAIL = "An active task already exists for this user"
+ACTIVE_TASK_STATUSES = frozenset({"pending", "running", "paused", "cancelling", "stopping"})
 THREAD_START_FAILURE_MESSAGE = (
     "Server cannot start a new background thread. Stop existing tasks and retry, "
     "or restart the service if the problem persists."
 )
+
+
+class ZhihuishuTaskConflictError(RuntimeError):
+    """Raised when a new task would replace an active Zhihuishu task."""
+
+    status_code = 409
+    detail = TASK_CONFLICT_DETAIL
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
 
 
 class ZhihuishuAdapter:
@@ -38,8 +50,12 @@ class ZhihuishuAdapter:
         self._task_state: dict[str, Any] | None = None
         self._tasks: dict[str, dict[str, Any]] = {}
 
-    def login_with_qr(self, qr_callback: Callable[[bytes], None]) -> dict:
-        cookies = self.auth.qr_login(qr_callback)
+    def login_with_qr(
+        self,
+        qr_callback: Callable[[bytes], None],
+        cancel_event: threading.Event | None = None,
+    ) -> dict:
+        cookies = self.auth.qr_login(qr_callback, cancel_event=cancel_event)
         self._init_services(cookies)
         return {"success": True, "cookies": cookies}
 
@@ -151,32 +167,44 @@ class ZhihuishuAdapter:
         if not self.learning:
             raise Exception("Not logged in")
 
+        # Reject immediately while the existing task is still active.  The
+        # second check below closes the race where another caller starts while
+        # this caller is loading the course videos.
+        with self._task_lock:
+            current_task = self._task_state
+            if current_task and str(current_task.get("status") or "").strip().lower() in ACTIVE_TASK_STATUSES:
+                raise ZhihuishuTaskConflictError()
+
         videos = self.get_videos(course_id)
-        task_id = uuid4().hex
         total = len(videos)
-        now = time.time()
-        task_state: dict[str, Any] = {
-            "task_id": task_id,
-            "course_id": course_id,
-            "status": "completed" if total == 0 else "running",
-            "message": "Task started" if total > 0 else "No videos found",
-            "created_at": now,
-            "updated_at": now,
-            "videos": videos,
-            "total": total,
-            "completed": 0,
-            "failed": 0,
-            "percentage": 0.0,
-            "current_video": None,
-            "estimated_time": None,
-            "paused": False,
-            "cancelled": False,
-            "speed": speed if speed > 0 else 1.0,
-            "auto_answer": bool(auto_answer),
-            "task_type": "course",
-        }
 
         with self._task_lock:
+            current_task = self._task_state
+            if current_task and str(current_task.get("status") or "").strip().lower() in ACTIVE_TASK_STATUSES:
+                raise ZhihuishuTaskConflictError()
+
+            task_id = uuid4().hex
+            now = time.time()
+            task_state: dict[str, Any] = {
+                "task_id": task_id,
+                "course_id": course_id,
+                "status": "completed" if total == 0 else "running",
+                "message": "Task started" if total > 0 else "No videos found",
+                "created_at": now,
+                "updated_at": now,
+                "videos": videos,
+                "total": total,
+                "completed": 0,
+                "failed": 0,
+                "percentage": 0.0,
+                "current_video": None,
+                "estimated_time": None,
+                "paused": False,
+                "cancelled": False,
+                "speed": speed if speed > 0 else 1.0,
+                "auto_answer": bool(auto_answer),
+                "task_type": "course",
+            }
             self._task_state = task_state
             self._tasks[task_id] = task_state
             self._config["speed"] = float(task_state["speed"])
@@ -185,7 +213,7 @@ class ZhihuishuAdapter:
         if total > 0:
             try:
                 threading.Thread(target=self._run_task_loop_guarded, args=(task_id,), daemon=True).start()
-            except RuntimeError as exc:
+            except Exception as exc:
                 self._mark_task_error(task_id, THREAD_START_FAILURE_MESSAGE)
                 raise RuntimeError(THREAD_START_FAILURE_MESSAGE) from exc
 
@@ -517,7 +545,7 @@ class ZhihuishuAdapter:
         ``self.answer.answer_question`` for any quiz questions embedded in the
         video DTO. Progress (completed/failed/percentage/current_video) is derived
         from the real platform responses rather than a fabricated timer. Pause,
-        resume, cancel, task-replacement and error handling are preserved.
+        resume, cancel, admission, and error handling are preserved.
 
         End-to-end verification requires live Zhihuishu credentials (unavailable
         here); unit tests in tests/unit/test_zhihuishu_adapter.py mock the HTTP
@@ -526,6 +554,7 @@ class ZhihuishuAdapter:
         current_index = 0
 
         while True:
+            should_wait_for_resume = False
             # --- Phase 1: under lock, decide what to do next & pick the video ---
             with self._task_lock:
                 if not self._task_state or self._task_state.get("task_id") != task_id:
@@ -550,19 +579,22 @@ class ZhihuishuAdapter:
                 if task.get("paused"):
                     task["status"] = "paused"
                     task["updated_at"] = time.time()
-                    time.sleep(0.3)
-                    continue
+                    should_wait_for_resume = True
+                else:
+                    current_video = videos[current_index]
+                    current_video["status"] = "learning"
+                    current_video["progress"] = 0
+                    task["current_video"] = current_video.get("title")
+                    task["status"] = "running"
+                    task["message"] = "Task is running"
+                    auto_answer = bool(task.get("auto_answer", True))
+                    video_id = current_video.get("id")
+                    questions = list(current_video.get("questions") or [])
+                    speed = float(task.get("speed") or 1.0)
 
-                current_video = videos[current_index]
-                current_video["status"] = "learning"
-                current_video["progress"] = 0
-                task["current_video"] = current_video.get("title")
-                task["status"] = "running"
-                task["message"] = "Task is running"
-                auto_answer = bool(task.get("auto_answer", True))
-                video_id = current_video.get("id")
-                questions = list(current_video.get("questions") or [])
-                speed = float(task.get("speed") or 1.0)
+            if should_wait_for_resume:
+                time.sleep(0.3)
+                continue
 
             # --- Phase 2: blocking platform call OUTSIDE the lock ---
             watch_ok = False

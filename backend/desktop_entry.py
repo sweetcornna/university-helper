@@ -15,8 +15,12 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import signal
 import socket
+import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -27,6 +31,10 @@ from cryptography.fernet import Fernet
 APP_NAME = "UniversityHelper"
 APP_AUTHOR = "cornna"
 TOKEN_PREFIX = "UH_BACKEND_LISTENING"
+# Set by the Tauri shell: the desktop process that owns this backend.
+PARENT_PID_ENV = "UH_PARENT_PID"
+PID_FILE_NAME = "uh-backend.pid"
+SIDECAR_NAME = "uh-backend"
 
 
 def app_data_dir() -> Path:
@@ -127,11 +135,222 @@ def configure_env(port: int, dist: str) -> None:
     # SQLite build boots without any Postgres credentials.
 
 
+# ---- process lifetime -------------------------------------------------------
+#
+# The sidecar is a PyInstaller --onefile build: a small bootloader process starts
+# the real Python process as its child. When the desktop shell stops the sidecar
+# it can only kill the bootloader, which does not take the Python child with it
+# (SIGKILL cannot be forwarded; Windows has no job object here). Without the
+# guards below every quit or update left a backend running on its old port,
+# holding local.db and still executing background tasks.
+
+
+def pid_alive(pid: int) -> bool:
+    """True when a process with this PID exists. Never signals the process."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        synchronize = 0x00100000
+        query_limited = 0x1000
+        wait_timeout = 0x102
+        error_access_denied = 5
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(synchronize | query_limited, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == error_access_denied
+        try:
+            return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+        finally:
+            kernel32.CloseHandle(handle)
+    # os.kill(pid, 0) only probes on POSIX (on Windows it would terminate).
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _exit_now() -> None:
+    os._exit(0)
+
+
+def _graceful_exit() -> None:
+    """Ask uvicorn to shut down; force the exit if it has not after 5 s."""
+    if sys.platform == "win32":
+        _exit_now()
+        return
+    timer = threading.Timer(5.0, _exit_now)
+    timer.daemon = True
+    timer.start()
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def is_orphaned(parent_pid: int | None, initial_ppid: int, current_ppid: int) -> bool:
+    if parent_pid is not None and not pid_alive(parent_pid):
+        return True
+    if sys.platform != "win32" and current_ppid != initial_ppid:
+        return True  # the bootloader died and we were re-parented
+    return initial_ppid > 1 and not pid_alive(initial_ppid)
+
+
+def start_parent_watchdog(
+    parent_pid: int | None,
+    poll_seconds: float = 1.0,
+    on_orphan: Callable[[], None] = _graceful_exit,
+) -> threading.Thread:
+    initial_ppid = os.getppid()
+
+    def watch() -> None:
+        while True:
+            time.sleep(poll_seconds)
+            if is_orphaned(parent_pid, initial_ppid, os.getppid()):
+                on_orphan()
+                return
+
+    thread = threading.Thread(target=watch, name="uh-parent-watchdog", daemon=True)
+    thread.start()
+    return thread
+
+
+def _process_image(pid: int) -> str:
+    """Best-effort executable path/name of a process ('' when unknown)."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return ""
+            try:
+                size = wintypes.DWORD(32768)
+                buffer = ctypes.create_unicode_buffer(size.value)
+                if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                    return buffer.value
+                return ""
+            finally:
+                kernel32.CloseHandle(handle)
+        if sys.platform.startswith("linux"):
+            return os.readlink(f"/proc/{pid}/exe")
+        result = subprocess.run(
+            ["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True, timeout=5, check=False
+        )
+        return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+
+
+def _is_sidecar_image(image: str) -> bool:
+    name = Path(image.replace("\\", "/")).name.lower()
+    return name in {SIDECAR_NAME, f"{SIDECAR_NAME}.exe"}
+
+
+def _terminate(pid: int) -> None:
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+        if handle:
+            try:
+                kernel32.TerminateProcess(handle, 0)
+            finally:
+                kernel32.CloseHandle(handle)
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(30):
+            if not pid_alive(pid):
+                return
+            time.sleep(0.1)
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def reap_stale_backend(pid_file: Path) -> bool:
+    """Stop a backend left behind by a previous run. Returns True if one was stopped.
+
+    Only a process recorded in our PID file, still alive, whose desktop parent is
+    gone and whose executable is the sidecar, is terminated.
+    """
+    try:
+        record = json.loads(pid_file.read_text(encoding="utf-8"))
+        pid = int(record["pid"])
+        parent = record.get("parent_pid")
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if pid == os.getpid() or not pid_alive(pid):
+        return False
+    if parent is not None and pid_alive(int(parent)):
+        return False  # another running desktop instance still owns it
+    if not _is_sidecar_image(_process_image(pid)):
+        return False
+    _terminate(pid)
+    return True
+
+
+def reap_orphaned_sidecars() -> list[int]:
+    """POSIX: stop sidecar processes re-parented to init (left over by 1.4.x)."""
+    if sys.platform == "win32":
+        return []
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,comm="], capture_output=True, text=True, timeout=5, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    stopped: list[int] = []
+    for line in result.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        pid, ppid, command = int(parts[0]), int(parts[1]), parts[2]
+        if ppid == 1 and pid != os.getpid() and _is_sidecar_image(command):
+            _terminate(pid)
+            stopped.append(pid)
+    return stopped
+
+
+def write_pid_file(pid_file: Path, parent_pid: int | None) -> None:
+    try:
+        pid_file.write_text(json.dumps({"pid": os.getpid(), "parent_pid": parent_pid}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def parent_pid_from_env() -> int | None:
+    raw = os.environ.get(PARENT_PID_ENV, "").strip()
+    return int(raw) if raw.isdigit() else None
+
+
+def guard_process_lifetime() -> None:
+    """Clean up earlier backends, then exit whenever the desktop shell goes away."""
+    parent_pid = parent_pid_from_env()
+    if parent_pid is None and not getattr(sys, "frozen", False):
+        return  # plain `python desktop_entry.py` during development
+    pid_file = app_data_dir() / PID_FILE_NAME
+    reap_stale_backend(pid_file)
+    if getattr(sys, "frozen", False):
+        reap_orphaned_sidecars()
+    write_pid_file(pid_file, parent_pid)
+    if parent_pid is not None:
+        start_parent_watchdog(parent_pid)
+
+
 def main() -> None:
     # answer_base.py reads ./config.ini relative to CWD; chdir into app-data so an
     # optional user config.ini resolves and stray writes land in a writable dir.
     # The cookies/cache/sqlite paths set above are ABSOLUTE, so chdir is safe.
     os.chdir(app_data_dir())
+    guard_process_lifetime()
 
     dist = frontend_dist()
     port = free_port()

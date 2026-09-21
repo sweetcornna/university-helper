@@ -18,6 +18,15 @@ from ..task_store import task_store
 from . import qr_login
 from .auth_service import validate_session_cookies
 from .cookies import delete_session, load_session, save_session, session_metadata, touch_session
+from .task_admission import (
+    MAX_ACTIVE_TASKS,
+    TaskAlreadyActiveError,
+    TaskCapacityError,
+    cleanup_task_records,
+    count_active_tasks,
+    is_active_status,
+    sort_task_records,
+)
 
 try:
     from Crypto.Cipher import AES, DES
@@ -55,12 +64,13 @@ PAN_UPLOAD_URL = "https://pan-yz.chaoxing.com/upload"
 logger = logging.getLogger(__name__)
 SIGNIN_TASK_KIND = "chaoxing_signin"
 SIGNIN_HISTORY_KIND = "chaoxing_signin_history"
-INTERRUPTED_TASK_STATUSES = {"running", "pending", "paused", "cancelling"}
+INTERRUPTED_TASK_STATUSES = {"running", "pending", "paused", "cancelling", "stopping"}
 RESTART_INTERRUPTED_MESSAGE = "Task interrupted due to service restart"
 UNEXPECTED_WORKER_ERROR_PREFIX = "Unexpected task failure"
 USER_TASK_LOAD_LIMIT = 2000
-BACKGROUND_TASK_ACTIVE_STATUSES = {"running", "pending", "paused", "cancelling"}
+BACKGROUND_TASK_ACTIVE_STATUSES = {"running", "pending", "paused", "cancelling", "stopping"}
 TASK_FEED_FALLBACK_LIMIT = 3
+TASK_PERSIST_FAILURE_MESSAGE = "Failed to persist signin task state"
 
 # Course-folder grouping. Folder 0 is the Chaoxing root ("ungrouped").
 ROOT_COURSE_FOLDER_ID = "0"
@@ -357,6 +367,11 @@ class ChaoxingSigninClient:
 
     @staticmethod
     def _safe_json(resp: requests.Response) -> dict[str, Any]:
+        data = ChaoxingSigninClient._safe_json_value(resp)
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _safe_json_value(resp: requests.Response) -> Any:
         try:
             return resp.json()
         except Exception:
@@ -880,10 +895,15 @@ class ChaoxingSigninClient:
         except ValueError as exc:
             # Not JSON → an error/redirect page, NOT an empty activeList.
             raise requests.RequestException("activelist returned a non-JSON response") from exc
+        if not isinstance(data, dict):
+            return []
         # `data.get("data", {})` does NOT guard an explicit ``"data": null`` (common
         # when a per-course session/cookie is invalid) — `None.get(...)` would raise
-        # AttributeError and crash discovery; use `or {}`.
-        active_list = (data.get("data") or {}).get("activeList", [])
+        # AttributeError and crash discovery; require the expected object envelope.
+        envelope = data.get("data")
+        if not isinstance(envelope, dict):
+            return []
+        active_list = envelope.get("activeList", [])
         return active_list if isinstance(active_list, list) else []
 
     def _resolve_sign_type(
@@ -969,7 +989,8 @@ class ChaoxingSigninClient:
         except requests.RequestException:
             return {}
         data = self._safe_json(resp)
-        return data.get("data") or {}
+        detail = data.get("data")
+        return detail if isinstance(detail, dict) else {}
 
     def _pre_sign(self, task: dict[str, Any]) -> None:
         params = {
@@ -1254,7 +1275,10 @@ class ChaoxingSigninClient:
             return ""
 
         object_id = ""
-        data = self._safe_json(upload_resp)
+        # Unlike the other response consumers, the upload object-id extractor
+        # intentionally supports nested list payloads. Keep this one call site
+        # on the raw JSON path while _safe_json protects object-shaped callers.
+        data = self._safe_json_value(upload_resp)
         if data:
             object_id = self._extract_object_id(data)
         if not object_id:
@@ -1899,34 +1923,60 @@ class ChaoxingSigninManager:
         return result
 
     def start_task(self, user_id: str, payload: dict[str, Any]) -> str:
-        task_id = uuid4().hex
-        now = _utc_now_iso()
-        task_state = {
-            "task_id": task_id,
-            "user_id": user_id,
-            "status": "running",
-            "message": "Task started",
-            "progress": {
-                "total": 0,
-                "completed": 0,
-                "failed": 0,
-                "current": 0,
-            },
-            "created_at": now,
-            "started_at": now,
-            "updated_at": now,
-            "logs": [],
-            "_log_cursor": 0,
-        }
+        normalized_user_id = str(user_id or "").strip()
         with self._lock:
-            self._tasks[task_id] = task_state
-        self._persist_task_state(self._task_public_payload(task_state))
+            cleanup_task_records(self._tasks)
+            if any(
+                str(task.get("user_id") or "").strip() == normalized_user_id and is_active_status(task.get("status"))
+                for task in self._tasks.values()
+            ):
+                raise TaskAlreadyActiveError()
+            if count_active_tasks(self._tasks) >= MAX_ACTIVE_TASKS:
+                raise TaskCapacityError()
 
-        threading.Thread(
-            target=self._run_task_worker_guarded,
-            args=(task_id, user_id, payload),
-            daemon=True,
-        ).start()
+            task_id = uuid4().hex
+            now = _utc_now_iso()
+            task_state = {
+                "task_id": task_id,
+                "user_id": user_id,
+                "status": "running",
+                "message": "Task started",
+                "progress": {
+                    "total": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "current": 0,
+                },
+                "created_at": now,
+                "started_at": now,
+                "updated_at": now,
+                "logs": [],
+                "_log_cursor": 0,
+            }
+            self._tasks[task_id] = task_state
+            cleanup_task_records(self._tasks)
+        try:
+            persisted = self._persist_task_state(self._task_public_payload(task_state))
+            if persisted is not True:
+                raise RuntimeError(TASK_PERSIST_FAILURE_MESSAGE)
+        except Exception:
+            self._record_admission_persist_failure(task_id)
+            raise
+
+        try:
+            threading.Thread(
+                target=self._run_task_worker_guarded,
+                args=(task_id, user_id, payload),
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            # The task has already been persisted as running above.  If the
+            # process cannot create/start its worker, publish a terminal state
+            # before re-raising so it cannot remain stuck in the active feed.
+            message = f"{UNEXPECTED_WORKER_ERROR_PREFIX}: {exc}"
+            self._update_task(task_id, status="error", message=message)
+            self._append_task_log(task_id, message, "error")
+            raise
         return task_id
 
     def start_class_task(self, user_id: str, payload: dict[str, Any]) -> str:
@@ -1962,6 +2012,37 @@ class ChaoxingSigninManager:
             snapshot = self._task_public_payload(task)
         if snapshot:
             self._persist_task_state(snapshot)
+
+    def _record_admission_persist_failure(self, task_id: str) -> None:
+        """Keep an unstarted task terminal and best-effort overwrite any active row."""
+        snapshot: dict[str, Any] | None = None
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            now = _utc_now_iso()
+            task.update(
+                status="error",
+                message=TASK_PERSIST_FAILURE_MESSAGE,
+                updated_at=now,
+            )
+            task["logs"].append(
+                {
+                    "timestamp": now,
+                    "message": TASK_PERSIST_FAILURE_MESSAGE,
+                    "level": "error",
+                }
+            )
+            if len(task["logs"]) > 500:
+                del task["logs"][:-500]
+            snapshot = self._task_public_payload(task)
+        if not snapshot:
+            return
+        try:
+            if self._persist_task_state(snapshot) is not True:
+                logger.warning("failed to compensate signin task admission: task_id=%s", task_id)
+        except Exception:  # pragma: no cover - defensive for patched/custom stores
+            logger.warning("failed to compensate signin task admission: task_id=%s", task_id, exc_info=True)
 
     def _run_task_worker(self, task_id: str, user_id: str, payload: dict[str, Any]) -> None:
         username = str(payload.get("username") or "")
@@ -2105,6 +2186,7 @@ class ChaoxingSigninManager:
         normalized_user_id = str(user_id or "").strip()
         normalized_task_id = str(task_id or "").strip()
         with self._lock:
+            cleanup_task_records(self._tasks)
             task = self._tasks.get(normalized_task_id)
             if task and task.get("user_id") == normalized_user_id:
                 return {k: v for k, v in task.items() if not k.startswith("_")}
@@ -2119,6 +2201,7 @@ class ChaoxingSigninManager:
     def list_tasks(self, user_id: str) -> list[dict[str, Any]]:
         self._ensure_tasks_loaded_for_user(user_id)
         with self._lock:
+            cleanup_task_records(self._tasks)
             tasks: list[dict[str, Any]] = []
             for task in self._tasks.values():
                 if task.get("user_id") != user_id:
@@ -2133,11 +2216,7 @@ class ChaoxingSigninManager:
                 if not public_task.get("updated_at") and started_at:
                     public_task["updated_at"] = started_at
                 tasks.append(public_task)
-        return sorted(
-            tasks,
-            key=lambda item: str(item.get("updated_at") or item.get("start_time") or item.get("started_at") or ""),
-            reverse=True,
-        )
+        return sort_task_records(tasks)
 
     def get_task_logs(self, user_id: str, task_id: str, cursor: int | None = None) -> dict[str, Any] | None:
         """Return logs from ``cursor`` (default 0) WITHOUT mutating server state.
@@ -2158,12 +2237,14 @@ class ChaoxingSigninManager:
             return {"logs": list(all_logs[start:]), "cursor": len(all_logs)}
 
         with self._lock:
+            cleanup_task_records(self._tasks)
             task = self._tasks.get(normalized_task_id)
             if task and task.get("user_id") == normalized_user_id:
                 return _slice(task)
 
         self._load_task_from_store(normalized_user_id, normalized_task_id)
         with self._lock:
+            cleanup_task_records(self._tasks)
             task = self._tasks.get(normalized_task_id)
             if not task or task.get("user_id") != normalized_user_id:
                 return None
@@ -2177,11 +2258,13 @@ class ChaoxingSigninManager:
     def _default_progress() -> dict[str, Any]:
         return {"total": 0, "completed": 0, "failed": 0, "current": 0}
 
-    def _persist_task_state(self, task_state_public: dict[str, Any]) -> None:
+    def _persist_task_state(self, task_state_public: dict[str, Any]) -> bool:
         try:
-            task_store.upsert_task(SIGNIN_TASK_KIND, task_state_public)
+            result = task_store.upsert_task(SIGNIN_TASK_KIND, task_state_public)
         except Exception as exc:  # pragma: no cover - defensive fallback
             logger.warning("persist signin task failed: %s", exc)
+            return False
+        return result is True
 
     def _ensure_tasks_loaded_for_user(self, user_id: str) -> None:
         normalized_user_id = str(user_id or "").strip()
@@ -2229,6 +2312,7 @@ class ChaoxingSigninManager:
             self._merge_task_from_store(item)
 
         with self._lock:
+            cleanup_task_records(self._tasks)
             self._loaded_task_users.add(normalized_user_id)
 
     def _ensure_history_loaded_for_user(self, user_id: str) -> None:
@@ -2263,6 +2347,8 @@ class ChaoxingSigninManager:
         now = _utc_now_iso()
         for item in stored_tasks:
             self._merge_task_from_store(item, now=now)
+        with self._lock:
+            cleanup_task_records(self._tasks)
 
     def _restore_history_from_store(self) -> None:
         try:
@@ -2330,6 +2416,8 @@ class ChaoxingSigninManager:
                 del task["logs"][:-500]
 
         with self._lock:
+            if task_id in self._tasks:
+                return False
             self._tasks[task_id] = task
 
         if interrupted:

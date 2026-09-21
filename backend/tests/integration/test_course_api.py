@@ -1,10 +1,11 @@
-﻿import base64
+import base64
 import io
 import time
 from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from starlette.datastructures import FormData, Headers, UploadFile
 
 import app.api.v1.chaoxing as chaoxing_api
@@ -59,7 +60,7 @@ class FakeMultipartRequest:
         self.headers = {"content-type": "multipart/form-data; boundary=test"}
         self._form_data = form_data
 
-    async def form(self):
+    async def form(self, **kwargs):
         return self._form_data
 
     async def json(self):
@@ -109,9 +110,7 @@ class FakeChaoxingSession:
                     }
                 }
             )
-        return FakeChaoxingResponse(
-            text='<div><a href="/mooc2/resource/view?id=1" title="课程资料.pdf">下载</a></div>'
-        )
+        return FakeChaoxingResponse(text='<div><a href="/mooc2/resource/view?id=1" title="课程资料.pdf">下载</a></div>')
 
 
 class FakeChaoxingClient:
@@ -123,9 +122,11 @@ class FakeChaoxingClient:
 def reset_state():
     course_api._user_adapters.clear()
     course_api._course_tasks.clear()
+    course_api._qr_sessions.clear()
     yield
     course_api._user_adapters.clear()
     course_api._course_tasks.clear()
+    course_api._qr_sessions.clear()
 
 
 @pytest.mark.asyncio
@@ -136,7 +137,11 @@ async def test_start_course_success():
         password="testpass",
         speed=1.5,
     )
-    with patch("app.api.v1.course.signin_manager.login", return_value={"status": True, "message": "ok"}):
+    with (
+        patch("app.api.v1.course.signin_manager.login", return_value={"status": True, "message": "ok"}),
+        patch("app.api.v1.course._get_learning_manager") as get_learning_manager,
+    ):
+        get_learning_manager.return_value.start_task.return_value = "learning-task-1"
         response = await course_api.start_course_learning(request, current_user={"user_id": 1})
 
     assert response.status == "started"
@@ -159,8 +164,9 @@ async def test_course_login_and_courses():
     request = course_api.CourseStartRequest(platform="chaoxing", username="u", password="p")
     mock_courses = [{"id": "1_2", "courseId": "1", "classId": "2", "name": "Course A"}]
 
-    with patch("app.api.v1.course.signin_manager.login", return_value={"status": True, "message": "ok"}), patch(
-        "app.api.v1.course.signin_manager.get_courses", return_value=mock_courses
+    with (
+        patch("app.api.v1.course.signin_manager.login", return_value={"status": True, "message": "ok"}),
+        patch("app.api.v1.course.signin_manager.get_courses", return_value=mock_courses),
     ):
         login_resp = await course_api.course_login(request, current_user={"user_id": 1})
         list_resp = await course_api.get_courses(current_user={"user_id": 1})
@@ -192,8 +198,9 @@ async def test_chaoxing_course_resources_and_activities_fetch_from_real_routes()
     fake_client = FakeChaoxingClient()
     mock_courses = [{"id": "1_2_3", "courseId": "1", "classId": "2", "cpi": "3", "name": "Course A"}]
 
-    with patch("app.api.v1.course.signin_manager.get_client", return_value=fake_client), patch(
-        "app.api.v1.course.signin_manager.get_courses", return_value=mock_courses
+    with (
+        patch("app.api.v1.course.signin_manager.get_client", return_value=fake_client),
+        patch("app.api.v1.course.signin_manager.get_courses", return_value=mock_courses),
     ):
         resources = await course_api.chaoxing_course_resources("1_2", current_user={"user_id": 1})
         activities = await course_api.chaoxing_course_activities("1_2_3", current_user={"user_id": 1})
@@ -210,8 +217,9 @@ async def test_chaoxing_compat_login_and_courses():
     mock_courses = [{"id": "1_2", "courseId": "1", "classId": "2", "name": "Course A"}]
     login_request = chaoxing_api.ChaoxingLoginRequest(username="u", password="p", use_cookies=False)
 
-    with patch("app.api.v1.chaoxing.signin_manager.login", return_value={"status": True, "message": "ok", "data": {}}), patch(
-        "app.api.v1.chaoxing.signin_manager.get_courses", return_value=mock_courses
+    with (
+        patch("app.api.v1.chaoxing.signin_manager.login", return_value={"status": True, "message": "ok", "data": {}}),
+        patch("app.api.v1.chaoxing.signin_manager.get_courses", return_value=mock_courses),
     ):
         login_resp = await chaoxing_api.chaoxing_login(login_request, user_id="1")
         courses_resp = await chaoxing_api.chaoxing_courses(user_id="1")
@@ -234,9 +242,12 @@ async def test_chaoxing_class_subject_routes_are_parallel_to_courses():
     ]
     mock_activities = [{"activeId": "11", "classId": "2", "type": "location"}]
 
-    with patch("app.api.v1.chaoxing.signin_manager.get_classes", return_value=mock_classes), patch(
-        "app.api.v1.chaoxing.signin_manager.get_class_activities", return_value=mock_activities
-    ) as mock_get_activities:
+    with (
+        patch("app.api.v1.chaoxing.signin_manager.get_classes", return_value=mock_classes),
+        patch(
+            "app.api.v1.chaoxing.signin_manager.get_class_activities", return_value=mock_activities
+        ) as mock_get_activities,
+    ):
         classes_resp = await chaoxing_api.chaoxing_classes(user_id="1")
         activities_resp = await chaoxing_api.chaoxing_class_activities(
             "2",
@@ -336,6 +347,14 @@ async def test_chaoxing_signin_remote_endpoints_are_remote_urls():
 
 
 @pytest.mark.asyncio
+async def test_zhihuishu_task_list_is_available_before_platform_login():
+    response = await course_api.zhihuishu_list_tasks(current_user={"user_id": 1})
+
+    assert response["status"] == "success"
+    assert response["tasks"] == []
+
+
+@pytest.mark.asyncio
 async def test_zhihuishu_required_endpoints():
     user_id = "1"
     adapter = FakeZhihuishuAdapter()
@@ -416,6 +435,37 @@ async def test_zhihuishu_progress_does_not_overwrite_other_same_course_tasks():
     assert progress_resp["status"] == "completed"
     assert course_api._course_tasks["old-task"]["status"] == "running"
     assert course_api._course_tasks["active-task"]["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_zhihuishu_global_controls_preserve_terminal_history():
+    user_id = "1"
+    adapter = FakeZhihuishuAdapter()
+    course_api._user_adapters[user_id] = {"adapter": adapter, "last_access": time.time()}
+    for task_id, status in (("active", "running"), ("done", "completed"), ("failed", "failed")):
+        course_api._set_course_task(
+            task_id,
+            {
+                "task_id": task_id,
+                "platform": "zhihuishu",
+                "course_id": "1001",
+                "user_id": user_id,
+                "status": status,
+                "message": status,
+                "created_at": time.time(),
+                "updated_at": time.time(),
+            },
+        )
+
+    await course_api.zhihuishu_pause(current_user={"user_id": 1})
+    assert course_api._course_tasks["active"]["status"] == "paused"
+    assert course_api._course_tasks["done"]["status"] == "completed"
+    assert course_api._course_tasks["failed"]["status"] == "failed"
+
+    await course_api.zhihuishu_cancel(current_user={"user_id": 1})
+    assert course_api._course_tasks["active"]["status"] == "cancelled"
+    assert course_api._course_tasks["done"]["status"] == "completed"
+    assert course_api._course_tasks["failed"]["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -527,6 +577,55 @@ async def test_notify_test_rejects_internal_url():
 
 
 @pytest.mark.asyncio
+async def test_qr_session_cleanup_signals_worker_cancellation():
+    cancel_event = course_api.threading.Event()
+    course_api._qr_sessions["expired"] = {
+        "user_id": "1",
+        "updated_at": 0,
+        "cancel_event": cancel_event,
+    }
+
+    course_api.cleanup_expired_entries()
+
+    assert cancel_event.is_set()
+    assert "expired" not in course_api._qr_sessions
+
+
+def test_cancel_all_qr_sessions_signals_every_worker():
+    first_event = course_api.threading.Event()
+    second_event = course_api.threading.Event()
+    course_api._qr_sessions.update(
+        {
+            "first": {"user_id": "1", "cancel_event": first_event},
+            "second": {"user_id": "2", "cancel_event": second_event},
+        }
+    )
+
+    course_api.cancel_all_qr_sessions()
+
+    assert first_event.is_set()
+    assert second_event.is_set()
+    assert course_api._qr_sessions == {}
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "course_id"),
+    [
+        (course_api.ZhihuishuCourseRequest, "   "),
+        (course_api.ZhihuishuTaskStartRequest, "\t"),
+    ],
+)
+def test_zhihuishu_course_requests_reject_blank_course_id(model_cls, course_id):
+    with pytest.raises(ValidationError):
+        model_cls(course_id=course_id)
+
+
+def test_zhihuishu_course_request_normalizes_course_id():
+    request = course_api.ZhihuishuCourseRequest(course_id="  course-1  ")
+    assert request.course_id == "course-1"
+
+
+@pytest.mark.asyncio
 async def test_zhihuishu_qr_login_rejects_missing_user_id():
     """F58: str(None) == 'None' is truthy; missing user_id must be rejected."""
     with pytest.raises(HTTPException) as exc_info:
@@ -567,9 +666,9 @@ async def test_geocoding_endpoints_require_auth():
         params = inspect.signature(fn).parameters
         assert "user_id" in params, f"{fn.__name__} is missing the auth dependency"
         default = params["user_id"].default
-        assert default is not inspect.Parameter.empty and hasattr(
-            default, "dependency"
-        ), f"{fn.__name__} user_id is not a Depends(...)"
+        assert default is not inspect.Parameter.empty and hasattr(default, "dependency"), (
+            f"{fn.__name__} user_id is not a Depends(...)"
+        )
 
 
 def test_geocoding_endpoints_reject_anonymous_via_client():
@@ -649,3 +748,89 @@ async def test_chaoxing_sign_accepts_multipart_photo():
     options = mock_sign_once.call_args.kwargs["options"]
     assert options["sign_type"] == "photo"
     assert options["photo_base64"] == base64.b64encode(b"fake-image").decode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_chaoxing_photo_rejects_unsupported_mime_before_reading():
+    form_data = FormData(
+        [
+            ("username", "u"),
+            ("password", "p"),
+            ("sign_type", "photo"),
+            (
+                "photo",
+                UploadFile(
+                    filename="demo.svg",
+                    file=io.BytesIO(b"<svg></svg>"),
+                    headers=Headers({"content-type": "image/svg+xml"}),
+                ),
+            ),
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await chaoxing_api._parse_request_payload(FakeMultipartRequest(form_data))
+
+    assert exc_info.value.status_code == 415
+    assert "Unsupported file type" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_chaoxing_photo_rejects_oversized_multipart_upload():
+    form_data = FormData(
+        [
+            (
+                "photo",
+                UploadFile(
+                    filename="large.jpg",
+                    file=io.BytesIO(b"x" * (chaoxing_api.MAX_PHOTO_BYTES + 1)),
+                    headers=Headers({"content-type": "image/jpeg"}),
+                ),
+            ),
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await chaoxing_api._parse_request_payload(FakeMultipartRequest(form_data))
+
+    assert exc_info.value.status_code == 413
+    assert "5 MB" in exc_info.value.detail
+
+
+def test_chaoxing_json_photo_validates_decoded_size_and_base64():
+    valid = base64.b64encode(b"x" * chaoxing_api.MAX_PHOTO_BYTES).decode("ascii")
+    request = chaoxing_api.ChaoxingSignRequest(
+        username="u",
+        password="p",
+        photo_base64=valid,
+    )
+    assert request.photo_base64 == valid
+
+    oversized = base64.b64encode(b"x" * (chaoxing_api.MAX_PHOTO_BYTES + 1)).decode("ascii")
+    with pytest.raises(ValidationError, match="5 MB"):
+        chaoxing_api.ChaoxingSignRequest(
+            username="u",
+            password="p",
+            photo_base64=oversized,
+        )
+    with pytest.raises(ValidationError, match="valid base64"):
+        chaoxing_api.ChaoxingSignRequest(
+            username="u",
+            password="p",
+            photo_base64="not-base64!",
+        )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"speed": 0},
+        {"speed": 4.1},
+        {"jobs": 0},
+        {"jobs": 17},
+        {"course_list": [str(index) for index in range(101)]},
+    ],
+)
+def test_chaoxing_start_rejects_unbounded_task_inputs(kwargs):
+    with pytest.raises(ValidationError):
+        chaoxing_api.ChaoxingStartRequest(username="u", password="p", **kwargs)

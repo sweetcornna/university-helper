@@ -1,0 +1,12 @@
+# Files executed inside Linux containers or by bash must keep LF endings, even
+# when the repository is cloned on Windows with core.autocrlf=true. A CRLF
+# `set -euo pipefail\r` aborts the Postgres init script half-way and leaves a
+# database without `tenant_template`, which makes every registration fail.
+#
+# Deliberately NOT `* text=auto`: a few source files are CRLF in the index and
+# renormalizing them would rewrite unrelated history.
+*.sh                text eol=lf
+*.sql               text eol=lf
+*.nsh               text eol=lf
+database/**         text eol=lf
+docker-compose*.yml text eol=lf

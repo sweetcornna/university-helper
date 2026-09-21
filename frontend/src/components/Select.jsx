@@ -2,21 +2,27 @@ import { useId } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { clsx } from 'clsx'
 
-/*
- * Token-based <select> wrapper. Replaces the hand-rolled `bg-white/60` native
- * selects that were copy-pasted with ~10 utility classes each and broke in
- * dark mode.
- *
- * options: Array<{ value: string, label: string }>
- */
-export default function Select({ label, id, options = [], className, children, ...props }) {
+export default function Select({
+  label,
+  hint,
+  error,
+  id,
+  options = [],
+  className,
+  children,
+  'aria-describedby': ariaDescribedBy,
+  ...props
+}) {
   const generatedId = useId()
   const selectId = id || generatedId
+  const hintId = hint ? `${selectId}-hint` : undefined
+  const errorId = error ? `${selectId}-error` : undefined
+  const describedBy = [ariaDescribedBy, errorId, hintId].filter(Boolean).join(' ') || undefined
 
   return (
     <div>
       {label && (
-        <label htmlFor={selectId} className="mb-2 block text-sm font-medium text-text">
+        <label htmlFor={selectId} className="mb-2 block text-sm font-semibold text-text">
           {label}
         </label>
       )}
@@ -24,14 +30,17 @@ export default function Select({ label, id, options = [], className, children, .
         <select
           id={selectId}
           className={clsx(
-            'w-full min-h-[44px] cursor-pointer appearance-none rounded-xl border border-border/60 bg-surface/80 px-4 py-2 pr-10 text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
-            className
+            'clay-input min-h-[44px] cursor-pointer appearance-none pr-10',
+            error && 'border-danger focus:border-danger focus:ring-danger/20',
+            className,
           )}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
           {...props}
         >
-          {children || options.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
+          {children || options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
@@ -40,6 +49,8 @@ export default function Select({ label, id, options = [], className, children, .
           aria-hidden="true"
         />
       </div>
+      {error && <p id={errorId} className="mt-1.5 text-sm text-danger">{error}</p>}
+      {hint && <p id={hintId} className="mt-1.5 text-xs leading-5 text-text-muted">{hint}</p>}
     </div>
   )
 }

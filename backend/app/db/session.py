@@ -33,6 +33,18 @@ if TYPE_CHECKING:  # annotations only — no runtime psycopg2 import
 logger = logging.getLogger(__name__)
 
 main_pool: ThreadedConnectionPool | None = None
+_main_pool_lock = threading.Lock()
+
+# TCP keepalives let the kernel notice a dead Postgres socket (DB restart, NAT
+# idle timeout, laptop sleep) instead of handing a zombie connection to the next
+# request; connect_timeout bounds a hung connect.
+_CONNECT_KWARGS = {
+    "connect_timeout": 5,
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 3,
+}
 
 
 @dataclass
@@ -42,8 +54,10 @@ class _TenantPoolEntry:
 
 
 # tenant_pools is LRU-ordered; `_tenant_lock` guards the map itself plus the
-# `in_use` refcounts. ThreadedConnectionPool already serializes its own
-# internal state so the outer lock only covers the map mutation window.
+# `in_use` refcounts. A ref is held for the whole checkout lifecycle: from
+# before getconn() starts until putconn() (or its failure cleanup) finishes.
+# ThreadedConnectionPool serializes its own internal state, so slow pool calls
+# stay outside this outer lock without exposing an entry as idle prematurely.
 tenant_pools: OrderedDict[str, _TenantPoolEntry] = OrderedDict()
 _tenant_lock = threading.Lock()
 MAX_TENANT_POOLS = 100
@@ -53,19 +67,25 @@ _TENANT_NAME_RE = re.compile(r"^tenant_[a-z0-9]+$")
 def _get_main_pool() -> ThreadedConnectionPool:
     global main_pool
     if main_pool is None:
-        from psycopg2.extras import RealDictCursor
-        from psycopg2.pool import ThreadedConnectionPool
+        with _main_pool_lock:
+            # Another thread may have initialized the pool while we waited for
+            # the lock. Publish it only after construction succeeds so a
+            # failed connection attempt can be retried by a later caller.
+            if main_pool is None:
+                from psycopg2.extras import RealDictCursor
+                from psycopg2.pool import ThreadedConnectionPool
 
-        main_pool = ThreadedConnectionPool(
-            minconn=5,
-            maxconn=30,
-            host=settings.MAIN_DB_HOST,
-            database=settings.MAIN_DB_NAME,
-            user=settings.MAIN_DB_USER,
-            password=settings.MAIN_DB_PASSWORD,
-            port=settings.MAIN_DB_PORT,
-            cursor_factory=RealDictCursor,
-        )
+                main_pool = ThreadedConnectionPool(
+                    minconn=5,
+                    maxconn=30,
+                    host=settings.MAIN_DB_HOST,
+                    database=settings.MAIN_DB_NAME,
+                    user=settings.MAIN_DB_USER,
+                    password=settings.MAIN_DB_PASSWORD,
+                    port=settings.MAIN_DB_PORT,
+                    cursor_factory=RealDictCursor,
+                    **_CONNECT_KWARGS,
+                )
     return main_pool
 
 
@@ -73,9 +93,16 @@ def get_main_db_connection():
     return _get_main_pool().getconn()
 
 
+# `tenant_template` matches the tenant pattern but is the clone source for every
+# tenant; no request may ever open, create or drop it as a user database.
+RESERVED_TENANT_DB_NAMES = frozenset({"tenant_template"})
+
+
 def _validate_tenant_db_name(tenant_db_name: str) -> None:
     if not _TENANT_NAME_RE.match(tenant_db_name):
         raise ValueError(f"Invalid tenant database name: {tenant_db_name!r}. " "Must match pattern: tenant_[a-z0-9]+")
+    if tenant_db_name in RESERVED_TENANT_DB_NAMES:
+        raise ValueError(f"Reserved tenant database name: {tenant_db_name!r}")
 
 
 def _build_tenant_pool(tenant_db_name: str) -> ThreadedConnectionPool:
@@ -91,6 +118,7 @@ def _build_tenant_pool(tenant_db_name: str) -> ThreadedConnectionPool:
         password=settings.MAIN_DB_PASSWORD,
         port=settings.MAIN_DB_PORT,
         cursor_factory=RealDictCursor,
+        **_CONNECT_KWARGS,
     )
 
 
@@ -153,22 +181,41 @@ def _checkout_tenant(name: str):
         raise
 
 
-def _release_tenant(name: str, conn) -> None:
+def _release_tenant(name: str, conn, close: bool = False) -> None:
     with _tenant_lock:
         entry = tenant_pools.get(name)
-        if entry is None:
-            # Pool was evicted while we held the connection — close directly.
-            try:
-                conn.close()
-            except Exception:  # pragma: no cover
-                pass
-            return
-        entry.in_use = max(0, entry.in_use - 1)
-        pool = entry.pool
+
+    if entry is None:
+        # Defensive fallback for callers returning a connection whose tenant
+        # entry is unknown (for example, external test/process cleanup).
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover
+            logger.exception("Failed to close connection for unknown tenant %s", name)
+        return
+
+    pool = entry.pool
     try:
-        pool.putconn(conn)
-    except Exception:  # pragma: no cover
+        if close:
+            pool.putconn(conn, close=True)
+        else:
+            pool.putconn(conn)
+    except Exception:
         logger.exception("putconn failed for tenant %s", name)
+        # The pool did not accept ownership. Close the connection directly so
+        # a return failure cannot leak a live socket. Preserve the established
+        # release contract by logging rather than surfacing this cleanup error.
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover
+            logger.exception("Failed to close unreturned connection for tenant %s", name)
+    finally:
+        # Keep the reference until putconn (and failure cleanup) is complete.
+        # Otherwise eviction can observe zero, closeall(), and race the return.
+        with _tenant_lock:
+            current = tenant_pools.get(name)
+            if current is entry:
+                current.in_use = max(0, current.in_use - 1)
 
 
 def get_tenant_db_connection(tenant_db_name: str):
@@ -176,25 +223,61 @@ def get_tenant_db_connection(tenant_db_name: str):
     return _checkout_tenant(tenant_db_name)
 
 
+def _is_closed(conn) -> bool:
+    # psycopg2 exposes `closed` as an int (0 = open). Mocks expose other types,
+    # which must be treated as open.
+    closed = getattr(conn, "closed", 0)
+    return isinstance(closed, int) and not isinstance(closed, bool) and closed != 0
+
+
+def _is_connection_error(exc: BaseException) -> bool:
+    try:
+        import psycopg2
+    except ImportError:  # pragma: no cover - local desktop build has no psycopg2
+        return False
+    return isinstance(exc, (psycopg2.OperationalError, psycopg2.InterfaceError))
+
+
+def _checkout(db_name: str | None):
+    if db_name:
+        return _checkout_tenant(db_name)
+    return _get_main_pool().getconn()
+
+
+def _release(db_name: str | None, conn, close: bool = False) -> None:
+    if db_name:
+        _release_tenant(db_name, conn, close=close)
+    elif close:
+        _get_main_pool().putconn(conn, close=True)
+    else:
+        _get_main_pool().putconn(conn)
+
+
 @contextmanager
 def get_db_session(db_name: str | None = None):
-    """Acquire a pooled connection; commit on success, rollback on error."""
+    """Acquire a pooled connection; commit on success, rollback on error.
+
+    A connection the server already closed is discarded at checkout and replaced
+    once; a connection that fails with a connection-level error is closed instead
+    of being recycled, so one Postgres restart cannot poison later requests.
+    """
     if db_name:
         _validate_tenant_db_name(db_name)
-        conn = _checkout_tenant(db_name)
-    else:
-        conn = _get_main_pool().getconn()
+    conn = _checkout(db_name)
+    if _is_closed(conn):
+        logger.warning("discarding closed pooled connection (%s)", db_name or "main")
+        _release(db_name, conn, close=True)
+        conn = _checkout(db_name)
+    broken = False
     try:
         yield conn
         conn.commit()
-    except Exception:
+    except Exception as exc:
+        broken = _is_connection_error(exc) or _is_closed(conn)
         try:
             conn.rollback()
         except Exception:  # pragma: no cover
             logger.exception("rollback failed")
         raise
     finally:
-        if db_name:
-            _release_tenant(db_name, conn)
-        else:
-            _get_main_pool().putconn(conn)
+        _release(db_name, conn, close=broken)

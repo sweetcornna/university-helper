@@ -17,6 +17,7 @@ import logging
 import os
 import threading
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "fernet:"
 _ENV_VAR = "CREDENTIAL_ENCRYPTION_KEY"
+_ENV_FILE = ".env"
 
 
 class CredentialCryptoError(RuntimeError):
@@ -59,9 +61,41 @@ _cipher_lock = threading.Lock()
 _cipher: _FernetCipher | _NoopCipher | None = None
 
 
+def _settings_env_from_file() -> str | None:
+    """Read the ``ENV`` field from the same dotenv file as ``Settings``.
+
+    This is intentionally lazy and only reads the single field needed by the
+    cipher. Importing ``app.config.settings`` here would instantiate the full
+    settings model (and its required database/JWT validation) from a crypto
+    helper, which can create import cycles and break focused tests.
+    """
+    env_path = Path(_ENV_FILE)
+    if not env_path.is_file():
+        return None
+
+    try:
+        # pydantic-settings uses python-dotenv for its env_file source. Keep
+        # this import lazy so importing this module does not add a config
+        # dependency or perform any env-file I/O.
+        from dotenv import dotenv_values
+
+        value = dotenv_values(env_path, encoding="utf8").get("ENV")
+    except (ImportError, OSError, UnicodeError):
+        return None
+    return value if isinstance(value, str) else None
+
+
 def _is_production() -> bool:
-    env = (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower()
-    return env in ("prod", "production")
+    # Match pydantic-settings source precedence: a process ENV value wins over
+    # the configured env file. APP_ENV remains a backwards-compatible fallback
+    # when Settings has no ENV value at either source.
+    if "ENV" in os.environ:
+        env = os.environ["ENV"]
+    else:
+        env = _settings_env_from_file()
+        if env is None:
+            env = os.getenv("APP_ENV")
+    return (env or "").strip().lower() in ("prod", "production")
 
 
 def _build_cipher() -> _FernetCipher | _NoopCipher:

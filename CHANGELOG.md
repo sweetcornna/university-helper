@@ -60,6 +60,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   layout, and an ambient chapter-progress animation that respects
   `prefers-reduced-motion`.
 
+## [1.4.7] - 2026-09-16
+
+### Fixed
+- Registration no longer fails with a bare "Internal server error" on some
+  machines. The known causes are fixed or now return a message that says what
+  to do:
+  - on Windows clones, Git converted the database init script to CRLF line
+    endings, so Postgres never created `tenant_template`;
+  - the username `template` could delete the shared template database and
+    break registration for everyone. Reserved names such as `template`,
+    `postgres` and `root` are now rejected, and the template database is
+    protected;
+  - a busy template database is retried before giving up;
+  - a missing template, a database account without `CREATEDB`, an unreachable
+    database or a missing `users` table now return a 503 with guidance in
+    Chinese;
+  - database connections that the server had already closed are replaced
+    instead of being reused.
+- In the desktop app the login and register pages could be opened, and
+  registering failed with a 500 because the desktop build has no accounts. The
+  desktop app now skips those pages and opens the workbench directly.
+- Desktop auto-update works for the first time. Earlier releases published no
+  signed update files. Installed 1.4.0 to 1.4.6 apps download this release on
+  their next start and restart without asking; from 1.4.7 on the app asks
+  first.
+- Closing or updating the desktop app now stops the whole local backend
+  process. On macOS and Linux, `uh-backend` processes left behind by earlier
+  versions are stopped on the next start. The Windows installer stops a
+  running backend before replacing files.
+- Server and network errors in the web app now read as plain Chinese
+  messages instead of raw error text.
+- Re-running the one-click installer keeps existing secrets and settings,
+  applies only the options you pass, and no longer resets a `--host` install
+  to `127.0.0.1`. It refuses to create a new database password when the
+  database volume already exists.
+- Updating with `--tag <version>` in a directory the installer downloaded now
+  also brings its compose file and scripts to that version, not only the
+  images.
+- Docker services restart automatically after a reboot
+  (`restart: unless-stopped`).
+
+### Added
+- When the server starts, it checks that the `users` table and
+  `tenant_template` exist and recreates whatever is missing. `/health` shows
+  the result in a new `schema` field. Set `DB_AUTO_BOOTSTRAP=false` to turn
+  this off.
+- `ALLOWED_HOSTS` lets the server accept extra host names, such as a LAN IP or
+  a second domain. A rejected host gets an error that names this setting.
+- Administrators of a self-hosted server see a notice when a new release is
+  out, with its notes and the command to upgrade. Administrators are the
+  emails in `ADMIN_EMAILS`, or the first registered account when that is
+  empty. `UPDATE_CHECK_ENABLED=false` turns the check off.
+- The desktop app asks before installing an update (现在更新 / 稍后) and shows
+  a dialog if the install fails. It writes a `desktop.log` in the system log
+  folder.
+- The installer can run without a checkout:
+  `curl -fsSL https://github.com/sweetcornna/university-helper/releases/latest/download/deploy_server.sh | bash -s -- ...`
+  downloads the matching release and installs it. New options:
+  `--admin-email` and `--allowed-hosts` (`-AdminEmail` / `-AllowedHosts` in
+  PowerShell).
+- `GET /api/v1/runtime` tells the web app whether it runs as the desktop build
+  or the multi-user server.
+- Zhihuishu QR login can be cancelled.
+
+### Changed
+- Redesigned web interface (学道 workbench).
+- Stricter input checks for Chaoxing sign-in and course requests; photo
+  uploads are limited to 5 MB.
+- Desktop download files are named `xuedao_<version>_<platform>_<arch>`, for
+  example `xuedao_1.4.7_windows_x64-setup.exe`.
+
+### Release
+- A release in this repository fails early without the updater signing key.
+  One job builds `latest.json` after checking every signature against the
+  app's public key, and publishing re-checks the live update file.
+
+### Removed
+- `docs/答辩稿.md`, an outdated presentation script.
+
+## [1.4.6] - 2026-08-30
+
+### Security
+- Fixed the explicitly identified high-risk paths across request handling,
+  notifications, OCR, backups, deployment helpers, and selected logs: targeted
+  sensitive tokens and response bodies are redacted, unsafe URLs and redirects
+  are rejected, and remote release/deploy inputs are validated and constrained.
+- Added targeted integrity and supply-chain guardrails for shipped web assets,
+  package ecosystems, container builds, and GitHub Actions dependencies.
+- Audit follow-up remains for R10: 10 files and 21 log points (15 body/card,
+  4 token-suffix, and 2 OTEL-endpoint points) are pending remediation.
+
+### Reliability
+- Bounded stalled network, OCR, map, QR, sign-in, and background-task work;
+  stale asynchronous generations and concurrent course operations are isolated
+  or cancelled instead of overwriting current state.
+- Made task persistence, worker startup/shutdown, database-pool lifecycle, and
+  backup publication failure-safe so errors become visible terminal outcomes.
+
+### Release
+- Hardened release promotion and deployment readiness gates, deterministic
+  desktop packaging/locks, version stamping, health checks, and safe bind modes.
+
+### Tests
+- Added and tightened regression, audit, packaging, deployment, and release
+  guardrails covering the security and reliability boundaries above.
+
 ## [1.4.5] - 2026-06-28
 
 ### Fixed

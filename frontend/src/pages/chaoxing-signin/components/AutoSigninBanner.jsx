@@ -46,9 +46,7 @@ export default function AutoSigninBanner({
             </div>
             <div>
               <p className="text-base font-semibold text-text">未检测到进行中的签到</p>
-              <p className="mt-1 text-sm text-text/70">
-                老师发起签到后，这里会自动显示类型并提示需要补全的字段。
-              </p>
+              <p className="mt-1 text-sm text-text/70">老师发起后重新检测。</p>
             </div>
           </div>
           <Button

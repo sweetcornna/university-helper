@@ -213,3 +213,150 @@ async def test_login_runs_bcrypt_even_when_user_missing(auth_service, mock_conn,
 
         # verify_password MUST be invoked even though there is no matching row.
         assert mock_verify.called, "bcrypt verify was skipped for a nonexistent user (timing oracle)"
+
+
+# --- provisioning failures map to actionable 503s instead of a bare 500 -------
+
+
+def _pg_error(name: str):
+    import psycopg2
+
+    return getattr(psycopg2.errors, name)(name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("username", ["template", "postgres", "template1"])
+async def test_register_rejects_reserved_usernames_before_any_db_call(auth_service, username):
+    with patch("app.services.auth_service.get_db_session") as db, patch("psycopg2.connect") as connect:
+        with pytest.raises(ValueError, match="保留"):
+            await auth_service.register_user(username, f"{username}@example.com", "Password1")
+    db.assert_not_called()
+    connect.assert_not_called()
+
+
+def test_template_database_is_never_created_or_dropped_directly():
+    with patch("psycopg2.connect") as connect:
+        with pytest.raises(ValueError):
+            AuthService._create_tenant_database("tenant_template")
+        AuthService._drop_tenant_database("tenant_template")
+    connect.assert_not_called()
+
+
+def test_object_in_use_is_retried_then_succeeds(monkeypatch):
+    attempts = []
+
+    def _effect(text, executed):
+        if "CREATE DATABASE" in text:
+            attempts.append(text)
+            if len(attempts) < 3:
+                raise _pg_error("ObjectInUse")
+
+    ddl_conn, _cur, _executed = _make_ddl_mock(_effect)
+    sleeps = []
+    monkeypatch.setattr("app.services.auth_service.time.sleep", sleeps.append)
+
+    with patch("psycopg2.connect", return_value=ddl_conn):
+        AuthService._create_tenant_database("tenant_dave")
+
+    assert len(attempts) == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_object_in_use_exhausted_raises_503(monkeypatch):
+    from app.core.exceptions import TenantProvisioningError
+
+    def _effect(text, executed):
+        if "CREATE DATABASE" in text:
+            raise _pg_error("ObjectInUse")
+
+    ddl_conn, _cur, _executed = _make_ddl_mock(_effect)
+    monkeypatch.setattr("app.services.auth_service.time.sleep", lambda _s: None)
+
+    with patch("psycopg2.connect", return_value=ddl_conn):
+        with pytest.raises(TenantProvisioningError) as info:
+            AuthService._create_tenant_database("tenant_erin")
+    assert info.value.status_code == 503
+
+
+def test_missing_template_maps_to_database_not_initialized():
+    from app.core.exceptions import DatabaseNotInitializedError
+
+    def _effect(text, executed):
+        if "CREATE DATABASE" in text:
+            raise _pg_error("InvalidCatalogName")
+
+    ddl_conn, _cur, executed = _make_ddl_mock(_effect)
+    with patch("psycopg2.connect", return_value=ddl_conn), patch.object(
+        AuthService, "_heal_missing_template", return_value=False
+    ):
+        with pytest.raises(DatabaseNotInitializedError, match="tenant_template"):
+            AuthService._create_tenant_database("tenant_frank")
+    assert not any("DROP DATABASE" in e for e in executed)
+
+
+def test_missing_template_is_healed_once_then_retried():
+    calls = []
+
+    def _effect(text, executed):
+        if "CREATE DATABASE" in text:
+            calls.append(text)
+            if len(calls) == 1:
+                raise _pg_error("InvalidCatalogName")
+
+    ddl_conn, _cur, _executed = _make_ddl_mock(_effect)
+    with patch("psycopg2.connect", return_value=ddl_conn), patch.object(
+        AuthService, "_heal_missing_template", return_value=True
+    ) as heal:
+        AuthService._create_tenant_database("tenant_gina")
+    heal.assert_called_once()
+    assert len(calls) == 2
+
+
+def test_insufficient_privilege_maps_to_503():
+    from app.core.exceptions import TenantProvisioningError
+
+    def _effect(text, executed):
+        if "CREATE DATABASE" in text:
+            raise _pg_error("InsufficientPrivilege")
+
+    ddl_conn, _cur, _executed = _make_ddl_mock(_effect)
+    with patch("psycopg2.connect", return_value=ddl_conn):
+        with pytest.raises(TenantProvisioningError, match="CREATEDB"):
+            AuthService._create_tenant_database("tenant_hank")
+
+
+def test_unreachable_database_maps_to_503():
+    import psycopg2
+
+    from app.core.exceptions import TenantProvisioningError
+
+    with patch("psycopg2.connect", side_effect=psycopg2.OperationalError("could not connect")):
+        with pytest.raises(TenantProvisioningError):
+            AuthService._create_tenant_database("tenant_ivy")
+
+
+@pytest.mark.asyncio
+async def test_missing_users_table_maps_to_database_not_initialized(auth_service, mock_conn, mock_cursor):
+    from app.core.exceptions import DatabaseNotInitializedError
+
+    mock_cursor.execute.side_effect = _pg_error("UndefinedTable")
+    with patch("app.services.auth_service.get_db_session", return_value=mock_conn), patch(
+        "psycopg2.connect"
+    ) as connect:
+        with pytest.raises(DatabaseNotInitializedError, match="users"):
+            await auth_service.register_user("jack", "jack@example.com", "Password1")
+    connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_provisioning_failure_still_rolls_back_user_row(auth_service, mock_conn, mock_cursor):
+    from app.core.exceptions import TenantProvisioningError
+
+    mock_cursor.fetchone.return_value = {"id": 7}
+    with patch("app.services.auth_service.get_db_session", return_value=mock_conn), patch.object(
+        AuthService, "_create_tenant_database", side_effect=TenantProvisioningError("busy")
+    ), patch.object(AuthService, "_drop_tenant_database") as drop:
+        with pytest.raises(TenantProvisioningError):
+            await auth_service.register_user("kate", "kate@example.com", "Password1")
+    assert any("DELETE FROM users" in str(c.args[0]) for c in mock_cursor.execute.call_args_list)
+    drop.assert_called_once_with("tenant_kate")

@@ -12,6 +12,7 @@ const DEFAULT_CENTER = [39.9042, 116.4074]
 const DEFAULT_ZOOM = 15
 const REVERSE_GEOCODE_URL = '/api/v1/chaoxing/location/reverse-geocode'
 const PLACE_SEARCH_URL = '/api/v1/chaoxing/location/search'
+const MAP_REQUEST_TIMEOUT_MS = 20000
 
 // Resolve Leaflet default marker icons via the Vite asset pipeline so we
 // don't rely on a third-party CDN (unpkg) at runtime.
@@ -22,19 +23,72 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadow,
 })
 
-const fetchJson = async (url) => {
+const fetchJson = async (url, { signal: callerSignal } = {}) => {
   const token = getToken()
-  const res = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  const controller = new AbortController()
+  let timeoutId
+  let rejectCallerAbort
+  let callerAbortHandler
+
+  const request = (async () => {
+    const res = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: controller.signal,
+    })
+    if (!res.ok) throw new Error('请求失败')
+    return res.json()
+  })()
+
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      // Abort the underlying fetch as well as rejecting the deadline race so
+      // a fetch implementation that honors AbortController is released.
+      controller.abort()
+      reject(new Error('请求超时，请稍后重试。'))
+    }, MAP_REQUEST_TIMEOUT_MS)
   })
-  if (!res.ok) throw new Error('请求失败')
-  return res.json()
+
+  const races = [request, timeout]
+  if (callerSignal) {
+    const callerAbort = new Promise((_, reject) => {
+      rejectCallerAbort = reject
+    })
+    callerAbortHandler = () => {
+      clearTimeout(timeoutId)
+      controller.abort(callerSignal.reason)
+      rejectCallerAbort(callerSignal.reason)
+    }
+    races.push(callerAbort)
+    if (callerSignal.aborted) {
+      callerAbortHandler()
+    } else {
+      callerSignal.addEventListener('abort', callerAbortHandler, { once: true })
+    }
+  }
+
+  try {
+    return await Promise.race(races)
+  } finally {
+    clearTimeout(timeoutId)
+    if (callerSignal && callerAbortHandler) {
+      callerSignal.removeEventListener('abort', callerAbortHandler)
+    }
+  }
 }
 
 export default function BaiduMapPickerModal({ open, initialLocation, onClose, onConfirm }) {
   const mapContainerRef = useRef(null)
   const mapRef = useRef(null)
   const markerRef = useRef(null)
+  const openRef = useRef(open)
+  const reverseGenerationRef = useRef(0)
+  const searchGenerationRef = useRef(0)
+  const searchLoadingRef = useRef(false)
+  const pendingRequestControllersRef = useRef(new Set())
+
+  // Keep async callbacks from writing after a close has been rendered, even
+  // before the close effect gets a chance to run.
+  openRef.current = open
 
   const [draft, setDraft] = useState(null)
   const [reverseLoading, setReverseLoading] = useState(false)
@@ -43,6 +97,21 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
   const [searchResults, setSearchResults] = useState([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
+
+  const abortPendingRequests = useCallback(() => {
+    for (const controller of pendingRequestControllersRef.current) {
+      controller.abort()
+    }
+    pendingRequestControllersRef.current.clear()
+  }, [])
+
+  const fetchModalJson = useCallback((url) => {
+    const controller = new AbortController()
+    pendingRequestControllersRef.current.add(controller)
+    return fetchJson(url, { signal: controller.signal }).finally(() => {
+      pendingRequestControllersRef.current.delete(controller)
+    })
+  }, [])
 
   // Initialize map when modal opens
   useEffect(() => {
@@ -92,27 +161,47 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
     })
 
     // Leaflet needs a resize nudge after the container becomes visible
-    setTimeout(() => map.invalidateSize(), 100)
+    const resizeTimer = setTimeout(() => map.invalidateSize(), 100)
 
     return () => {
-      // will be cleaned up by the close effect
+      clearTimeout(resizeTimer)
+      map.remove()
+      if (mapRef.current === map) {
+        mapRef.current = null
+        markerRef.current = null
+      }
     }
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cleanup map on modal close
+  // Reset modal state on close; map resources are owned by the initialization
+  // effect above so its cleanup also handles parent/router unmounts.
   useEffect(() => {
+    // The previous effect cleanup runs during a close -> reopen transition;
+    // restore the current open state in this setup before accepting events.
+    openRef.current = open
+
     if (!open) {
-      if (mapRef.current) {
-        mapRef.current.remove()
-        mapRef.current = null
-      }
+      reverseGenerationRef.current += 1
+      searchGenerationRef.current += 1
+      searchLoadingRef.current = false
+      abortPendingRequests()
       markerRef.current = null
       setDraft(null)
+      setReverseLoading(false)
       setSearchQuery('')
       setSearchResults([])
+      setSearchLoading(false)
       setSearchError('')
     }
-  }, [open])
+
+    return () => {
+      openRef.current = false
+      reverseGenerationRef.current += 1
+      searchGenerationRef.current += 1
+      searchLoadingRef.current = false
+      abortPendingRequests()
+    }
+  }, [abortPendingRequests, open])
 
   const placeMarker = useCallback((lat, lng, source) => {
     const map = mapRef.current
@@ -135,38 +224,62 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
   }, [])
 
   const reverseGeocode = useCallback(async (lat, lng) => {
+    const generation = reverseGenerationRef.current + 1
+    reverseGenerationRef.current = generation
+    if (!openRef.current) return
+
+    const isCurrent = () =>
+      openRef.current && reverseGenerationRef.current === generation
+
     setReverseLoading(true)
     try {
-      const data = await fetchJson(
+      const data = await fetchModalJson(
         `${REVERSE_GEOCODE_URL}?lat=${lat}&lng=${lng}`
       )
+      if (!isCurrent()) return
       const address = data?.data?.address || '未解析到详细地址'
       setDraft((prev) =>
-        prev && prev.latitude === String(lat) && prev.longitude === String(lng)
+        isCurrent() &&
+        prev &&
+        prev.latitude === String(lat) &&
+        prev.longitude === String(lng)
           ? { ...prev, address }
           : prev
       )
     } catch {
+      if (!isCurrent()) return
       setDraft((prev) =>
-        prev && prev.latitude === String(lat) && prev.longitude === String(lng)
+        isCurrent() &&
+        prev &&
+        prev.latitude === String(lat) &&
+        prev.longitude === String(lng)
           ? { ...prev, address: '未解析到详细地址' }
           : prev
       )
     } finally {
-      setReverseLoading(false)
+      if (isCurrent()) setReverseLoading(false)
     }
-  }, [])
+  }, [fetchModalJson])
 
   const handleSearch = useCallback(async () => {
     const q = searchQuery.trim()
-    if (!q) return
+    if (!q || !openRef.current || searchLoadingRef.current) return
+
+    const generation = searchGenerationRef.current + 1
+    searchGenerationRef.current = generation
+    searchLoadingRef.current = true
+
+    const isCurrent = () =>
+      openRef.current && searchGenerationRef.current === generation
+
     setSearchLoading(true)
     setSearchError('')
     setSearchResults([])
     try {
-      const data = await fetchJson(
+      const data = await fetchModalJson(
         `${PLACE_SEARCH_URL}?query=${encodeURIComponent(q)}`
       )
+      if (!isCurrent()) return
       const results = data?.data?.results || []
       if (results.length === 0) {
         setSearchError('未找到相关地点')
@@ -174,11 +287,14 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
         setSearchResults(results)
       }
     } catch {
-      setSearchError('搜索失败，请稍后重试')
+      if (isCurrent()) setSearchError('搜索失败，请稍后重试')
     } finally {
-      setSearchLoading(false)
+      if (isCurrent()) {
+        searchLoadingRef.current = false
+        setSearchLoading(false)
+      }
     }
-  }, [searchQuery])
+  }, [fetchModalJson, searchQuery])
 
   const handleSearchKeyDown = useCallback(
     (e) => {

@@ -49,7 +49,7 @@ def _patch_session(monkeypatch, cursor):
 
 def test_list_tasks_uses_user_filter_and_updated_desc(monkeypatch):
     store = PostgresStorage().tasks
-    monkeypatch.setattr(store, "ensure_tables", lambda: None)
+    monkeypatch.setattr(store, "ensure_tables", lambda: True)
     rows = [
         {
             "task_id": "task-new",
@@ -84,7 +84,7 @@ def test_list_tasks_uses_user_filter_and_updated_desc(monkeypatch):
 
 def test_get_task_uses_task_and_user_filters(monkeypatch):
     store = PostgresStorage().tasks
-    monkeypatch.setattr(store, "ensure_tables", lambda: None)
+    monkeypatch.setattr(store, "ensure_tables", lambda: True)
     rows = [
         {
             "task_id": "task-1",
@@ -109,7 +109,7 @@ def test_get_task_uses_task_and_user_filters(monkeypatch):
 def test_upsert_task_no_db_call_when_task_id_missing(monkeypatch):
     store = PostgresStorage().tasks
     calls = {"n": 0}
-    monkeypatch.setattr(store, "ensure_tables", lambda: None)
+    monkeypatch.setattr(store, "ensure_tables", lambda: True)
 
     def _boom():
         # Increment first so a future regression that reaches the DB is caught
@@ -125,7 +125,7 @@ def test_upsert_task_no_db_call_when_task_id_missing(monkeypatch):
 def test_upsert_task_does_not_encrypt(monkeypatch):
     """Adapter must NOT call crypto — payload is stored exactly as received."""
     store = PostgresStorage().tasks
-    monkeypatch.setattr(store, "ensure_tables", lambda: None)
+    monkeypatch.setattr(store, "ensure_tables", lambda: True)
     cur = _FakeCursor([])
     _patch_session(monkeypatch, cur)
     store.upsert_task("signin", {"task_id": "t1", "user_id": "u1", "password": "PLAINTEXT"})
@@ -138,7 +138,7 @@ def test_upsert_task_does_not_encrypt(monkeypatch):
 
 def test_append_history_inserts_then_prunes_and_sets_timestamp(monkeypatch):
     store = PostgresStorage().tasks
-    monkeypatch.setattr(store, "ensure_tables", lambda: None)
+    monkeypatch.setattr(store, "ensure_tables", lambda: True)
     cur = _FakeCursor([])
     _patch_session(monkeypatch, cur)
     store.append_history(
@@ -176,7 +176,7 @@ def test_append_history_inserts_then_prunes_and_sets_timestamp(monkeypatch):
 
 def test_list_history_with_user_id_orders_and_falls_back_timestamp(monkeypatch):
     store = PostgresStorage().tasks
-    monkeypatch.setattr(store, "ensure_tables", lambda: None)
+    monkeypatch.setattr(store, "ensure_tables", lambda: True)
     event_dt = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
     rows = [{"user_id": "user-1", "event_time": event_dt, "payload": {"message": "no-ts"}}]
     cur = _FakeCursor(rows)
@@ -195,7 +195,7 @@ def test_list_history_with_user_id_orders_and_falls_back_timestamp(monkeypatch):
 
 def test_list_history_without_user_id_injects_user_id_and_keeps_timestamp(monkeypatch):
     store = PostgresStorage().tasks
-    monkeypatch.setattr(store, "ensure_tables", lambda: None)
+    monkeypatch.setattr(store, "ensure_tables", lambda: True)
     event_dt = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
     rows = [{"user_id": "user-9", "event_time": event_dt, "payload": {"timestamp": "kept", "message": "x"}}]
     cur = _FakeCursor(rows)

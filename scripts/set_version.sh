@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/set_version.sh — stamp ONE version (the git tag, minus a leading 'v')
-# into every manifest so the tag stays the single source of truth. Idempotent;
+# into every versioned release file so the tag stays the single source of truth. Idempotent;
 # safe to run from any CWD; works with both GNU and BSD userlands.
 #
 #   usage: scripts/set_version.sh <version>     e.g. scripts/set_version.sh 1.4.0
@@ -12,6 +12,8 @@
 #   4. backend/app/main.py                    (FastAPI(version="…"))
 #   5. frontend/src-tauri/tauri.conf.json     (top-level "version")
 #   6. frontend/src-tauri/Cargo.toml          ([package] version = "…")
+#   7. backend/uv.lock                         (editable root package version)
+#   8. frontend/src-tauri/Cargo.lock           (uh-desktop root package version)
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -78,4 +80,56 @@ awk -v v="$VERSION" '
 ' "$ROOT/frontend/src-tauri/Cargo.toml" > "$cargo_tmp"
 mv "$cargo_tmp" "$ROOT/frontend/src-tauri/Cargo.toml"
 
-echo "set_version: stamped ${VERSION} into release manifests"
+# 7–8) Lockfiles — update only the project's own package section. The uv lock
+#    root is identified by its editable source; Cargo's root package is
+#    identified by its exact package name and lack of a registry source. Other
+#    package/dependency versions (including same-name packages) remain intact.
+edit_lock_package_version() {  # edit_lock_package_version <file> <name> [marker] [without-marker]
+  local f="$1" package="$2" marker="${3:-}" without_marker="${4:-}" tmp
+  tmp="$(mktemp)"
+  awk -v target="$package" -v marker="$marker" -v without_marker="$without_marker" -v v="$VERSION" '
+    function flush(    i) {
+      if (is_target && (marker == "" || has_marker) &&
+          (without_marker == "" || !has_without_marker)) {
+        changed = 0
+        for (i = 1; i <= n; i++) {
+          if (!changed && lines[i] ~ /^version[[:space:]]*=[[:space:]]*"/) {
+            sub(/"[^"]*"/, "\"" v "\"", lines[i])
+            changed = 1
+          }
+          print lines[i]
+        }
+      } else {
+        for (i = 1; i <= n; i++) print lines[i]
+      }
+      n = 0
+      is_target = 0
+      has_marker = 0
+      has_without_marker = 0
+    }
+    /^\[\[package\]\]/ {
+      if (n > 0) flush()
+    }
+    {
+      lines[++n] = $0
+      if ($0 == "name = \"" target "\"") is_target = 1
+      if (marker != "" && $0 == marker) has_marker = 1
+      if (without_marker != "" && index($0, without_marker) == 1) has_without_marker = 1
+    }
+    END {
+      if (n > 0) flush()
+    }
+  ' "$f" > "$tmp"
+  mv "$tmp" "$f"
+}
+
+if [[ -f "$ROOT/backend/uv.lock" ]]; then
+  edit_lock_package_version "$ROOT/backend/uv.lock" \
+    "university-helper-backend" 'source = { editable = "." }'
+fi
+
+if [[ -f "$ROOT/frontend/src-tauri/Cargo.lock" ]]; then
+  edit_lock_package_version "$ROOT/frontend/src-tauri/Cargo.lock" "uh-desktop" "" 'source = '
+fi
+
+echo "set_version: stamped ${VERSION} into release files"

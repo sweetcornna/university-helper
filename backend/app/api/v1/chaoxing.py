@@ -1,17 +1,18 @@
 import asyncio
 import base64
+import binascii
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, StringConstraints, ValidationError, field_validator
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from app.config import settings
 from app.dependencies import get_current_user_id
 from app.services.course.chaoxing.signin import QR_SESSION_NOT_FOUND, signin_manager
+from app.services.course.chaoxing.task_admission import TaskAdmissionError
 
 logger = logging.getLogger(__name__)
 
@@ -35,78 +36,118 @@ SIGN_TYPE_ALIASES = {
     "signcode": "code",
     "passcode": "code",
 }
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+PHOTO_READ_CHUNK_BYTES = 64 * 1024
+ALLOWED_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
+NonBlankShortString = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=256),
+]
+OptionalShortString = Annotated[str, StringConstraints(strip_whitespace=True, max_length=256)] | None
+OptionalLongString = Annotated[str, StringConstraints(strip_whitespace=True, max_length=1024)] | None
+SelectorList = Annotated[list[NonBlankShortString], Field(max_length=100)]
 
 
-class ChaoxingLoginRequest(BaseModel):
-    username: str
-    password: str
+def _decode_photo_base64(value: str) -> bytes:
+    payload = value.strip()
+    if payload.startswith("data:"):
+        if "," not in payload:
+            raise ValueError("photo_base64 data URL is invalid")
+        metadata, payload = payload.split(",", 1)
+        media_type = metadata[5:].split(";", 1)[0].lower()
+        if media_type not in ALLOWED_IMAGE_TYPES:
+            raise ValueError("photo_base64 uses an unsupported image type")
+    if len(payload) > ((MAX_PHOTO_BYTES + 2) // 3) * 4 + 8:
+        raise ValueError("photo exceeds the 5 MB limit")
+    try:
+        decoded = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("photo_base64 must be valid base64") from exc
+    if len(decoded) > MAX_PHOTO_BYTES:
+        raise ValueError("photo exceeds the 5 MB limit")
+    return decoded
+
+
+class _ChaoxingCredentials(BaseModel):
+    username: NonBlankShortString
+    password: Annotated[str, StringConstraints(min_length=1, max_length=512)]
+
+
+class _ChaoxingPhotoPayload(_ChaoxingCredentials):
+    # The sign-in and task routes may omit the password: the server then reuses
+    # the stored session bound to `username` (see
+    # ChaoxingSigninManager._resolve_client). The username stays required — it
+    # is what binds a reused cookie jar to an account, and adopting a jar
+    # without it could silently act as a different Chaoxing account.
+    # ChaoxingLoginRequest keeps min_length=1: it IS the password path.
+    password: Annotated[str, StringConstraints(max_length=512)] = ""
+    photo_base64: str | None = None
+    photo: str | None = None
+
+    @field_validator("photo_base64", "photo")
+    @classmethod
+    def validate_photo(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        _decode_photo_base64(value)
+        return value
+
+
+class ChaoxingLoginRequest(_ChaoxingCredentials):
     use_cookies: bool = False
 
 
-class ChaoxingSignRequest(BaseModel):
-    username: str
-    # Optional: a stored session for this username is enough to sign. The
-    # username stays required because it is what binds a reused cookie jar to
-    # an account (see cookies.load_session) — adopting a jar without it could
-    # silently act as a different Chaoxing account.
-    password: str = ""
-    sign_type: str = "all"
-    course_id: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    address: Optional[str] = None
-    qr_code: Optional[str] = None
-    qrcode: Optional[Any] = None
-    location: Optional[Any] = None
-    sign_code: Optional[str] = None
-    gesture: Optional[str] = None
-    code: Optional[str] = None
-    object_id: Optional[str] = None
-    photo_base64: Optional[str] = None
-    photo: Optional[str] = None
-    altitude: Optional[float] = None
+class ChaoxingSignRequest(_ChaoxingPhotoPayload):
+    sign_type: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=32)] = "all"
+    course_id: OptionalShortString = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    address: OptionalLongString = None
+    qr_code: OptionalLongString = None
+    qrcode: Any | None = None
+    location: Any | None = None
+    sign_code: OptionalShortString = None
+    gesture: OptionalShortString = None
+    code: OptionalShortString = None
+    object_id: OptionalShortString = None
+    altitude: float | None = Field(default=None, ge=-1000, le=10000)
 
 
 class ChaoxingClassSignRequest(ChaoxingSignRequest):
-    class_id: str
-    active_id: Optional[str] = None
+    class_id: NonBlankShortString
+    active_id: OptionalShortString = None
 
 
-class ChaoxingStartRequest(BaseModel):
-    username: str
-    # Optional for the same reason as ChaoxingSignRequest.password.
-    password: str = ""
-    course_list: List[str] = Field(default_factory=list)
-    speed: float = 1.0
-    jobs: int = 1
-    sign_type: str = "all"
-    notopen_action: Optional[str] = None
-    tiku_config: Dict[str, Any] = Field(default_factory=dict)
-    notification_config: Dict[str, Any] = Field(default_factory=dict)
-    ocr_config: Dict[str, Any] = Field(default_factory=dict)
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    address: Optional[str] = None
-    qr_code: Optional[str] = None
-    qrcode: Optional[Any] = None
-    location: Optional[Any] = None
-    sign_code: Optional[str] = None
-    gesture: Optional[str] = None
-    code: Optional[str] = None
-    object_id: Optional[str] = None
-    photo_base64: Optional[str] = None
-    photo: Optional[str] = None
-    altitude: Optional[float] = None
+class ChaoxingStartRequest(_ChaoxingPhotoPayload):
+    course_list: SelectorList = Field(default_factory=list)
+    speed: float = Field(default=1.0, gt=0, le=4)
+    jobs: int = Field(default=1, ge=1, le=16)
+    sign_type: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=32)] = "all"
+    notopen_action: OptionalShortString = None
+    tiku_config: dict[str, Any] = Field(default_factory=dict)
+    notification_config: dict[str, Any] = Field(default_factory=dict)
+    ocr_config: dict[str, Any] = Field(default_factory=dict)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    address: OptionalLongString = None
+    qr_code: OptionalLongString = None
+    qrcode: Any | None = None
+    location: Any | None = None
+    sign_code: OptionalShortString = None
+    gesture: OptionalShortString = None
+    code: OptionalShortString = None
+    object_id: OptionalShortString = None
+    altitude: float | None = Field(default=None, ge=-1000, le=10000)
 
 
 class ChaoxingClassStartRequest(ChaoxingStartRequest):
-    class_id: Optional[str] = None
-    class_list: List[str] = Field(default_factory=list)
-    active_id: Optional[str] = None
-    subject_type: str = "class"
+    class_id: OptionalShortString = None
+    class_list: SelectorList = Field(default_factory=list)
+    active_id: OptionalShortString = None
+    subject_type: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=32)] = "class"
 
 
-def _request_photon_json(path: str, params: Dict[str, Any]) -> Any:
+def _request_photon_json(path: str, params: dict[str, Any]) -> Any:
     url = f"{PHOTON_BASE_URL}{path}"
     try:
         response = requests.get(url, params=params, headers=PHOTON_HEADERS, timeout=12)
@@ -125,7 +166,7 @@ def _request_photon_json(path: str, params: Dict[str, Any]) -> Any:
         ) from exc
 
 
-def _photon_feature_to_address(props: Dict[str, Any]) -> str:
+def _photon_feature_to_address(props: dict[str, Any]) -> str:
     parts = []
     for key in ("country", "state", "city", "district", "street", "name"):
         val = (props.get(key) or "").strip()
@@ -151,7 +192,7 @@ def _normalize_sign_type(value: Any) -> str:
     return SIGN_TYPE_ALIASES.get(raw, raw)
 
 
-def _parse_object(value: Any) -> Optional[Dict[str, Any]]:
+def _parse_object(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
@@ -166,7 +207,7 @@ def _parse_object(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _normalize_sign_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_sign_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(payload or {})
 
     if normalized.get("course_id") is None and normalized.get("courseId") is not None:
@@ -250,24 +291,41 @@ def _ensure_supported_sign_type(sign_type: str) -> None:
         )
 
 
-async def _parse_request_payload(raw_request: Request) -> Dict[str, Any]:
+async def _read_limited_upload(upload: UploadFile | StarletteUploadFile) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(PHOTO_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_PHOTO_BYTES:
+            raise HTTPException(status_code=413, detail="Photo exceeds the 5 MB limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _parse_request_payload(raw_request: Request) -> dict[str, Any]:
     content_type = (raw_request.headers.get("content-type") or "").lower()
     if (
         "multipart/form-data" in content_type
         or "application/x-www-form-urlencoded" in content_type
     ):
-        form = await raw_request.form()
-        payload: Dict[str, Any] = {}
-        ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+        form = await raw_request.form(max_files=1, max_fields=100)
+        payload: dict[str, Any] = {}
         for key, value in form.multi_items():
             if isinstance(value, (UploadFile, StarletteUploadFile)):
                 if key == "photo":
-                    if value.content_type not in ALLOWED_IMAGE_TYPES:
+                    media_type = (value.content_type or "").lower()
+                    if media_type not in ALLOWED_IMAGE_TYPES:
                         raise HTTPException(
-                            status_code=400,
-                            detail=f"Unsupported file type: {value.content_type}. Allowed: {', '.join(sorted(ALLOWED_IMAGE_TYPES))}",
+                            status_code=415,
+                            detail=(
+                                f"Unsupported file type: {media_type or 'unknown'}. "
+                                f"Allowed: {', '.join(sorted(ALLOWED_IMAGE_TYPES))}"
+                            ),
                         )
-                    file_bytes = await value.read()
+                    file_bytes = await _read_limited_upload(value)
                     if file_bytes:
                         payload["photo_base64"] = base64.b64encode(file_bytes).decode(
                             "utf-8"
@@ -283,7 +341,7 @@ async def _parse_request_payload(raw_request: Request) -> Dict[str, Any]:
     return body if isinstance(body, dict) else {}
 
 
-def _validate_payload(model_cls: Any, payload: Dict[str, Any]) -> BaseModel:
+def _validate_payload(model_cls: Any, payload: dict[str, Any]) -> BaseModel:
     try:
         return model_cls.model_validate(payload)
     except ValidationError as exc:
@@ -437,7 +495,7 @@ async def chaoxing_drop_session(user_id: str = Depends(get_current_user_id)):
     return {"status": "success"}
 
 
-def _qr_response(result: Dict[str, Any]) -> Dict[str, Any]:
+def _qr_response(result: dict[str, Any]) -> dict[str, Any]:
     """Shape a manager QR result for the SPA.
 
     An unknown session id and one belonging to another user are both reported
@@ -527,7 +585,7 @@ async def chaoxing_classes(user_id: str = Depends(get_current_user_id)):
 @router.get("/classes/{class_id}/activities")
 async def chaoxing_class_activities(
     class_id: str,
-    course_id: Optional[str] = None,
+    course_id: str | None = None,
     include_details: bool = True,
     user_id: str = Depends(get_current_user_id),
 ):
@@ -548,9 +606,9 @@ async def chaoxing_class_activities(
 
 @router.get("/remote-endpoints")
 async def chaoxing_remote_endpoints(
-    course_id: Optional[str] = None,
-    class_id: Optional[str] = None,
-    active_id: Optional[str] = None,
+    course_id: str | None = None,
+    class_id: str | None = None,
+    active_id: str | None = None,
     user_id: str = Depends(get_current_user_id),
 ):
     endpoints = await _run_blocking(
@@ -678,9 +736,10 @@ async def chaoxing_start(
     request = _validate_payload(ChaoxingStartRequest, payload)
     _ensure_supported_sign_type(request.sign_type)
 
-    task_id = await _run_blocking(
-        signin_manager.start_task, user_id=user_id, payload=request.model_dump()
-    )
+    try:
+        task_id = await _run_blocking(signin_manager.start_task, user_id=user_id, payload=request.model_dump())
+    except TaskAdmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return {
         "status": True,
         "message": "Task started",
@@ -697,11 +756,14 @@ async def chaoxing_class_start(
     request = _validate_payload(ChaoxingClassStartRequest, payload)
     _ensure_supported_sign_type(request.sign_type)
 
-    task_id = await _run_blocking(
-        signin_manager.start_class_task,
-        user_id=user_id,
-        payload=request.model_dump(),
-    )
+    try:
+        task_id = await _run_blocking(
+            signin_manager.start_class_task,
+            user_id=user_id,
+            payload=request.model_dump(),
+        )
+    except TaskAdmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return {
         "status": True,
         "message": "Class task started",
@@ -720,11 +782,14 @@ async def chaoxing_class_start_by_path(
     request = _validate_payload(ChaoxingClassStartRequest, payload)
     _ensure_supported_sign_type(request.sign_type)
 
-    task_id = await _run_blocking(
-        signin_manager.start_class_task,
-        user_id=user_id,
-        payload=request.model_dump(),
-    )
+    try:
+        task_id = await _run_blocking(
+            signin_manager.start_class_task,
+            user_id=user_id,
+            payload=request.model_dump(),
+        )
+    except TaskAdmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return {
         "status": True,
         "message": "Class task started",
@@ -745,7 +810,7 @@ async def chaoxing_task(task_id: str, user_id: str = Depends(get_current_user_id
 @router.get("/logs/{task_id}")
 async def chaoxing_logs(
     task_id: str,
-    cursor: Optional[int] = None,
+    cursor: int | None = None,
     user_id: str = Depends(get_current_user_id),
 ):
     log_state = await _run_blocking(

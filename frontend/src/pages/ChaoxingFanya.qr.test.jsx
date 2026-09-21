@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import ChaoxingFanya from './ChaoxingFanya'
+import { RuntimeProfileContext } from '../components/runtimeProfileContext'
 
 // Regression guard for a wiring bug: the 泛雅 page handed its generic `callApi`
 // (which prefixes only `/api/v1`) to the QR panel, so the request went to
@@ -68,9 +69,13 @@ describe('ChaoxingFanya QR login wiring', () => {
   test('requests the QR from the Chaoxing-scoped URL', async () => {
     await act(async () => {
       root.render(
-        <MemoryRouter>
-          <ChaoxingFanya />
-        </MemoryRouter>
+        <RuntimeProfileContext.Provider
+          value={{ profile: 'server', isLocal: false, requiresAuth: true, loading: false }}
+        >
+          <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <ChaoxingFanya />
+          </MemoryRouter>
+        </RuntimeProfileContext.Provider>
       )
     })
 

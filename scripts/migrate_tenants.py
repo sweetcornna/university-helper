@@ -39,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote
 
@@ -127,7 +128,31 @@ def _db_exists(name: str) -> bool:
         conn.close()
 
 
+def _alembic_workdir() -> Path | None:
+    """Find the backend directory containing this script's Alembic config.
+
+    Locally the script lives in ``repo/scripts`` and the config is in
+    ``repo/backend``. In the app container it is mounted below
+    ``/srv/backend/scripts`` beside ``/srv/backend/alembic.ini``. Resolving
+    from ``__file__`` keeps the migration independent of the caller's CWD.
+    """
+    script_root = Path(__file__).resolve().parent.parent
+    repo_backend = script_root / "backend"
+    if (repo_backend / "alembic.ini").is_file():
+        return repo_backend
+    if (script_root / "alembic.ini").is_file():
+        return script_root
+    logger.error(
+        "Alembic config not found relative to %s; expected backend/alembic.ini",
+        Path(__file__).resolve(),
+    )
+    return None
+
+
 def _migrate_one(name: str, dry_run: bool) -> bool:
+    workdir = _alembic_workdir()
+    if workdir is None:
+        return False
     url = _build_alembic_url(name)
     env = {**os.environ, "ALEMBIC_DB_URL": url}
     # Target ONLY the tenant_db branch head — never the main-DB migrations
@@ -136,7 +161,7 @@ def _migrate_one(name: str, dry_run: bool) -> bool:
     if dry_run:
         cmd = ["alembic", "current"]
     logger.info("[%s] %s", name, " ".join(cmd))
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=workdir, env=env, capture_output=True, text=True)
     if result.returncode != 0:
         logger.error("[%s] failed: %s", name, result.stderr.strip())
         return False
@@ -173,18 +198,34 @@ def main(argv: Iterable[str] | None = None) -> int:
         logger.warning("no tenants found — nothing to migrate")
         return 0
 
+    migrated: list[str] = []
+    skipped: list[str] = []
     failed: list[str] = []
     for name in targets:
         if not _db_exists(name):
             logger.warning("[%s] database missing in postgres — skipping", name)
+            skipped.append(name)
             continue
-        if not _migrate_one(name, dry_run=args.dry_run):
+        if _migrate_one(name, dry_run=args.dry_run):
+            migrated.append(name)
+        else:
             failed.append(name)
 
     if failed:
         logger.error("FAILED tenants (%d): %s", len(failed), ", ".join(failed))
+        logger.info(
+            "migration summary: migrated=%d skipped=%d failed=%d",
+            len(migrated),
+            len(skipped),
+            len(failed),
+        )
         return 1
-    logger.info("ok: %d tenant(s) migrated", len(targets) - len(failed))
+    logger.info("ok: %d tenant(s) migrated", len(migrated))
+    logger.info(
+        "migration summary: migrated=%d skipped=%d failed=0",
+        len(migrated),
+        len(skipped),
+    )
     return 0
 
 

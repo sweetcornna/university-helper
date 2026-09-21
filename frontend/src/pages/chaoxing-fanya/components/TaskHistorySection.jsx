@@ -12,16 +12,7 @@ export default function TaskHistorySection({ taskHistory, taskId, selectTaskFrom
     <section className={CARD}>
 
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-
-
-        <h2 className="text-xl font-semibold text-text">最近任务 / 历史任务</h2>
-
-
-        <p className="text-xs text-text-muted">点击任意任务可恢复详情和日志</p>
-
-
-      </div>
+      <h2 className="mb-4 text-xl font-semibold text-text">选择任务以恢复</h2>
 
 
       {rows.length === 0 ? (
@@ -52,6 +43,12 @@ export default function TaskHistorySection({ taskHistory, taskId, selectTaskFrom
 
 
                 type="button"
+
+
+                aria-label={`恢复任务 ${task.task_id}`}
+
+
+                aria-pressed={selected}
 
 
                 onClick={() => {

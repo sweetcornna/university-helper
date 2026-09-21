@@ -15,9 +15,11 @@ class _RecordingTasks:
 
     def ensure_tables(self):
         self.calls.append(("ensure_tables",))
+        return True
 
     def upsert_task(self, task_kind, task_state_public):
         self.calls.append(("upsert_task", task_kind, task_state_public))
+        return True
 
     def get_task(self, task_kind, task_id, user_id=None):
         self.calls.append(("get_task", task_kind, task_id, user_id))
@@ -167,7 +169,7 @@ def test_signin_manager_loads_full_history_for_user_even_after_partial_preload(m
     ]
 
     monkeypatch.setattr(signin_module.task_store, "list_tasks", lambda *args, **kwargs: [], raising=False)
-    monkeypatch.setattr(signin_module.task_store, "upsert_task", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(signin_module.task_store, "upsert_task", lambda *args, **kwargs: True, raising=False)
 
     def _fake_list_history(*args, **kwargs):
         if kwargs.get("user_id"):
@@ -205,7 +207,7 @@ def test_signin_manager_loads_missing_task_from_store_on_demand(monkeypatch):
 
     monkeypatch.setattr(signin_module.task_store, "list_tasks", lambda *args, **kwargs: [], raising=False)
     monkeypatch.setattr(signin_module.task_store, "list_history", lambda *args, **kwargs: [], raising=False)
-    monkeypatch.setattr(signin_module.task_store, "upsert_task", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(signin_module.task_store, "upsert_task", lambda *args, **kwargs: True, raising=False)
     monkeypatch.setattr(signin_module.task_store, "get_task", lambda *args, **kwargs: dict(stored_task), raising=False)
 
     manager = signin_module.ChaoxingSigninManager()
@@ -227,7 +229,7 @@ def test_signin_manager_get_active_tasks_falls_back_to_background_tasks(monkeypa
 
     monkeypatch.setattr(signin_module.task_store, "list_tasks", lambda *args, **kwargs: [], raising=False)
     monkeypatch.setattr(signin_module.task_store, "list_history", lambda *args, **kwargs: [], raising=False)
-    monkeypatch.setattr(signin_module.task_store, "upsert_task", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(signin_module.task_store, "upsert_task", lambda *args, **kwargs: True, raising=False)
 
     manager = signin_module.ChaoxingSigninManager()
     manager._tasks["bg-task-1"] = {
@@ -282,7 +284,7 @@ def test_signin_manager_recovery_marks_running_task_as_non_running(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(signin_module.task_store, "list_history", lambda *args, **kwargs: [], raising=False)
-    monkeypatch.setattr(signin_module.task_store, "upsert_task", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(signin_module.task_store, "upsert_task", lambda *args, **kwargs: True, raising=False)
 
     manager = signin_module.ChaoxingSigninManager()
     restored = manager.get_task(user_id="user-1", task_id="recovered-running")

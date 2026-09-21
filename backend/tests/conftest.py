@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Set test environment variables before any imports.
+# Set test environment variables before any application imports.
 # These duplicate the `env =` block in pytest.ini on purpose: that block needs
 # the pytest-env plugin, which is not in requirements-dev.txt, so pytest ignores
 # it (it warns "Unknown config option: env"). Seeding here is what actually
@@ -20,6 +20,9 @@ os.environ.setdefault("MAIN_DB_PASSWORD", "test_password")
 # POST-only route and lands on the SPA catch-all — a 200 of index.html instead
 # of the JSON the test asserted on.
 os.environ.setdefault("ENFORCE_HTTPS", "false")
+# Tests that run the app lifespan must not try to create databases.
+os.environ.setdefault("DB_AUTO_BOOTSTRAP", "false")
+os.environ.setdefault("UPDATE_CHECK_ENABLED", "false")
 
 
 @pytest.fixture

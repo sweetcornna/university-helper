@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+umask 077
 
 PROJECT_DIR="${PROJECT_DIR:-/opt/easy_learning}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
@@ -7,6 +8,7 @@ DOMAIN="${DOMAIN:-shuake.cornna.xyz}"
 UPSTREAM_HOST="${UPSTREAM_HOST:-127.0.0.1}"
 UPSTREAM_PORT="${UPSTREAM_PORT:-18082}"
 BACKUP_DIR="${BACKUP_DIR:-$PROJECT_DIR/backups}"
+NGINX_CONFIG_DIR="${NGINX_CONFIG_DIR:-/etc/nginx/sites-available}"
 
 NEW_APP_CONTAINER="${NEW_APP_CONTAINER:-easy-learning-app}"
 NEW_DB_CONTAINER="${NEW_DB_CONTAINER:-easy-learning-db}"
@@ -28,16 +30,41 @@ require_cmd nginx
 
 mkdir -p "$BACKUP_DIR"
 
+TEMP_DIR=""
+NGINX_CANDIDATE=""
+legacy_backup_tmp=""
+
+cleanup_temporary_files() {
+  if [[ -n "$legacy_backup_tmp" ]]; then
+    rm -f -- "$legacy_backup_tmp"
+  fi
+  if [[ -n "$NGINX_CANDIDATE" ]]; then
+    rm -f -- "$NGINX_CANDIDATE"
+  fi
+  if [[ -n "$TEMP_DIR" ]]; then
+    rm -rf -- "$TEMP_DIR"
+  fi
+}
+trap cleanup_temporary_files EXIT
+
+TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/server-finalize.XXXXXX")"
+chmod 700 "$TEMP_DIR"
+
 timestamp="$(date +%Y%m%d-%H%M%S)"
 legacy_backup="$BACKUP_DIR/shuake-main_db-$timestamp.sql.gz"
-users_schema="/tmp/shuake_users_schema.sql"
-users_data="/tmp/shuake_users_data.sql"
-nginx_target="/etc/nginx/sites-available/$DOMAIN"
-nginx_backup="/etc/nginx/sites-available/$DOMAIN.bak-$timestamp"
+legacy_backup_tmp="$(mktemp "$BACKUP_DIR/.shuake-main_db-$timestamp.sql.gz.XXXXXX")"
+users_schema="$TEMP_DIR/users_schema.sql"
+users_data="$TEMP_DIR/users_data.sql"
+nginx_target="$NGINX_CONFIG_DIR/$DOMAIN"
+nginx_backup="$NGINX_CONFIG_DIR/$DOMAIN.bak-$timestamp"
 
 echo "[1/6] Backing up legacy database to $legacy_backup"
-docker exec "$LEGACY_DB_CONTAINER" pg_dump -U easylearning -d main_db | gzip -c > "$legacy_backup"
-gzip -t "$legacy_backup"
+docker exec "$LEGACY_DB_CONTAINER" pg_dump -U easylearning -d main_db | gzip -c > "$legacy_backup_tmp"
+gzip -t "$legacy_backup_tmp"
+[[ -s "$legacy_backup_tmp" ]]
+chmod 600 "$legacy_backup_tmp"
+mv -f -- "$legacy_backup_tmp" "$legacy_backup"
+legacy_backup_tmp=""
 ls -lh "$legacy_backup"
 
 echo "[2/6] Exporting users table from legacy database"
@@ -88,7 +115,8 @@ fi
 
 echo "[5/6] Repointing host Nginx for $DOMAIN to $UPSTREAM_HOST:$UPSTREAM_PORT"
 cp "$nginx_target" "$nginx_backup"
-cat > "$nginx_target" <<EOF
+NGINX_CANDIDATE="$(mktemp "$NGINX_CONFIG_DIR/.server.XXXXXX")"
+cat > "$NGINX_CANDIDATE" <<EOF
 server {
     listen 80;
     server_name $DOMAIN;
@@ -148,8 +176,31 @@ server {
     }
 }
 EOF
-nginx -t
-systemctl reload nginx
+
+# Validate a complete temporary nginx configuration that includes the
+# candidate.  This keeps the live vhost untouched until nginx accepts the
+# exact file that will be installed.
+nginx_include_path="${NGINX_CANDIDATE//\\/\\\\}"
+nginx_include_path="${nginx_include_path//\"/\\\"}"
+nginx_validation_conf="$(mktemp "$TEMP_DIR/nginx-validation.XXXXXX")"
+cat > "$nginx_validation_conf" <<EOF
+events {}
+http {
+    include "$nginx_include_path";
+}
+EOF
+if ! nginx -t -c "$nginx_validation_conf"; then
+  echo "Nginx validation failed; keeping the previous configuration" >&2
+  exit 1
+fi
+
+mv -f -- "$NGINX_CANDIDATE" "$nginx_target"
+NGINX_CANDIDATE=""
+if ! systemctl reload nginx; then
+  echo "Nginx reload failed; restoring the previous configuration" >&2
+  mv -f -- "$nginx_backup" "$nginx_target"
+  exit 1
+fi
 
 echo "[6/6] Cleaning up legacy application container"
 docker rm -f "$LEGACY_APP_CONTAINER" >/dev/null 2>&1 || true

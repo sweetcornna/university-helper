@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>University Helper — 你睡觉，它上课</title>
-<meta name="description" content="University Helper：自托管的校园课程自动化平台。夜里替你完成超星学习通与智慧树的签到与课程任务，凭据加密，多租户隔离，开源 MIT。" />
-<meta property="og:title" content="University Helper — 你睡觉，它上课" />
-<meta property="og:description" content="自托管的校园课程自动化平台：超星学习通 · 智慧树 · 多租户隔离 · 开源 MIT" />
+<title>University Helper · 你睡觉，它上课</title>
+<meta name="description" content="University Helper 是自托管的校园课程自动化平台，夜里替你完成超星学习通和智慧树的签到与课程任务。平台账号密码加密保存，每位用户有独立的数据库，代码以 MIT 协议开源。" />
+<meta property="og:title" content="University Helper · 你睡觉，它上课" />
+<meta property="og:description" content="自托管的校园课程自动化平台，支持超星学习通和智慧树，每位用户独立建库，MIT 协议开源。" />
 <meta property="og:type" content="website" />
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -64,7 +64,7 @@
         <p class="hero-sub" data-hero>
           <strong>University Helper</strong> 是一个自托管的校园课程自动化平台：
           夜里替你完成超星学习通与智慧树的签到和课程任务。
-          凭据加密落库，每位用户一座独立数据库，代码全部开源。
+          平台账号密码加密后才存进数据库，每位用户有自己的数据库，代码全部开源。
         </p>
         <div class="hero-cta" data-hero>
           <a class="btn btn-primary" href="wiki.html">阅读帮助文档</a>
@@ -99,7 +99,7 @@
       <header class="sec-head" data-reveal>
         <time class="sec-time mono">23:30</time>
         <h2 class="sec-title">两个平台，一次接入</h2>
-        <p class="sec-sub">登录一次，签到、视频、测验从此排进夜里的队列。</p>
+        <p class="sec-sub">登录一次以后，签到、视频和章节测验都排进夜里的队列。</p>
       </header>
 
       <div class="platform-grid">
@@ -109,7 +109,7 @@
             <li>手机号登录，课程一键拉取</li>
             <li>位置 / 二维码 / 普通签到，支持「一键全签」</li>
             <li>泛雅课程任务：视频与章节测验自动推进</li>
-            <li>内置地图检索，签到坐标即点即用</li>
+            <li>内置地图搜索，选中地点就拿到签到坐标</li>
           </ul>
           <p class="platform-api mono">POST /chaoxing/login&ensp;·&ensp;POST /chaoxing/sign-all</p>
         </article>
@@ -135,7 +135,7 @@
         <header class="sec-head">
           <time class="sec-time mono">01:00</time>
           <h2 class="sec-title">你已经睡了，队列还醒着</h2>
-          <p class="sec-sub">继续滚动 —— 看任务在凌晨被逐项做完。</p>
+          <p class="sec-sub">继续往下滚，看凌晨的任务一项项做完。</p>
         </header>
 
         <div class="shift">
@@ -207,7 +207,7 @@
       <header class="sec-head" data-reveal>
         <time class="sec-time mono">03:00</time>
         <h2 class="sec-title">各睡各的</h2>
-        <p class="sec-sub">每位用户，一座物理隔离的数据库。串号？不存在的。</p>
+        <p class="sec-sub">每位用户一个独立的数据库，你的课程和别人的数据分开存放。</p>
       </header>
 
       <div class="iso">
@@ -238,14 +238,14 @@
             </div>
           </div>
           <span class="dorm-ground"></span>
-          <figcaption class="dorm-cap mono" id="dorm-cap">03:12 · 整栋楼都睡了，只有 tenant_you 还亮着——你的库在替你上课。</figcaption>
+          <figcaption class="dorm-cap mono" id="dorm-cap">03:12 · 整栋楼都睡了，只有 tenant_you 还亮着灯，你的库在替你上课。</figcaption>
         </figure>
 
         <ul class="iso-points">
-          <li data-reveal>注册即建库：每位用户独占 <code class="mono">tenant_&lt;username&gt;</code>，跨租户读取在物理上不可能。</li>
-          <li data-reveal data-delay="0.08">第三方平台凭据 Fernet 加密后才落库，密钥只存在于环境变量。</li>
-          <li data-reveal data-delay="0.16">后端容器以非 root（UID 10001）运行，只读根文件系统，能力全部裁剪。</li>
-          <li data-reveal data-delay="0.24">nginx 对登录接口限速 5 次/分，CSP、HSTS、frame-ancestors 全部就位。</li>
+          <li data-reveal>注册时自动建库：每位用户的数据放在自己的 <code class="mono">tenant_&lt;username&gt;</code> 库里，和其他用户的数据分开存放。</li>
+          <li data-reveal data-delay="0.08">第三方平台凭据先用 Fernet 加密再写入数据库，密钥只放在服务器的环境变量里。</li>
+          <li data-reveal data-delay="0.16">后端容器以非 root 用户（UID 10001）运行，根文件系统只读，Linux capabilities 全部去掉。</li>
+          <li data-reveal data-delay="0.24">nginx 把登录接口限制在每分钟 5 次，并下发 CSP、HSTS 和 frame-ancestors 响应头。</li>
         </ul>
       </div>
     </div>
@@ -264,19 +264,16 @@
       <header class="sec-head" data-reveal>
         <time class="sec-time mono">04:30</time>
         <h2 class="sec-title">趁天没亮，把它跑起来</h2>
-        <p class="sec-sub">三行命令，自己的服务器自己开。数据从头到尾归你。</p>
+        <p class="sec-sub">一行命令装到自己的服务器上，数据也留在这台机器上。</p>
       </header>
 
       <div class="codeblock" data-reveal>
-        <button class="copy-btn mono" type="button" data-copy="git clone https://github.com/sweetcornna/university-helper.git
-cp .env.example .env
-docker compose -f docker-compose.server.yml -p university-helper up -d --build">复制命令</button>
-        <pre class="mono"><code><span class="c-prompt">$</span> git clone https://github.com/sweetcornna/university-helper.git
-<span class="c-prompt">$</span> cp .env.example .env   <span class="c-comment"># 填 SECRET_KEY · POSTGRES_PASSWORD · CREDENTIAL_ENCRYPTION_KEY · CORS_ORIGINS</span>
-<span class="c-prompt">$</span> docker compose -f docker-compose.server.yml -p university-helper up -d --build</code></pre>
+        <button class="copy-btn mono" type="button" data-copy="curl -fsSL https://github.com/sweetcornna/university-helper/releases/latest/download/deploy_server.sh | bash -s -- -y --admin-email you@example.com">复制命令</button>
+        <pre class="mono"><code><span class="c-prompt">$</span> curl -fsSL https://github.com/sweetcornna/university-helper/releases/latest/download/deploy_server.sh | bash -s -- -y --admin-email you@example.com
+<span class="c-comment"># 装好后打开 http://localhost:8080；公网访问加 --domain 你的域名 或 --host 服务器IP</span></code></pre>
       </div>
 
-      <p class="start-more" data-reveal>本地开发、环境变量、API 细节，都在 <a href="wiki.html">帮助文档</a> 里写清楚了。</p>
+      <p class="start-more" data-reveal>脚本会生成 <code class="mono">.env</code> 和随机密钥，再次运行会保留原有密钥和数据。从源码部署、本地开发和 API 说明见 <a href="wiki.html">帮助文档</a>。</p>
     </div>
   </section>
 
@@ -285,7 +282,7 @@ docker compose -f docker-compose.server.yml -p university-helper up -d --build">
     <div class="container dawn-inner">
       <time class="sec-time mono" data-reveal>06:00</time>
       <h2 class="dawn-title" data-reveal>天亮了。</h2>
-      <p class="dawn-sub" data-reveal data-delay="0.1">昨晚排队的课，都看完了。<br />剩下的白天，是你的。</p>
+      <p class="dawn-sub" data-reveal data-delay="0.1">昨晚排队的课都看完了。<br />白天留给你自己安排。</p>
       <div class="hero-cta dawn-cta" data-reveal data-delay="0.2">
         <a class="btn btn-primary" href="wiki.html">阅读帮助文档</a>
         <a class="btn btn-ghost" href="https://github.com/sweetcornna/university-helper" target="_blank" rel="noopener">去 GitHub 点个星&nbsp;↗</a>
@@ -303,12 +300,12 @@ docker compose -f docker-compose.server.yml -p university-helper up -d --build">
       <a href="https://github.com/sweetcornna/university-helper" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/sweetcornna/university-helper/issues" target="_blank" rel="noopener">反馈问题</a>
     </nav>
-    <p class="foot-note">合规提示：请仅在符合学校规定、平台规则与当地法律的前提下使用本项目；对第三方平台启用自动化前，请自行评估相应风险。本项目自托管运行，你的数据只属于你。</p>
+    <p class="foot-note">合规提示：请仅在符合学校规定、平台规则与当地法律的前提下使用本项目；对第三方平台启用自动化前，请自行评估相应风险。本项目自托管运行，数据保存在你自己的服务器上。</p>
   </div>
 </footer>
 
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js" integrity="sha384-g4NTh/Iv5PPU4xPyhEWqPcwtNXOvdaDI8LLnyYfyNZOjKJeYQyjzQ9X5275eBjpt" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js" integrity="sha384-Z3REaz79l2IaAZqJsSABtTbhjgOUYyV3p90XNnAPCSHg3EMTz1fouunq9WZRtj3d" crossorigin="anonymous"></script>
 <script src="assets/night.js"></script>
 </body>
 </html>

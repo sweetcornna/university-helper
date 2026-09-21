@@ -139,3 +139,107 @@ def test_readiness_token_is_emitted_after_heavy_app_import():
     readiness_print = source.index('print(f"{TOKEN_PREFIX} {port}"')
 
     assert app_import < readiness_print
+
+
+# ---- process lifetime guards -------------------------------------------------
+
+
+def test_pid_alive_for_self_and_missing_process():
+    assert desktop_entry.pid_alive(os.getpid()) is True
+    assert desktop_entry.pid_alive(0) is False
+    assert desktop_entry.pid_alive(-5) is False
+
+
+def test_orphan_detection_when_desktop_parent_is_gone(monkeypatch):
+    monkeypatch.setattr(desktop_entry, "pid_alive", lambda pid: pid != 4242)
+    assert desktop_entry.is_orphaned(4242, initial_ppid=100, current_ppid=100) is True
+    assert desktop_entry.is_orphaned(777, initial_ppid=100, current_ppid=100) is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="re-parenting is POSIX behaviour")
+def test_orphan_detection_when_bootloader_died_and_we_were_reparented(monkeypatch):
+    monkeypatch.setattr(desktop_entry, "pid_alive", lambda pid: True)
+    assert desktop_entry.is_orphaned(777, initial_ppid=100, current_ppid=1) is True
+
+
+def test_watchdog_calls_on_orphan(monkeypatch):
+    import threading
+
+    fired = threading.Event()
+    monkeypatch.setattr(desktop_entry, "is_orphaned", lambda *args: True)
+    thread = desktop_entry.start_parent_watchdog(1234, poll_seconds=0.01, on_orphan=fired.set)
+    thread.join(timeout=2)
+    assert fired.is_set()
+
+
+def test_guard_is_inactive_for_plain_development_runs(appdata, monkeypatch):
+    monkeypatch.delenv(desktop_entry.PARENT_PID_ENV, raising=False)
+    monkeypatch.setattr(desktop_entry, "start_parent_watchdog", lambda *a, **k: pytest.fail("watchdog started"))
+    desktop_entry.guard_process_lifetime()
+    assert not (appdata / desktop_entry.PID_FILE_NAME).exists()
+
+
+def test_guard_writes_pid_file_and_starts_watchdog(appdata, monkeypatch):
+    started = []
+    monkeypatch.setenv(desktop_entry.PARENT_PID_ENV, "4321")
+    monkeypatch.setattr(desktop_entry, "start_parent_watchdog", lambda pid: started.append(pid))
+    desktop_entry.guard_process_lifetime()
+
+    record = json.loads((appdata / desktop_entry.PID_FILE_NAME).read_text())
+    assert record == {"pid": os.getpid(), "parent_pid": 4321}
+    assert started == [4321]
+
+
+def test_reap_stale_backend_only_stops_orphaned_sidecar(tmp_path, monkeypatch):
+    pid_file = tmp_path / "uh-backend.pid"
+    pid_file.write_text(json.dumps({"pid": 999001, "parent_pid": 999002}))
+    killed = []
+    monkeypatch.setattr(desktop_entry, "_terminate", killed.append)
+
+    monkeypatch.setattr(desktop_entry, "pid_alive", lambda pid: pid == 999001)
+    monkeypatch.setattr(desktop_entry, "_process_image", lambda pid: "/Applications/学道.app/Contents/MacOS/uh-backend")
+    assert desktop_entry.reap_stale_backend(pid_file) is True
+    assert killed == [999001]
+
+    killed.clear()
+    monkeypatch.setattr(desktop_entry, "pid_alive", lambda pid: True)  # owner still running
+    assert desktop_entry.reap_stale_backend(pid_file) is False
+
+    monkeypatch.setattr(desktop_entry, "pid_alive", lambda pid: pid == 999001)
+    monkeypatch.setattr(desktop_entry, "_process_image", lambda pid: "/usr/bin/python3")  # PID reused
+    assert desktop_entry.reap_stale_backend(pid_file) is False
+    assert killed == []
+
+
+def test_reap_stale_backend_ignores_missing_or_corrupt_file(tmp_path):
+    assert desktop_entry.reap_stale_backend(tmp_path / "missing.pid") is False
+    corrupt = tmp_path / "corrupt.pid"
+    corrupt.write_text("not json")
+    assert desktop_entry.reap_stale_backend(corrupt) is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX ps output")
+def test_reap_orphaned_sidecars_matches_only_reparented_uh_backend(monkeypatch):
+    listing = "\n".join(
+        [
+            "  501     1 /Applications/学道.app/Contents/MacOS/uh-backend",
+            "  502   400 /Applications/学道.app/Contents/MacOS/uh-backend",
+            "  503     1 /usr/sbin/uh-backend-helper",
+            "  504     1 python3",
+        ]
+    )
+    monkeypatch.setattr(
+        desktop_entry.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=listing, stderr=""),
+    )
+    killed = []
+    monkeypatch.setattr(desktop_entry, "_terminate", killed.append)
+    assert desktop_entry.reap_orphaned_sidecars() == [501]
+    assert killed == [501]
+
+
+def test_sidecar_image_names():
+    assert desktop_entry._is_sidecar_image("C:\\Program Files\\学道\\uh-backend.exe")
+    assert desktop_entry._is_sidecar_image("uh-backend")
+    assert not desktop_entry._is_sidecar_image("uh-backend-helper")

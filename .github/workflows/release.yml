@@ -2,10 +2,13 @@ name: release
 
 # Fan-out from one v* tag (the single source of truth for the version):
 #   create-release  → makes a DRAFT GitHub Release, stamps version, extracts notes
-#   app-image       → multi-arch server image to GHCR (:version + :latest)
-#   web-image       → multi-arch web image to GHCR (:version + :latest)
-#   desktop         → Win/macOS(x2)/Linux installers + updater artifacts (Tauri)
-#   publish         → flips the draft to published once images + every desktop leg pass
+#   app-image       → multi-arch server image to GHCR (:version, digest output)
+#   web-image       → multi-arch web image to GHCR (:version, digest output)
+#   desktop         → Win/macOS(x2)/Linux installers + signed updater bundles (Tauri)
+#   updater-manifest→ the ONLY writer of latest.json, after every desktop build;
+#                     verifies each .sig against the pubkey in tauri.conf.json
+#   promote-images  → after every build gate, retags those exact digests as :latest
+#   publish         → flips the draft to published, then checks the live latest.json
 #
 # First-run prerequisite: Settings → Actions → General → Workflow permissions =
 # "Read and write". GHCR packages default to PRIVATE — make
@@ -39,33 +42,70 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
       release_id: ${{ steps.release.outputs.id }}
+      updater: ${{ steps.signing.outputs.updater }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve version from tag
         id: meta
+        env:
+          RELEASE_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          REF="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "tag=${REF}" >> "$GITHUB_OUTPUT"
-          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          REF="$RELEASE_REF"
+          if [[ ! "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "error: release tag must match vX.Y.Z (with optional prerelease/build suffix)" >&2
+            exit 2
+          fi
+          VERSION="${REF#v}"
+          # Docker tags disallow '+'. The validated SemVer grammar forbids '_',
+          # so this remains a collision-free representation of build metadata.
+          IMAGE_VERSION="${VERSION//+/_}"
+          printf 'tag=%s\n' "$REF" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'image_version=%s\n' "$IMAGE_VERSION" >> "$GITHUB_OUTPUT"
+
+      # Installed desktop apps only update from signed bundles. The upstream
+      # repository must never publish a release without them; forks without the
+      # secret still get installers, just no auto-update.
+      - name: Require the updater signing key upstream
+        id: signing
+        env:
+          SIGN_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -n "$SIGN_KEY" ]; then
+            echo "updater=true" >> "$GITHUB_OUTPUT"
+          elif [ "$REPOSITORY" = "sweetcornna/university-helper" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Without it installed desktop apps cannot auto-update. Add it under Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          else
+            echo "updater=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No TAURI_SIGNING_PRIVATE_KEY in this fork: installers will be unsigned and the release has no latest.json."
+          fi
 
       # Validates set_version.sh runs against the real tree on every release.
       # (The build jobs below re-stamp their own fresh checkouts.)
       - name: Stamp version into all manifests
-        run: bash scripts/set_version.sh "${{ steps.meta.outputs.version }}"
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: bash scripts/set_version.sh "$VERSION"
 
       - name: Extract release notes from CHANGELOG
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          VERSION="${{ steps.meta.outputs.version }}"
           awk -v ver="$VERSION" '
             $0 ~ "^## \\[" ver "\\]" { grab=1; print; next }
             grab && /^## \[/ { exit }
             grab { print }
           ' CHANGELOG.md > release_notes.md
           if [ ! -s release_notes.md ]; then
-            echo "Release ${{ steps.meta.outputs.tag }}" > release_notes.md
+            echo "Release $TAG" > release_notes.md
           fi
           {
             echo ""
@@ -82,16 +122,35 @@ jobs:
             echo '```'
             echo ""
             echo "## Server (Docker)"
+            echo "Linux / macOS / WSL2 (downloads this release's source, then installs it):"
             echo '```bash'
-            echo "git clone https://github.com/sweetcornna/university-helper.git"
-            echo "cd university-helper"
-            echo "bash scripts/deploy_server.sh --tag ${{ steps.meta.outputs.tag }} --domain your.domain"
+            echo "curl -fsSL https://github.com/sweetcornna/university-helper/releases/download/$TAG/deploy_server.sh | bash -s -- --domain your.domain --admin-email you@example.com -y"
             echo '```'
+            echo "Windows (Docker Desktop):"
+            echo '```powershell'
+            echo "Invoke-WebRequest -UseBasicParsing https://github.com/sweetcornna/university-helper/releases/download/$TAG/deploy_server.ps1 -OutFile deploy_server.ps1"
+            echo "powershell -ExecutionPolicy Bypass -File deploy_server.ps1 -Yes"
+            echo '```'
+            echo "Updating an existing install: re-run the same command; .env and data are kept."
           } >> release_notes.md
+
+      # The attached installers must work without a checkout, so each copy is
+      # stamped with this release's tag and downloads the matching source.
+      - name: Prepare standalone installer assets
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          sed "s/^UH_BUNDLED_TAG=\"\"$/UH_BUNDLED_TAG=\"${TAG}\"/" scripts/deploy_server.sh > release-assets/deploy_server.sh
+          sed "s/^\$BundledTag = \"\"$/\$BundledTag = \"${TAG}\"/" scripts/deploy_server.ps1 > release-assets/deploy_server.ps1
+          grep -qx "UH_BUNDLED_TAG=\"${TAG}\"" release-assets/deploy_server.sh
+          grep -qx "\$BundledTag = \"${TAG}\"" release-assets/deploy_server.ps1
+          chmod +x release-assets/deploy_server.sh
 
       - name: Create DRAFT release
         id: release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
@@ -99,46 +158,64 @@ jobs:
           draft: true
           files: |
             docker-compose.release.yml
-            scripts/deploy_server.sh
-            scripts/deploy_server.ps1
+            release-assets/deploy_server.sh
+            release-assets/deploy_server.ps1
 
   # ───────────────────────── 2a. server API image ───────────────────────────
   app-image:
     runs-on: ubuntu-latest
     needs: create-release
     timeout-minutes: 45
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image_version: ${{ steps.meta.outputs.image_version }}
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve version
         id: meta
+        env:
+          RELEASE_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          REF="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "tag=${REF}" >> "$GITHUB_OUTPUT"
-          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          REF="$RELEASE_REF"
+          if [[ ! "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "error: release tag must match vX.Y.Z (with optional prerelease/build suffix)" >&2
+            exit 2
+          fi
+          VERSION="${REF#v}"
+          # Docker tags disallow '+'. The validated SemVer grammar forbids '_',
+          # so this remains a collision-free representation of build metadata.
+          IMAGE_VERSION="${VERSION//+/_}"
+          printf 'tag=%s\n' "$REF" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'image_version=%s\n' "$IMAGE_VERSION" >> "$GITHUB_OUTPUT"
 
       # Re-stamp this fresh checkout so the image bakes the tag's version even if
       # the tagged commit was not pre-stamped (robust to the human runbook step).
       - name: Stamp version into all manifests
-        run: bash scripts/set_version.sh "${{ steps.meta.outputs.version }}"
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: bash scripts/set_version.sh "$VERSION"
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push app image
-        uses: docker/build-push-action@v6
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile.server
@@ -148,56 +225,71 @@ jobs:
           # default when building on GitHub-hosted runners.
           build-args: |
             PIP_INDEX_URL=https://pypi.org/simple
-            PIP_TRUSTED_HOST=pypi.org
           tags: |
-            ${{ env.APP_IMAGE }}:${{ steps.meta.outputs.version }}
-            ${{ env.APP_IMAGE }}:latest
+            ${{ env.APP_IMAGE }}:${{ steps.meta.outputs.image_version }}
 
   # ───────────────────────── 2b. web image ──────────────────────────────────
   web-image:
     runs-on: ubuntu-latest
     needs: create-release
     timeout-minutes: 30
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image_version: ${{ steps.meta.outputs.image_version }}
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve version
         id: meta
+        env:
+          RELEASE_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          REF="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "tag=${REF}" >> "$GITHUB_OUTPUT"
-          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          REF="$RELEASE_REF"
+          if [[ ! "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "error: release tag must match vX.Y.Z (with optional prerelease/build suffix)" >&2
+            exit 2
+          fi
+          VERSION="${REF#v}"
+          # Docker tags disallow '+'. The validated SemVer grammar forbids '_',
+          # so this remains a collision-free representation of build metadata.
+          IMAGE_VERSION="${VERSION//+/_}"
+          printf 'tag=%s\n' "$REF" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'image_version=%s\n' "$IMAGE_VERSION" >> "$GITHUB_OUTPUT"
 
       # Re-stamp this fresh checkout so the image bakes the tag's version even if
       # the tagged commit was not pre-stamped (robust to the human runbook step).
       - name: Stamp version into all manifests
-        run: bash scripts/set_version.sh "${{ steps.meta.outputs.version }}"
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: bash scripts/set_version.sh "$VERSION"
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push web image
-        uses: docker/build-push-action@v6
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile.web
           platforms: ${{ env.PLATFORMS }}
           push: true
           tags: |
-            ${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.version }}
-            ${{ env.WEB_IMAGE }}:latest
+            ${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.image_version }}
 
   # ───────────────────────── 3. desktop installers + updater ─────────────────
   desktop:
@@ -220,7 +312,7 @@ jobs:
     env:
       VERSION: ${{ needs.create-release.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
@@ -245,7 +337,7 @@ jobs:
       # The SPA must be built BEFORE the sidecar: build_sidecar.sh requires
       # frontend/dist (it is gitignored / absent in a fresh CI checkout) and
       # PyInstaller embeds it via --add-data.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm
@@ -257,7 +349,7 @@ jobs:
           npm ci
           npm run build
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
@@ -265,7 +357,9 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt pyinstaller
+          # Install only runtime dependencies plus the bounded sidecar builder;
+          # keep the release artifact on the reviewed PyInstaller major.
+          pip install -r backend/requirements.txt "pyinstaller>=6.6,<7"
           bash scripts/build_sidecar.sh        # from workstream D → dist/uh-backend[.exe]
 
       - name: Smoke-test the sidecar /health
@@ -273,25 +367,28 @@ jobs:
         run: bash scripts/smoke_sidecar.sh      # from workstream D: boot frozen binary, curl /health == 200
 
       - name: Setup Rust (+ target)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           targets: ${{ matrix.rust_target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: frontend/src-tauri -> target
 
       - name: Stage sidecar as binaries/uh-backend-<triple>
         shell: bash
+        env:
+          HOST_OS: ${{ runner.os }}
+          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
           mkdir -p frontend/src-tauri/binaries
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ "$HOST_OS" = "Windows" ]; then
             cp dist/uh-backend.exe \
-               "frontend/src-tauri/binaries/uh-backend-${{ matrix.rust_target }}.exe"
+               "frontend/src-tauri/binaries/uh-backend-${RUST_TARGET}.exe"
           else
             cp dist/uh-backend \
-               "frontend/src-tauri/binaries/uh-backend-${{ matrix.rust_target }}"
-            chmod +x "frontend/src-tauri/binaries/uh-backend-${{ matrix.rust_target }}"
+               "frontend/src-tauri/binaries/uh-backend-${RUST_TARGET}"
+            chmod +x "frontend/src-tauri/binaries/uh-backend-${RUST_TARGET}"
           fi
 
       # Decide whether updater artifacts can be produced: createUpdaterArtifacts
@@ -311,7 +408,7 @@ jobs:
           fi
 
       - name: Build & upload Tauri bundles
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Updater signing (optional/free) — empty secrets ⇒ unsigned.
@@ -320,6 +417,13 @@ jobs:
         with:
           projectPath: frontend
           releaseId: ${{ needs.create-release.outputs.release_id }}
+          # The product name 学道 is not ASCII and GitHub strips it from asset
+          # names, which used to leave files like "_1.4.6_x64.dmg" and broke the
+          # updater. Name assets explicitly instead.
+          assetNamePattern: "xuedao_[version]_[platform]_[arch][setup][ext]"
+          # Four matrix jobs writing latest.json race each other; the
+          # updater-manifest job below writes it once.
+          includeUpdaterJson: false
           args: >-
             --target ${{ matrix.rust_target }}
             ${{ steps.signing.outputs.updater == 'false' && '--config {"bundle":{"createUpdaterArtifacts":false}}' || '' }}
@@ -327,22 +431,137 @@ jobs:
       - name: Smoke-test signed macOS sidecar
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
-          BIN="frontend/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/学道.app/Contents/MacOS/uh-backend"
+          BIN="frontend/src-tauri/target/$RUST_TARGET/release/bundle/macos/学道.app/Contents/MacOS/uh-backend"
           [ -x "$BIN" ] || { echo "missing signed sidecar: $BIN" >&2; exit 1; }
           bash scripts/smoke_sidecar.sh "$BIN"
 
-  # ───────────────────────── 4. publish (gate on everything) ─────────────────
+  # ───────────────────────── 4. updater manifest (single writer) ─────────────
+  updater-manifest:
+    runs-on: ubuntu-latest
+    needs: [create-release, desktop]
+    permissions:
+      contents: write
+    env:
+      UPDATER: ${{ needs.create-release.outputs.updater }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install minisign
+        if: env.UPDATER == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Assemble, verify and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.create-release.outputs.tag }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$UPDATER" != "true" ]; then
+            echo "::notice::Unsigned build: no latest.json for this release."
+            exit 0
+          fi
+          python3 scripts/updater_manifest.py assemble \
+            --repository "$REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --version "$VERSION"
+
+  # ───────────────────────── 5. promote (gate on everything) ────────────────
+  promote-images:
+    runs-on: ubuntu-latest
+    needs: [create-release, app-image, web-image, desktop, updater-manifest]
+    permissions:
+      packages: write
+    env:
+      APP_DIGEST: ${{ needs.app-image.outputs.digest }}
+      APP_VERSION: ${{ needs.app-image.outputs.image_version }}
+      WEB_DIGEST: ${{ needs.web-image.outputs.digest }}
+      WEB_VERSION: ${{ needs.web-image.outputs.image_version }}
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR for immutable promotion
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote immutable image digests to latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_pattern='^[0-9]+\.[0-9]+\.[0-9]+([-_][0-9A-Za-z.-]+)?$'
+          digest_pattern='^sha256:[0-9a-f]{64}$'
+          if [[ ! "$APP_VERSION" =~ $version_pattern || ! "$WEB_VERSION" =~ $version_pattern ]]; then
+            echo "error: image version output is not a validated immutable tag" >&2
+            exit 2
+          fi
+          if [[ ! "$APP_DIGEST" =~ $digest_pattern || ! "$WEB_DIGEST" =~ $digest_pattern ]]; then
+            echo "error: image jobs did not produce valid content digests" >&2
+            exit 2
+          fi
+
+          # Each registry update names the exact build digest; no mutable tag,
+          # source checkout, pull, or rebuild participates in promotion. With
+          # set -e, a failed second update fails this job and blocks publish.
+          docker buildx imagetools create \
+            --tag "${APP_IMAGE}:latest" \
+            "${APP_IMAGE}@${APP_DIGEST}"
+          docker buildx imagetools create \
+            --tag "${WEB_IMAGE}:latest" \
+            "${WEB_IMAGE}@${WEB_DIGEST}"
+
+  # ───────────────────────── 6. publish (gate on everything) ─────────────────
   publish:
     runs-on: ubuntu-latest
-    needs: [create-release, app-image, web-image, desktop]
+    needs: [create-release, app-image, web-image, desktop, updater-manifest, promote-images]
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
       - name: Flip draft → published
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.create-release.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          gh release edit "${{ needs.create-release.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
+          gh release edit "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
             --draft=false --latest
+
+      # Clients poll releases/latest/download/latest.json. If that is not
+      # usable right after publishing, put the release back to draft so the
+      # previous release stays "latest", and fail loudly.
+      - name: Verify the live updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.create-release.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+          UPDATER: ${{ needs.create-release.outputs.updater }}
+        run: |
+          set -euo pipefail
+          if [ "$UPDATER" != "true" ]; then
+            echo "::notice::Unsigned build: no updater manifest to check."
+            exit 0
+          fi
+          if python3 scripts/updater_manifest.py verify --repository "$REPOSITORY" --version "$VERSION"; then
+            exit 0
+          fi
+          echo "::error::latest.json for $RELEASE_TAG is missing or broken; moving the release back to draft."
+          gh release edit "$RELEASE_TAG" --repo "$REPOSITORY" --draft=true
+          exit 1

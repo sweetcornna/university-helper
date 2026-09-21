@@ -6,7 +6,14 @@ import { ChevronDown, Loader2, Camera, Map, MapPin, RefreshCw, Upload } from 'lu
 
 import { getToken, removeToken } from '../utils/auth'
 
-import { Button, Input, MultiSelect, Select, useToast } from '../components'
+import { Button, Input, MultiSelect, Select, useRuntimeProfile, useToast } from '../components'
+
+const CHAOXING_TABS = [
+  { id: 'signin', label: '签到' },
+  { id: 'tasks', label: '任务' },
+  { id: 'history', label: '历史' },
+  { id: 'config', label: '设置' },
+]
 
 // Lazy-load the map picker (pulls in ~150KB of leaflet) only when the user
 // opens it, so the initial signin page stays light on mobile.
@@ -22,6 +29,7 @@ import {
   normalizeSignTypeForApi,
   shouldUseLocationParams,
   fileToBase64,
+  validatePhotoFile,
   decodeQrCodeFromFile,
   normalizeBackgroundTaskHistory,
   upsertBackgroundTaskHistory,
@@ -38,6 +46,7 @@ import {
 import useBackgroundTasks from './chaoxing-signin/hooks/useBackgroundTasks'
 import useAutoSignin from './chaoxing-signin/hooks/useAutoSignin'
 import useLocationServices from './chaoxing-signin/hooks/useLocationServices'
+import { fetchWithTimeout } from './chaoxing-signin/request'
 
 import StatsCards from './chaoxing-signin/components/StatsCards'
 import TasksTab from './chaoxing-signin/components/TasksTab'
@@ -53,6 +62,7 @@ import { isChaoxingSessionLost, SESSION_LOST_MESSAGE } from './chaoxing-shared/u
 
 export default function ChaoxingSignin() {
   const navigate = useNavigate()
+  const { isLocal } = useRuntimeProfile()
 
   const ensureAccessTokenRef = useRef(null)
 
@@ -129,9 +139,18 @@ export default function ChaoxingSignin() {
   // and inherited by the 泛雅 page.
   const [loginMode, setLoginMode] = useState('password')
 
+  const photoPreviewUrl = useMemo(
+    () => (form.photoFile ? URL.createObjectURL(form.photoFile) : ''),
+    [form.photoFile],
+  )
+
+  useEffect(() => () => {
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl)
+  }, [photoPreviewUrl])
+
   const ensureAccessToken = useCallback(() => {
-    return getToken() || null
-  }, [])
+    return isLocal ? null : getToken() || null
+  }, [isLocal])
 
   const redirectToLogin = useCallback(
     (message = '登录已过期，请重新登录。') => {
@@ -160,7 +179,7 @@ export default function ChaoxingSignin() {
 
       const token = ensureAccessTokenRef.current()
 
-      if (!token) {
+      if (!isLocal && !token) {
         redirectToLoginRef.current('登录态失效，请重新登录。')
       }
 
@@ -172,15 +191,14 @@ export default function ChaoxingSignin() {
 
       const headers = {
         ...(options.headers || {}),
-
-        Authorization: `Bearer ${token}`,
+        ...(!isLocal && token ? { Authorization: `Bearer ${token}` } : {}),
       }
 
       if (hasBody && !isFormData && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json'
       }
 
-      const response = await fetch(`${CHAOXING_API_BASE}${path}`, {
+      const response = await fetchWithTimeout(`${CHAOXING_API_BASE}${path}`, {
         ...options,
 
         method,
@@ -205,7 +223,7 @@ export default function ChaoxingSignin() {
           payload?.status === false &&
           TOKEN_ERROR_PATTERN.test(message || ''))
 
-      if (isAuthFailure) {
+      if (isAuthFailure && !isLocal) {
         redirectToLogin('登录已过期，请重新登录。')
       }
 
@@ -220,7 +238,7 @@ export default function ChaoxingSignin() {
       return payload
     },
 
-    [redirectToLogin]
+    [isLocal, redirectToLogin]
   )
 
   // The shared session hooks speak `(path, options)`; this page's wrapper takes
@@ -268,18 +286,18 @@ export default function ChaoxingSignin() {
 
   const locationServices = useLocationServices(requestChaoxingApi, setForm)
   const {
-    latestAddressRef,
     geocodeLoading,
     geocodeMessage,
     geocodeStatus,
     setGeocodeStatus,
     setGeocodeMessage,
+    handleAddressChange,
     placeSearchLoading,
     placeSearchResults,
     placeSearchMessage,
     isMapPickerOpen,
     setIsMapPickerOpen,
-    applyResolvedLocation,
+    applyUserLocationIntent,
     useCurrentLocation,
     resolveLocationCoordinates,
     searchLocationCandidates,
@@ -554,13 +572,28 @@ export default function ChaoxingSignin() {
 
   setTodayStatsRef.current = autoSigninHook.setTodayStats
 
+  const qrDecodeGenerationRef = useRef(0)
+
+  useEffect(
+    () => () => {
+      qrDecodeGenerationRef.current += 1
+    },
+    []
+  )
+
   const handleQrCodeFileUpload = useCallback(async (file) => {
     if (!file) return
+
+    const requestId = qrDecodeGenerationRef.current + 1
+    qrDecodeGenerationRef.current = requestId
+
     setForm((prev) => ({ ...prev, qrCodeFile: file, qrDecodeStatus: '解码中...' }))
     try {
       const decoded = await decodeQrCodeFromFile(file)
+      if (qrDecodeGenerationRef.current !== requestId) return
       setForm((prev) => ({ ...prev, qrCode: decoded, qrDecodeStatus: `解码成功` }))
     } catch (err) {
+      if (qrDecodeGenerationRef.current !== requestId) return
       setForm((prev) => ({ ...prev, qrDecodeStatus: err.message }))
     }
   }, [])
@@ -578,7 +611,7 @@ export default function ChaoxingSignin() {
 
       if (cancelled) return
 
-      if (!token) {
+      if (!isLocal && !token) {
         navigate('/login', { replace: true })
 
         return
@@ -630,6 +663,7 @@ export default function ChaoxingSignin() {
     }
   }, [
     ensureAccessToken,
+    isLocal,
     navigate,
     stopPolling,
     stopAutoCheck,
@@ -1317,11 +1351,31 @@ export default function ChaoxingSignin() {
   const taskRunning =
     Boolean(taskId) && !['completed', 'error', 'failed', 'cancelled'].includes(taskStatus?.status)
 
+  const handleTabKeyDown = useCallback((event) => {
+    const focusedTab = event.target.closest?.('[role="tab"]')
+    const currentIndex = CHAOXING_TABS.findIndex(
+      (tab) => focusedTab?.id === `cx-tab-${tab.id}`
+    )
+    if (currentIndex < 0) return
+
+    let nextIndex = currentIndex
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % CHAOXING_TABS.length
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + CHAOXING_TABS.length) % CHAOXING_TABS.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = CHAOXING_TABS.length - 1
+    else return
+
+    event.preventDefault()
+    const nextTab = CHAOXING_TABS[nextIndex].id
+    setActiveTab(nextTab)
+    requestAnimationFrame(() => document.getElementById(`cx-tab-${nextTab}`)?.focus())
+  }, [])
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="overflow-x-hidden">
-      <main className="space-y-6">
+      <div className="space-y-6">
         <div className={GLASS_CARD_CLASS}>
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-bold text-text">学习通签到</h1>
@@ -1341,61 +1395,41 @@ export default function ChaoxingSignin() {
               </button>
             )}
           </div>
-
-          <p className="mt-1 text-sm text-text/70">完整签到功能与实时监控。</p>
         </div>
 
         <StatsCards todayStats={todayStats} />
 
         <div className={GLASS_CARD_CLASS}>
-          <div className="flex flex-wrap gap-2 border-b border-border/20 pb-4">
-            <button
-              onClick={() => setActiveTab('signin')}
-              className={`min-h-[44px] rounded-xl px-4 py-2 font-medium transition-all duration-200 cursor-pointer ${
-                activeTab === 'signin'
-                  ? 'bg-primary text-white'
-                  : 'bg-surface/60 text-text hover:bg-surface/80'
-              }`}
-            >
-              签到
-            </button>
-
-            <button
-              onClick={() => setActiveTab('tasks')}
-              className={`min-h-[44px] rounded-xl px-4 py-2 font-medium transition-all duration-200 cursor-pointer ${
-                activeTab === 'tasks'
-                  ? 'bg-primary text-white'
-                  : 'bg-surface/60 text-text hover:bg-surface/80'
-              }`}
-            >
-              任务
-            </button>
-
-            <button
-              onClick={() => setActiveTab('history')}
-              className={`min-h-[44px] rounded-xl px-4 py-2 font-medium transition-all duration-200 cursor-pointer ${
-                activeTab === 'history'
-                  ? 'bg-primary text-white'
-                  : 'bg-surface/60 text-text hover:bg-surface/80'
-              }`}
-            >
-              历史
-            </button>
-
-            <button
-              onClick={() => setActiveTab('config')}
-              className={`min-h-[44px] rounded-xl px-4 py-2 font-medium transition-all duration-200 cursor-pointer ${
-                activeTab === 'config'
-                  ? 'bg-primary text-white'
-                  : 'bg-surface/60 text-text hover:bg-surface/80'
-              }`}
-            >
-              设置
-            </button>
+          <div
+            role="tablist"
+            aria-label="学习通签到工作区"
+            tabIndex="-1"
+            className="grid grid-cols-4 gap-2 border-b border-border/40 pb-4"
+            onKeyDown={handleTabKeyDown}
+          >
+            {CHAOXING_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                id={`cx-tab-${tab.id}`}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`cx-panel-${tab.id}`}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                onClick={() => setActiveTab(tab.id)}
+                className={`min-h-[44px] cursor-pointer rounded-xl px-2 py-2 text-sm font-semibold sm:px-4 ${
+                  activeTab === tab.id
+                    ? 'bg-primary text-white'
+                    : 'bg-surface text-text hover:bg-surface-hover'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
 
           {activeTab === 'signin' && (
-            <div className="mt-6 space-y-4">
+            <div id="cx-panel-signin" role="tabpanel" aria-labelledby="cx-tab-signin" tabIndex="0" className="mt-6 space-y-4">
               <AutoSigninBanner
                 signinTasks={signinTasks}
                 form={form}
@@ -1572,7 +1606,7 @@ export default function ChaoxingSignin() {
                       aria-expanded={advancedOpen}
                       className="flex min-h-[44px] w-full items-center justify-between rounded-xl border border-border/60 bg-surface/60 px-4 py-2 text-sm text-text/80 transition-colors hover:bg-surface-hover"
                     >
-                      <span>补充签到参数（可选）— 通用模式会自动匹配老师发起的类型，如需可手动预填照片 / 位置 / 二维码等</span>
+                      <span>补充签到参数（可选）</span>
                       <ChevronDown
                         className={`h-4 w-4 shrink-0 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
                         aria-hidden="true"
@@ -1599,28 +1633,32 @@ export default function ChaoxingSignin() {
                       <input
                         id="cx-photo"
                         type="file"
-                        accept="image/*"
+                        accept="image/jpeg,image/png,image/webp"
                         className="hidden"
-                        onChange={(event) =>
-                          setForm((prev) => ({
-                            ...prev,
-                            photoFile: event.target.files?.[0] || null,
-                          }))
-                        }
+                        onChange={(event) => {
+                          const file = event.target.files?.[0] || null
+                          try {
+                            validatePhotoFile(file)
+                            setForm((prev) => ({ ...prev, photoFile: file }))
+                          } catch (error) {
+                            event.target.value = ''
+                            toast.error(error.message)
+                          }
+                        }}
                       />
 
                       <p className="text-xs text-text/70">
                         {form.photoFile
                           ? `已选择：${form.photoFile.name}（${(form.photoFile.size / 1024).toFixed(0)} KB）`
-                          : '请上传自拍照片，支持 JPG/PNG 格式。'}
+                          : '请上传自拍照片，支持 JPG、PNG、WebP，最大 5 MB。'}
                       </p>
                     </div>
 
-                    {form.photoFile && (
+                    {photoPreviewUrl && (
                       <div className="mt-3">
                         <img
-                          src={URL.createObjectURL(form.photoFile)}
-                          alt="预览"
+                          src={photoPreviewUrl}
+                          alt="签到照片预览"
                           className="h-32 w-32 rounded-xl border border-border/30 object-cover"
                         />
                       </div>
@@ -1663,10 +1701,7 @@ export default function ChaoxingSignin() {
                       label="地址 / 地点名称"
                       type="text"
                       value={form.address}
-                      onChange={(e) => {
-                        latestAddressRef.current = e.target.value
-                        setForm((prev) => ({ ...prev, address: e.target.value }))
-                      }}
+                      onChange={(e) => handleAddressChange(e.target.value)}
                       placeholder="例如：北京市朝阳区"
                     />
 
@@ -1691,17 +1726,19 @@ export default function ChaoxingSignin() {
                         {placeSearchLoading ? '搜索中...' : '搜索地点'}
                       </Button>
 
-                      <p
-                        className={`text-xs ${
-                          geocodeStatus === 'error'
-                            ? 'text-danger'
-                            : geocodeStatus === 'success'
-                              ? 'text-success'
-                              : 'text-text/70'
-                        }`}
-                      >
-                        {geocodeMessage || '可使用当前位置、地图选点，或输入地点名称后解析坐标。'}
-                      </p>
+                      {geocodeMessage && (
+                        <p
+                          className={`text-xs ${
+                            geocodeStatus === 'error'
+                              ? 'text-danger'
+                              : geocodeStatus === 'success'
+                                ? 'text-success'
+                                : 'text-text/70'
+                          }`}
+                        >
+                          {geocodeMessage}
+                        </p>
+                      )}
                     </div>
 
                     {placeSearchMessage ? (
@@ -1733,7 +1770,7 @@ export default function ChaoxingSignin() {
                     {/* Manual override — pre-filled by the actions above; rarely needed. */}
                     <details className="rounded-xl border border-border/60 bg-surface/40 p-3">
                       <summary className="cursor-pointer text-sm text-text/80">
-                        手动输入坐标（高级）— 上方操作会自动填好，通常无需修改
+                        手动输入坐标（高级）
                       </summary>
                       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
                         <Input
@@ -1741,9 +1778,7 @@ export default function ChaoxingSignin() {
                           label="纬度"
                           type="text"
                           value={form.latitude}
-                          onChange={(e) =>
-                            setForm((prev) => ({ ...prev, latitude: e.target.value }))
-                          }
+                          onChange={(e) => applyUserLocationIntent({ latitude: e.target.value }, { convert: false })}
                           placeholder="e.g. 39.9042"
                         />
 
@@ -1752,9 +1787,7 @@ export default function ChaoxingSignin() {
                           label="经度"
                           type="text"
                           value={form.longitude}
-                          onChange={(e) =>
-                            setForm((prev) => ({ ...prev, longitude: e.target.value }))
-                          }
+                          onChange={(e) => applyUserLocationIntent({ longitude: e.target.value }, { convert: false })}
                           placeholder="e.g. 116.4074"
                         />
 
@@ -1819,11 +1852,14 @@ export default function ChaoxingSignin() {
 
                     <Input
                       id="cx-qrcode"
-                      label="二维码内容（上传图片后自动填充，也可手动输入）"
+                      label="二维码内容"
                       type="text"
                       value={form.qrCode}
-                      onChange={(e) => setForm((prev) => ({ ...prev, qrCode: e.target.value }))}
-                      placeholder="上传二维码图片后自动解析，或手动粘贴二维码链接"
+                      onChange={(e) => {
+                        qrDecodeGenerationRef.current += 1
+                        setForm((prev) => ({ ...prev, qrCode: e.target.value, qrDecodeStatus: '' }))
+                      }}
+                      placeholder="粘贴二维码链接或内容"
                     />
 
                     <p className="text-xs text-text/70">
@@ -2081,38 +2117,44 @@ export default function ChaoxingSignin() {
           )}
 
           {activeTab === 'tasks' && (
-            <TasksTab
-              signinTasks={signinTasks}
-              fetchSigninTasks={fetchSigninTasks}
-              openBackgroundTask={(tid) =>
-                openBackgroundTask(tid, {
-                  setResultType,
-                  setResultMessage,
-                  setBackgroundTaskHistory,
-                })
-              }
-              executeSignin={executeSignin}
-              executeClassSignin={executeClassSignin}
-            />
+            <div id="cx-panel-tasks" role="tabpanel" aria-labelledby="cx-tab-tasks" tabIndex="0">
+              <TasksTab
+                signinTasks={signinTasks}
+                fetchSigninTasks={fetchSigninTasks}
+                openBackgroundTask={(tid) =>
+                  openBackgroundTask(tid, {
+                    setResultType,
+                    setResultMessage,
+                    setBackgroundTaskHistory,
+                  })
+                }
+                executeSignin={executeSignin}
+                executeClassSignin={executeClassSignin}
+              />
+            </div>
           )}
 
           {activeTab === 'history' && (
-            <HistoryTab signinHistory={signinHistory} fetchSigninHistory={fetchSigninHistory} />
+            <div id="cx-panel-history" role="tabpanel" aria-labelledby="cx-tab-history" tabIndex="0">
+              <HistoryTab signinHistory={signinHistory} fetchSigninHistory={fetchSigninHistory} />
+            </div>
           )}
 
           {activeTab === 'config' && (
-            <ConfigTab
-              autoSignin={autoSignin}
-              setAutoSignin={setAutoSignin}
-              autoSignFilter={autoSignFilter}
-              setAutoSignFilter={setAutoSignFilter}
-              checkInterval={checkInterval}
-              setCheckInterval={setCheckInterval}
-              nextCheckCountdown={nextCheckCountdown}
-            />
+            <div id="cx-panel-config" role="tabpanel" aria-labelledby="cx-tab-config" tabIndex="0">
+              <ConfigTab
+                autoSignin={autoSignin}
+                setAutoSignin={setAutoSignin}
+                autoSignFilter={autoSignFilter}
+                setAutoSignFilter={setAutoSignFilter}
+                checkInterval={checkInterval}
+                setCheckInterval={setCheckInterval}
+                nextCheckCountdown={nextCheckCountdown}
+              />
+            </div>
           )}
         </div>
-      </main>
+      </div>
 
       {isMapPickerOpen && (
         <Suspense fallback={null}>
@@ -2125,7 +2167,7 @@ export default function ChaoxingSignin() {
             }}
             onClose={() => setIsMapPickerOpen(false)}
             onConfirm={(location) => {
-              applyResolvedLocation(location)
+              applyUserLocationIntent(location)
               setGeocodeStatus('success')
               setGeocodeMessage(`已选点：${location.latitude}, ${location.longitude}`)
               setIsMapPickerOpen(false)

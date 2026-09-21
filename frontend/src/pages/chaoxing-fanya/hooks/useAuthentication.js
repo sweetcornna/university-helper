@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useRuntimeProfile } from '../../../components'
 import { isAuthenticated, removeToken } from '../../../utils/auth'
 import { api } from '../../../utils/api'
 import { readLastUsername, saveLastUsername } from '../../../utils/chaoxingCreds'
@@ -24,6 +25,7 @@ export default function useAuthentication({ stopPolling }) {
 
 
   const navigate = useNavigate()
+  const { isLocal } = useRuntimeProfile()
 
 
   // Recall the account shared with the signin page so it isn't retyped here.
@@ -69,6 +71,12 @@ export default function useAuthentication({ stopPolling }) {
   // hidden form back instead of dead-ending the user.
   const [credentialsRequired, setCredentialsRequired] = useState(false)
 
+  // Request bookkeeping: a course fetch that resolves after unmount, or after a
+  // newer fetch has started, must not write state.
+  const mountedRef = useRef(true)
+  const courseRequestIdRef = useRef(0)
+  const [coursesLoading, setCoursesLoading] = useState(false)
+
 
   // Persist the account so the signin page recalls it too.
   useEffect(() => {
@@ -77,9 +85,18 @@ export default function useAuthentication({ stopPolling }) {
 
 
   useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      courseRequestIdRef.current += 1
+    }
+  }, [])
 
 
-    if (!isAuthenticated()) {
+  useEffect(() => {
+
+
+    if (!isLocal && !isAuthenticated()) {
 
 
       navigate('/login', { replace: true })
@@ -88,7 +105,7 @@ export default function useAuthentication({ stopPolling }) {
     }
 
 
-  }, [navigate])
+  }, [isLocal, navigate])
 
 
   const onAuthError = useCallback(
@@ -97,7 +114,7 @@ export default function useAuthentication({ stopPolling }) {
     (message) => {
 
 
-      if (TOKEN_ERROR.test(String(message || ''))) {
+      if (!isLocal && TOKEN_ERROR.test(String(message || ''))) {
 
 
         stopPolling()
@@ -121,7 +138,7 @@ export default function useAuthentication({ stopPolling }) {
     },
 
 
-    [navigate, stopPolling]
+    [isLocal, navigate, stopPolling]
 
 
   )
@@ -174,47 +191,46 @@ export default function useAuthentication({ stopPolling }) {
 
 
   const loadCourses = useCallback(async () => {
+    const requestId = courseRequestIdRef.current + 1
+    courseRequestIdRef.current = requestId
+    const isCurrentRequest = () => (
+      mountedRef.current && courseRequestIdRef.current === requestId
+    )
+
+    if (!isCurrentRequest()) return
+
+    setError('')
+    setNotice('')
+    setCoursesLoading(true)
 
     try {
-
       const resp = await callApi('/chaoxing/courses')
 
-
-      if (!resp) return
-
+      if (!resp || !isCurrentRequest()) return
 
       const list = Array.isArray(resp?.courses) ? resp.courses : Array.isArray(resp?.data) ? resp.data : []
 
-
+      if (!isCurrentRequest()) return
       setCourses(list)
-
-
       setNotice(list.length > 0 ? `已获取 ${list.length} 门课程。` : '未查询到课程。')
-
     } catch (err) {
+      if (!isCurrentRequest()) return
 
       // The session we trusted died mid-session: drop back to the form and say
       // why, rather than leaving an empty list with no way to recover.
       if (isChaoxingSessionLost(err)) {
-
         setSessionStatus('inactive')
-
         setSessionUsername('')
-
         setSessionExpiresAt('')
-
         setCourses([])
-
         setError('学习通登录态已失效，请重新输入账号密码登录。')
-
         return
-
       }
 
       setError(err?.message || '获取课程失败，请稍后重试。')
-
+    } finally {
+      if (isCurrentRequest()) setCoursesLoading(false)
     }
-
   }, [callApi])
 
 
@@ -344,13 +360,20 @@ export default function useAuthentication({ stopPolling }) {
       event.preventDefault()
 
 
+      if (!mountedRef.current) return
+
+
+      const loginUsername = username.trim()
+      const loginPassword = password
+
+
       setError('')
 
 
       setNotice('')
 
 
-      if (!username.trim() || !password.trim()) {
+      if (!loginUsername || !loginPassword.trim()) {
 
 
         setError('请输入超星账号和密码。')
@@ -374,18 +397,21 @@ export default function useAuthentication({ stopPolling }) {
           method: 'POST',
 
 
-          body: JSON.stringify({ username: username.trim(), password })
+          body: JSON.stringify({ username: loginUsername, password: loginPassword })
 
 
         })
 
 
-        if (!loginResp) return
+        if (!loginResp || !mountedRef.current) return
 
 
-        // A fresh password login IS the session — record it so the form gives
-        // way to the status line, even on a backend without /chaoxing/session.
-        setSessionUsername(username.trim())
+        // Keep the form fields in sync with what was actually submitted, then
+        // record the login as the session so the credential form gives way to
+        // the status line even on a backend without /chaoxing/session.
+        setUsername(loginUsername)
+        setPassword(loginPassword)
+        setSessionUsername(loginUsername)
 
 
         setSessionExpiresAt(String(loginResp?.expires_at || loginResp?.expiresAt || ''))
@@ -396,20 +422,19 @@ export default function useAuthentication({ stopPolling }) {
 
         setCredentialsRequired(false)
 
-
         await loadCourses()
 
 
       } catch (err) {
 
 
-        setError(err?.message || '登录失败。')
+        if (mountedRef.current) setError(err?.message || '登录失败。')
 
 
       } finally {
 
 
-        setLoginLoading(false)
+        if (mountedRef.current) setLoginLoading(false)
 
 
       }
@@ -456,6 +481,7 @@ export default function useAuthentication({ stopPolling }) {
     username, setUsername,
     password, setPassword,
     loginLoading,
+    coursesLoading,
     courses, setCourses,
     error, setError,
     notice, setNotice,

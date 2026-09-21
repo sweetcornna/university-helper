@@ -1,6 +1,6 @@
 [package]
 name = "uh-desktop"
-version = "1.4.5"                      # stamped from the git tag by scripts/set_version.sh (workstream F)
+version = "1.4.7"                      # stamped from the git tag by scripts/set_version.sh (workstream F)
 description = "学道 — University Helper desktop shell"
 authors = ["sweetcornna"]
 edition = "2021"
@@ -25,6 +25,12 @@ serde_json = "1"
 # Updater is a desktop-only plugin (matches `cargo add … --target 'cfg(...)'` from the docs).
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"
+# Native "update now / later" prompt, shown from Rust (no webview IPC needed).
+tauri-plugin-dialog = "2"
+
+# Graceful SIGTERM to the PyInstaller sidecar so it can stop its Python child.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [profile.release]
 codegen-units = 1

@@ -11,7 +11,17 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
   const autoCheckRef = useRef(null)
   const countdownRef = useRef(null)
   const autoSignedTaskCacheRef = useRef(new Map())
-  const autoSigningRef = useRef(false)
+  // Track ownership by scheduler generation so a new generation can start
+  // while an invalidated request from the previous generation is still in flight.
+  const autoSigningRef = useRef(null)
+  const schedulerGenerationRef = useRef(0)
+  const formRef = useRef(form)
+  const executeSigninRef = useRef(executeSignin)
+
+  // Keep the scheduler stable while still using the latest form and sign-in
+  // callback when the next cycle starts.
+  formRef.current = form
+  executeSigninRef.current = executeSignin
 
   const [autoSignin, setAutoSignin] = useState(false)
   const [autoSignFilter, setAutoSignFilter] = useState('all')
@@ -20,6 +30,7 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
   const [todayStats, setTodayStats] = useState({ total: 0, success: 0, failed: 0 })
 
   const stopAutoCheck = useCallback(() => {
+    schedulerGenerationRef.current += 1
     if (countdownRef.current) {
       clearInterval(countdownRef.current)
       countdownRef.current = null
@@ -67,11 +78,18 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
     }
   }, [autoSignin, autoSignFilter, checkInterval])
 
-  const runAutoSigninCycle = useCallback(async () => {
-    if (autoSigningRef.current || redirectingRef.current || !autoSignin) return
+  const runAutoSigninCycle = useCallback(async (generation) => {
+    if (
+      generation !== schedulerGenerationRef.current ||
+      autoSigningRef.current === generation ||
+      redirectingRef.current ||
+      !autoSignin
+    ) {
+      return
+    }
 
-    const username = form.username.trim()
-    const password = form.password
+    const username = formRef.current.username.trim()
+    const password = formRef.current.password
     // Same rule as the manual actions: a server-held session removes the
     // password requirement, never the username.
     if (!username || (!sessionActive && !password)) {
@@ -82,9 +100,11 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
       return
     }
 
-    autoSigningRef.current = true
+    autoSigningRef.current = generation
     try {
       const resp = await requestChaoxingApi('/tasks')
+      if (generation !== schedulerGenerationRef.current) return
+
       const pendingTasks = Array.isArray(resp?.data) ? resp.data : []
       setSigninTasks(pendingTasks)
 
@@ -104,29 +124,37 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
       let successCount = 0
 
       for (const task of filteredTasks) {
+        if (generation !== schedulerGenerationRef.current) return
+
         const taskType = String(task?.type || 'normal')
         const taskKey = `${task?.taskId || task?.activeId || task?.courseId || task?.courseName || 'task'}:${taskType}`
         const lastTriedAt = autoSignedTaskCacheRef.current.get(taskKey) || 0
         if (now - lastTriedAt < AUTO_SIGN_TASK_COOLDOWN_MS) continue
         autoSignedTaskCacheRef.current.set(taskKey, now)
 
-        const result = await executeSignin(task?.courseId || null, taskType, { silent: true })
+        const result = await executeSigninRef.current(task?.courseId || null, taskType, { silent: true })
+        if (generation !== schedulerGenerationRef.current) return
+
         if (result.status) {
           successCount += 1
         }
       }
 
-      if (successCount > 0) {
+      if (generation === schedulerGenerationRef.current && successCount > 0) {
         setResultType('success')
         setResultMessage(`自动签到完成，成功处理 ${successCount} 个任务。`)
       }
     } catch (err) {
+      if (generation !== schedulerGenerationRef.current) return
+
       setResultType('error')
       setResultMessage(err.message || '自动签到检查失败。')
     } finally {
-      autoSigningRef.current = false
+      if (autoSigningRef.current === generation) {
+        autoSigningRef.current = null
+      }
     }
-  }, [autoSignin, autoSignFilter, executeSignin, form.password, form.username, requestChaoxingApi, sessionActive, setResultType, setResultMessage, setSigninTasks, redirectingRef])
+  }, [autoSignin, autoSignFilter, requestChaoxingApi, sessionActive, setResultType, setResultMessage, setSigninTasks, redirectingRef])
 
   // Auto-signin cycle + countdown effect
   useEffect(() => {
@@ -142,16 +170,24 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
     }
 
     const intervalMs = normalizedInterval * 60 * 1000
+    const generation = schedulerGenerationRef.current + 1
+    schedulerGenerationRef.current = generation
     setNextCheckCountdown(normalizedInterval * 60)
 
-    void runAutoSigninCycle()
+    void runAutoSigninCycle(generation)
 
     countdownRef.current = setInterval(() => {
+      if (schedulerGenerationRef.current !== generation) return
+
       setNextCheckCountdown(prev => Math.max(0, prev - 1))
     }, 1000)
 
     autoCheckRef.current = setInterval(() => {
-      void runAutoSigninCycle()
+      if (schedulerGenerationRef.current !== generation) return
+
+      void runAutoSigninCycle(generation)
+      if (schedulerGenerationRef.current !== generation) return
+
       setNextCheckCountdown(normalizedInterval * 60)
     }, intervalMs)
 

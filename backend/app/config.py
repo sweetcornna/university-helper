@@ -9,6 +9,7 @@ PUBLIC_ROUTES = [
     "/api/v1/auth/send-code",
     "/api/v1/auth/reset-password",
     "/api/v1/auth/config",
+    "/api/v1/runtime",
     "/api/v1/chaoxing/location/geocode",
     "/api/v1/chaoxing/location/search",
     "/api/v1/chaoxing/location/reverse-geocode",
@@ -91,6 +92,27 @@ class Settings(BaseSettings):
     # deployment where the uvicorn container is otherwise reachable.
     METRICS_TOKEN: str | None = None
 
+    # Extra Host header values accepted besides localhost/127.0.0.1 and the
+    # CORS_ORIGINS hosts, comma separated (e.g. "192.168.1.10,uh.lan,*.example.com").
+    # Needed when the site is reached through a LAN IP or a second domain.
+    ALLOWED_HOSTS: str = ""
+
+    # Recreate the users table / tenant_template database at startup when the
+    # Postgres init scripts did not run. Server profile only.
+    DB_AUTO_BOOTSTRAP: bool = True
+    # Directory holding 00-schema.sql and tenant_template.sql (auto-detected when empty).
+    DB_BOOTSTRAP_SQL_DIR: str = ""
+
+    # Administrators (server edition): comma-separated emails. When empty, the
+    # first registered account (smallest users.id) is the administrator.
+    ADMIN_EMAILS: str = ""
+
+    # New-release notice for administrators. The server polls GitHub Releases;
+    # set UPDATE_CHECK_ENABLED=false on air-gapped installs.
+    UPDATE_CHECK_ENABLED: bool = True
+    UPDATE_CHECK_INTERVAL_SECONDS: int = 6 * 3600
+    UPDATE_CHECK_URL: str = "https://api.github.com/repos/sweetcornna/university-helper/releases/latest"
+
     @field_validator("SECRET_KEY")
     @classmethod
     def _secret_key_present(cls, v: str) -> str:
@@ -113,6 +135,11 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def split_csv(value: str | None) -> list[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
+
 
 # Opaque user id used by the single-user local profile. Handlers only need a
 # <=64-char string; a constant is sufficient (see spec §3.5).

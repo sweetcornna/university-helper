@@ -1,18 +1,18 @@
 # Released stack — pull prebuilt images and run, no local build required.
 #
-#   UH_TAG=1.4.5 docker compose -f docker-compose.release.yml -p university-helper up -d
+#   UH_TAG=1.4.6 docker compose -f docker-compose.release.yml -p university-helper up -d
 #
 # The `app` and `web` images are published to GHCR by .github/workflows/release.yml
-# on every `v*` Git tag, with image tags like `1.4.5` (no leading `v`).
+# on every `v*` Git tag, with image tags like `1.4.6` (no leading `v`).
 # `scripts/deploy_server.sh` wraps this file (generates .env, normalizes a
-# `v1.4.5` input tag, pulls, waits for health). Use docker-compose.server.yml
+# `v1.4.6` input tag, pulls, waits for health). Use docker-compose.server.yml
 # instead when you want to build from source. The web service is the only one
 # published on a public interface; app/postgres stay internal.
 services:
   app:
     image: ghcr.io/sweetcornna/university-helper-app:${UH_TAG:-latest}
     container_name: shuake-easy-learning-app
-    restart: on-failure:5
+    restart: unless-stopped
     # Local-only publish for health checks / debugging; external traffic goes
     # through the web container. Override APP_PORT in .env if 8000 is taken.
     ports:
@@ -27,6 +27,9 @@ services:
       SHUAKE_COMPAT_SECRET: ${SHUAKE_COMPAT_SECRET:-}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY}
       CORS_ORIGINS: ${CORS_ORIGINS}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      UPDATE_CHECK_ENABLED: ${UPDATE_CHECK_ENABLED:-true}
       # nginx (web container / host) terminates TLS; the app must not redirect
       # http->https itself or it would loop / break plain-IP access.
       ENFORCE_HTTPS: "false"
@@ -65,15 +68,15 @@ services:
   web:
     image: ghcr.io/sweetcornna/university-helper-web:${UH_TAG:-latest}
     container_name: shuake-easy-learning-web
-    restart: on-failure:5
+    restart: unless-stopped
     depends_on:
       app:
         condition: service_healthy
-    # Public entrypoint. Reachable at http://<host>:${HTTP_PORT}. Put a
-    # TLS-terminating reverse proxy in front for production (deploy_server.sh
-    # --domain can scaffold host nginx + certbot).
+    # Loopback by default; deploy_server.sh / deploy_server.ps1 select 0.0.0.0
+    # only for an explicit --host/-HostIp plain-http deployment. Put a
+    # TLS-terminating reverse proxy in front for production.
     ports:
-      - "${HTTP_PORT:-8080}:80"
+      - "${HTTP_BIND_HOST:-127.0.0.1}:${HTTP_PORT:-8080}:80"
     networks:
       - shuake-net
     deploy:
@@ -90,7 +93,7 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: shuake-easy-learning-db
-    restart: on-failure:5
+    restart: unless-stopped
     command:
       - "postgres"
       - "-c"

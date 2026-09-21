@@ -1,18 +1,15 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useLocation, Link } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
-import { api } from '../utils/api'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { BookOpen, Eye, EyeOff } from 'lucide-react'
+import { Button, Card, Input, ThemeToggle, useRuntimeProfile } from '../components'
+import { api, LOCAL_PROFILE_AUTH_CODE } from '../utils/api'
 import { setToken } from '../utils/auth'
 
-// Seven ambient "chapter" tracks. Widths, delays and the fill loop all live in
-// index.css (.auth-bar*) — this is just the scaffolding.
-const CHAPTER_BARS = [0, 1, 2, 3, 4, 5, 6]
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const USERNAME_PATTERN = /^[a-z0-9]+$/
+const PASSWORD_PATTERNS = [/[A-Z]/, /[a-z]/, /\d/]
 
 const RESEND_COOLDOWN_SECONDS = 60
-
-// Deliberately loose: the server is the authority on whether an address is
-// deliverable. This only decides when the 发送验证码 button stops being dead.
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const sendCodeErrorMessage = (err) => {
   // The backend's own messages are already user-facing Chinese, so prefer them
@@ -34,8 +31,11 @@ export default function Register() {
   const [sendingCode, setSendingCode] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
+  const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const navigate = useNavigate()
+  const { markLocal } = useRuntimeProfile()
   const location = useLocation()
   const from = location.state?.from || '/dashboard'
 
@@ -61,16 +61,15 @@ export default function Register() {
     return () => window.clearTimeout(timer)
   }, [cooldown])
 
-  const emailLooksValid = EMAIL_PATTERN.test(form.email)
-
   const handleSendCode = async () => {
     if (sendingCode || cooldown > 0) return
     // The button stays focusable when the address is unusable: `disabled` would
     // drop it out of the tab order with nothing saying why. Validate on click
     // and name the problem instead.
-    if (!emailLooksValid) {
+    if (!EMAIL_PATTERN.test(form.email.trim())) {
       setNotice('')
-      setError('请先填写有效的邮箱地址，再获取验证码。')
+      setError('')
+      setFieldErrors((previous) => ({ ...previous, email: '请先填写有效的邮箱地址，再获取验证码。' }))
       return
     }
     setError('')
@@ -79,9 +78,10 @@ export default function Register() {
     try {
       await api('/auth/send-code', {
         method: 'POST',
-        body: JSON.stringify({ email: form.email, scene: 'register' }),
+        body: JSON.stringify({ email: form.email.trim(), scene: 'register' }),
       })
       setCooldown(RESEND_COOLDOWN_SECONDS)
+      setFieldErrors((previous) => ({ ...previous, email: '' }))
       setNotice('验证码已发送，请查收邮箱，10 分钟内有效。')
     } catch (err) {
       setError(sendCodeErrorMessage(err))
@@ -90,24 +90,55 @@ export default function Register() {
     }
   }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
+  const handleSubmit = async (event) => {
+    event.preventDefault()
     if (submitting) return
+
+    const nextErrors = {}
+    const username = form.username.trim()
+    const email = form.email.trim()
+    if (username.length < 3 || username.length > 30) {
+      nextErrors.username = '用户名需为 3–30 个字符。'
+    } else if (!USERNAME_PATTERN.test(username)) {
+      nextErrors.username = '用户名只能包含小写字母和数字。'
+    }
+    if (!email) nextErrors.email = '请输入邮箱。'
+    else if (!EMAIL_PATTERN.test(email)) nextErrors.email = '请输入有效的邮箱地址。'
+    if (form.password.length < 8) {
+      nextErrors.password = '密码至少需要 8 个字符。'
+    } else if (!PASSWORD_PATTERNS.every((pattern) => pattern.test(form.password))) {
+      nextErrors.password = '密码需同时包含大写字母、小写字母和数字。'
+    }
+    setFieldErrors(nextErrors)
     setError('')
+    if (Object.keys(nextErrors).length > 0) return
+
     setSubmitting(true)
     try {
-      const resp = await api('/auth/register', {
+      const response = await api('/auth/register', {
         method: 'POST',
-        body: JSON.stringify(codeRequired ? { ...form, code } : form),
+        body: JSON.stringify({
+          ...form,
+          username,
+          email,
+          // Only sent when the site advertises email verification, so the
+          // no-SMTP deploys keep working against the three-field schema.
+          ...(codeRequired ? { code } : {}),
+        }),
       })
-      setToken(resp.access_token || resp.token, resp.shuake_token)
+      setToken(response.access_token || response.token, response.shuake_token)
       navigate(from, { replace: true })
-    } catch (err) {
-      const message = err?.message || '注册失败'
+    } catch (requestError) {
+      if (requestError?.payload?.code === LOCAL_PROFILE_AUTH_CODE) {
+        markLocal()
+        navigate('/dashboard', { replace: true })
+        return
+      }
+      const message = requestError?.message || '注册失败，请稍后重试。'
       // Verification is on but /auth/config never told us — the request failed
       // or was still in flight when the form was submitted. Reveal the code
       // field so the user can recover here instead of having to reload.
-      if (err?.status === 400 && message.includes('请先获取邮箱验证码')) {
+      if (requestError?.status === 400 && message.includes('请先获取邮箱验证码')) {
         setCodeRequired(true)
         setError('这个站点需要邮箱验证码，请点击「发送验证码」获取后再创建账号。')
       } else {
@@ -119,142 +150,117 @@ export default function Register() {
   }
 
   return (
-    <main className="auth-page">
-      <section className="auth-pitch">
-        <div className="auth-pitch__inner">
-          <p className="auth-eyebrow auth-rise">学道</p>
-          <h1 className="auth-headline auth-rise auth-delay-1">注册一次，之后不用再盯着。</h1>
-          <p className="auth-lede auth-rise auth-delay-2">
-            绑定超星学习通或智慧树的账号，课程视频自动观看、章节测验自动作答。创建账号后就能添加课程。
-          </p>
-          <div className="auth-bars auth-rise auth-delay-3" aria-hidden="true">
-            {CHAPTER_BARS.map((index) => (
-              <div key={index} className="auth-bar">
-                <div className="auth-bar__fill" />
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+    <main className="relative flex min-h-screen items-center justify-center bg-background px-4 py-20 sm:px-8">
+      <div className="absolute right-4 top-4 z-20"><ThemeToggle /></div>
+      <section className="w-full max-w-md">
+        <Card padding="spacious" tone="elevated">
+          <Link to="/register" className="mb-7 flex w-fit items-center gap-3" aria-label="学道注册页">
+            <span className="relative grid h-11 w-11 place-items-center overflow-hidden rounded-xl bg-secondary text-background dark:text-text">
+              <BookOpen className="h-5 w-5" aria-hidden="true" />
+              <span className="absolute bottom-0 right-0 h-2.5 w-2.5 bg-cta" aria-hidden="true" />
+            </span>
+            <span className="text-xl font-black tracking-[0.18em]">学道</span>
+          </Link>
 
-      <section className="auth-panel">
-        <div className="auth-panel__inner">
-          <h2 className="auth-form-title auth-rise auth-delay-2">创建账号</h2>
-          <p className="auth-form-hint auth-rise auth-delay-2">只要一个邮箱，一分钟就好。</p>
+          <h1 className="text-3xl font-black tracking-tight text-text">创建账号</h1>
 
-          <form onSubmit={handleSubmit} className="auth-form" noValidate>
-            <div className="auth-field auth-rise auth-delay-3">
-              <label className="auth-label" htmlFor="register-username">
-                用户名
-              </label>
-              <input
-                id="register-username"
-                className="auth-input"
-                type="text"
-                autoComplete="username"
-                value={form.username}
-                onChange={(e) => setForm({ ...form, username: e.target.value })}
-                required
-              />
-            </div>
-
-            <div className="auth-field auth-rise auth-delay-4">
-              <label className="auth-label" htmlFor="register-email">
-                邮箱
-              </label>
-              <input
-                id="register-email"
-                className="auth-input"
-                type="email"
-                autoComplete="email"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-                required
-              />
-            </div>
-
+          <form onSubmit={handleSubmit} className="mt-7 space-y-5" noValidate>
+            <Input
+              id="register-username"
+              label="用户名"
+              type="text"
+              autoComplete="username"
+              value={form.username}
+              onChange={(event) => {
+                setForm((previous) => ({ ...previous, username: event.target.value }))
+                setFieldErrors((previous) => ({ ...previous, username: '' }))
+              }}
+              error={fieldErrors.username}
+              hint="3–30 位小写字母或数字。"
+              required
+            />
+            <Input
+              id="register-email"
+              label="邮箱"
+              type="email"
+              autoComplete="email"
+              inputMode="email"
+              value={form.email}
+              onChange={(event) => {
+                setForm((previous) => ({ ...previous, email: event.target.value }))
+                setFieldErrors((previous) => ({ ...previous, email: '' }))
+              }}
+              error={fieldErrors.email}
+              required
+            />
             {codeRequired && (
-              <div className="auth-field auth-rise auth-delay-5">
-                <label className="auth-label" htmlFor="register-code">
-                  邮箱验证码
-                </label>
-                <div className="auth-code-row">
-                  <input
-                    id="register-code"
-                    className="auth-input flex-1 min-w-0"
-                    type="text"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    maxLength={6}
-                    placeholder="6 位数字"
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    required
-                  />
-                  <button
-                    type="button"
-                    className="auth-ghost-button"
-                    onClick={handleSendCode}
-                    disabled={sendingCode || cooldown > 0}
-                    aria-busy={sendingCode}
-                  >
-                    {cooldown > 0 ? `${cooldown} 秒后重发` : '发送验证码'}
-                  </button>
-                </div>
+              // The send button sits beside the field rather than inside it so
+              // the cooldown label ("60 秒后重发") never overlaps the value.
+              <div className="flex items-start gap-3">
+                <Input
+                  id="register-code"
+                  containerClassName="min-w-0 flex-1"
+                  label="邮箱验证码"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  placeholder="6 位数字"
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  required
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="mt-7 shrink-0 whitespace-nowrap"
+                  loading={sendingCode}
+                  loadingLabel="发送中…"
+                  disabled={cooldown > 0}
+                  onClick={handleSendCode}
+                >
+                  {cooldown > 0 ? `${cooldown} 秒后重发` : '发送验证码'}
+                </Button>
               </div>
             )}
-
-            <div className="auth-field auth-rise auth-delay-5">
-              <label className="auth-label" htmlFor="register-password">
-                密码
-              </label>
-              <input
-                id="register-password"
-                className="auth-input"
-                type="password"
-                autoComplete="new-password"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                required
-              />
-            </div>
-
-            {/* Mounted unconditionally so the region already exists when the
-                notice arrives — a live region inserted at the same time as its
-                content is routinely missed. Empty it collapses to nothing, so
-                the form's vertical rhythm is unchanged. */}
-            <div aria-live="polite">
-              {notice && !error ? <p className="auth-notice">{notice}</p> : null}
-            </div>
-
-            {error && (
-              <p role="alert" className="auth-error">
-                {error}
-              </p>
+            <Input
+              id="register-password"
+              label="密码"
+              type={showPassword ? 'text' : 'password'}
+              autoComplete="new-password"
+              value={form.password}
+              onChange={(event) => {
+                setForm((previous) => ({ ...previous, password: event.target.value }))
+                setFieldErrors((previous) => ({ ...previous, password: '' }))
+              }}
+              error={fieldErrors.password}
+              hint="至少 8 个字符，包含大写字母、小写字母和数字。"
+              trailing={(
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((visible) => !visible)}
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                  className="grid h-10 w-10 place-items-center rounded-lg text-text-muted hover:bg-surface-hover hover:text-text focus-visible:ring-offset-0"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
+                </button>
+              )}
+              required
+            />
+            {notice && !error && (
+              <p role="status" className="rounded-xl border border-success/30 bg-success-surface px-3 py-2.5 text-sm text-text">{notice}</p>
             )}
-
-            <div className="auth-rise auth-delay-6">
-              <button
-                type="submit"
-                className="auth-submit"
-                disabled={submitting}
-                aria-busy={submitting}
-              >
-                {submitting && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
-                {submitting ? '创建中…' : '创建账号'}
-              </button>
-            </div>
+            {error && <p role="alert" className="rounded-xl border border-danger/30 bg-danger-surface px-3 py-2.5 text-sm text-danger">{error}</p>}
+            <Button type="submit" variant="cta" size="lg" className="w-full gap-2" loading={submitting} loadingLabel="正在创建…">
+              创建学道账号
+            </Button>
           </form>
 
-          <div className="auth-meta auth-rise auth-delay-7">
-            <span>
-              已有账号？{' '}
-              <Link to="/login" className="auth-link">
-                登录
-              </Link>
-            </span>
-          </div>
-        </div>
+          <p className="mt-6 text-center text-sm text-text-muted">
+            已有账号？{' '}
+            <Link to="/login" className="font-bold text-primary hover:underline">返回登录</Link>
+          </p>
+        </Card>
       </section>
     </main>
   )

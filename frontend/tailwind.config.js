@@ -5,7 +5,6 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Semantic tokens — keep these stable so dark mode just remaps them.
         primary: 'rgb(var(--color-primary) / <alpha-value>)',
         secondary: 'rgb(var(--color-secondary) / <alpha-value>)',
         cta: 'rgb(var(--color-cta) / <alpha-value>)',
@@ -45,10 +44,10 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        sans: ['"PingFang SC"', '"Microsoft YaHei"', 'system-ui', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
         // Apple's own faces first so macOS/iOS render SF Pro and — for the
-        // Chinese UI — PingFang SC natively. Inter is already loaded and
-        // carries everything else.
+        // Chinese UI — PingFang SC natively. Used only by the auth pages.
         display: [
           '-apple-system',
           'BlinkMacSystemFont',
@@ -60,11 +59,9 @@ export default {
           'sans-serif',
         ],
       },
-      backdropBlur: {
-        glass: '16px',
-      },
       animation: {
-        'fade-in': 'fadeIn 200ms ease-out',
+        'fade-in': 'fadeIn 180ms ease-out',
+        'status-in': 'statusIn 320ms cubic-bezier(0.22, 1, 0.36, 1)',
         // Auth pages. cubic-bezier(0.28, 0.11, 0.32, 1) is Apple's easing.
         'auth-rise': 'authRise 640ms cubic-bezier(0.28, 0.11, 0.32, 1) both',
         'auth-chapter': 'authChapterFill 14s cubic-bezier(0.28, 0.11, 0.32, 1) infinite',
@@ -73,6 +70,10 @@ export default {
         fadeIn: {
           from: { opacity: '0' },
           to: { opacity: '1' },
+        },
+        statusIn: {
+          from: { opacity: '0', transform: 'translateY(4px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
         },
         authRise: {
           from: { opacity: '0', transform: 'translateY(12px)' },

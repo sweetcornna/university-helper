@@ -31,3 +31,12 @@ def test_health_503_when_probe_false(monkeypatch):
     r = TestClient(app, base_url="http://localhost").get("/health")
     assert r.status_code == 503
     assert r.json()["detail"] == "db unavailable"
+
+
+def test_health_reports_schema_and_degrades_when_template_missing(monkeypatch):
+    monkeypatch.setattr("app.main.get_storage", lambda: _Storage(True))
+    monkeypatch.setattr("app.db.bootstrap.cached_schema_status", lambda: "missing_tenant_template")
+    r = TestClient(app, base_url="http://localhost").get("/health")
+    assert r.status_code == 200
+    assert r.json()["schema"] == "missing_tenant_template"
+    assert r.json()["status"] == "degraded"

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 
-import { applyCourseProgressToTaskRecords } from './zhihuishuTasks'
+import { applyCourseProgressToTaskRecords, applyTaskActionToRecords } from './zhihuishuTasks'
 
 describe('applyCourseProgressToTaskRecords', () => {
   test('updates only the active task when multiple tasks share one course', () => {
@@ -73,5 +73,37 @@ describe('applyCourseProgressToTaskRecords', () => {
     })
 
     expect(updated).toEqual(tasks)
+  })
+})
+
+describe('applyTaskActionToRecords', () => {
+  const tasks = [
+    { taskId: 'running', status: 'running', message: 'active' },
+    { taskId: 'paused', status: 'paused', message: 'paused' },
+    { taskId: 'completed', status: 'completed', message: 'done' },
+    { taskId: 'failed', status: 'failed', message: 'failed' },
+  ]
+
+  test('never overwrites terminal history during global controls', () => {
+    const cancelled = applyTaskActionToRecords(tasks, {
+      action: 'cancel',
+      message: 'cancelled',
+      updatedAt: 'now',
+    })
+
+    expect(cancelled.find((task) => task.taskId === 'running').status).toBe('cancelled')
+    expect(cancelled.find((task) => task.taskId === 'paused').status).toBe('cancelled')
+    expect(cancelled.find((task) => task.taskId === 'completed')).toEqual(tasks[2])
+    expect(cancelled.find((task) => task.taskId === 'failed')).toEqual(tasks[3])
+  })
+
+  test('applies pause and resume only to valid source states', () => {
+    const paused = applyTaskActionToRecords(tasks, { action: 'pause' })
+    expect(paused.find((task) => task.taskId === 'running').status).toBe('paused')
+    expect(paused.find((task) => task.taskId === 'paused').status).toBe('paused')
+
+    const resumed = applyTaskActionToRecords(tasks, { action: 'resume' })
+    expect(resumed.find((task) => task.taskId === 'paused').status).toBe('running')
+    expect(resumed.find((task) => task.taskId === 'running').status).toBe('running')
   })
 })

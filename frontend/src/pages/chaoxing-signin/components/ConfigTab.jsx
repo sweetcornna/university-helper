@@ -27,14 +27,15 @@ export default function ConfigTab({
         <h3 className="text-lg font-bold text-text mb-4">自动签到设置</h3>
         <div className="space-y-4">
           <div className={`${GLASS_PANEL_CLASS} flex items-center justify-between`}>
-            <div>
-              <p className="font-medium text-text">自动签到</p>
-              <p className="text-sm text-text/70">按设定周期自动检查并签到</p>
-            </div>
+            <p className="font-medium text-text">自动签到</p>
             <button
+              type="button"
+              role="switch"
+              aria-checked={autoSignin}
+              aria-label="自动签到"
               onClick={() => setAutoSignin(!autoSignin)}
-              className={`relative inline-flex h-11 w-20 min-h-[44px] min-w-[44px] items-center rounded-full px-1 transition-colors duration-200 cursor-pointer ${
-                autoSignin ? 'bg-primary' : 'bg-gray-300'
+              className={`relative inline-flex h-11 w-20 min-h-[44px] min-w-[44px] cursor-pointer items-center rounded-full px-1 transition-colors duration-200 ${
+                autoSignin ? 'bg-primary' : 'bg-border'
               }`}
             >
               <span
@@ -46,10 +47,11 @@ export default function ConfigTab({
           </div>
 
           <div className={GLASS_PANEL_CLASS}>
-            <label className="block text-sm font-medium text-text mb-2">
+            <label htmlFor="cx-auto-check-interval" className="mb-2 block text-sm font-medium text-text">
               检查间隔（分钟）
             </label>
             <input
+              id="cx-auto-check-interval"
               type="number"
               min="1"
               max={String(MAX_CHECK_INTERVAL_MINUTES)}
@@ -60,10 +62,11 @@ export default function ConfigTab({
           </div>
 
           <div className={GLASS_PANEL_CLASS}>
-            <label className="block text-sm font-medium text-text mb-2">
+            <label htmlFor="cx-auto-sign-type" className="mb-2 block text-sm font-medium text-text">
               自动签到类型
             </label>
             <select
+              id="cx-auto-sign-type"
               value={autoSignFilter}
               onChange={(e) => setAutoSignFilter(e.target.value)}
               className="w-full min-h-[44px] rounded-xl border border-border/30 bg-surface/60 px-4 py-2 text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer"
@@ -77,7 +80,7 @@ export default function ConfigTab({
               <option value="code">签到码签到（兼容普通）</option>
             </select>
             <p className="mt-2 text-xs text-text/70">
-              设置会自动保存，开启后每次检查将自动尝试签到，重复任务会短时间去重。
+              设置自动保存；启用后按周期尝试签到，并短期忽略重复任务。
             </p>
           </div>
 

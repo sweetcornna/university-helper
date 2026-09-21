@@ -1,4 +1,4 @@
-import { act } from 'react-dom/test-utils'
+import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
@@ -47,7 +47,7 @@ describe('TasksTab remote submit link', () => {
 
     const hrefs = Array.from(container.querySelectorAll('a')).map((a) => a.getAttribute('href') || '')
     expect(hrefs.some((h) => /javascript:/i.test(h))).toBe(false)
-    expect(container.textContent).not.toContain('学习通远程提交接口')
+    expect(container.textContent).not.toContain('在学习通提交')
   })
 
   test('renders a valid https submit URL as a link', () => {
@@ -60,7 +60,7 @@ describe('TasksTab remote submit link', () => {
     ])
 
     const link = Array.from(container.querySelectorAll('a')).find((a) =>
-      /学习通远程提交接口/.test(a.textContent || '')
+      /在学习通提交/.test(a.textContent || '')
     )
     expect(link).toBeTruthy()
     expect(link.getAttribute('href')).toBe('https://mobilelearn.chaoxing.com/submit')

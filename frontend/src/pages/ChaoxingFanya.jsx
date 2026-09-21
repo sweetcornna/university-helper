@@ -52,6 +52,16 @@ export default function ChaoxingFanya() {
 
   const auth = useAuthentication({ stopPolling })
 
+  // Keep selections valid when a successful login/refresh replaces the course list.
+  // A failed refresh leaves auth.courses untouched, so it does not discard choices.
+  useEffect(() => {
+    const availableCourseIds = new Set(auth.courses.map(getCourseId).filter(Boolean))
+    setSelectedCourses((prev) => {
+      const next = prev.filter((courseId) => availableCourseIds.has(courseId))
+      return next.length === prev.length ? prev : next
+    })
+  }, [auth.courses])
+
   // Surface auth errors / notices through the shared toast and immediately
   // clear the source so the same message can be re-announced if it recurs.
   const { error: authError, notice: authNotice, setError: authSetError, setNotice: authSetNotice } =
@@ -113,6 +123,9 @@ export default function ChaoxingFanya() {
     auth.setError('')
     auth.setNotice('')
 
+    const availableCourseIds = new Set(auth.courses.map(getCourseId).filter(Boolean))
+    const validSelectedCourses = selectedCourses.filter((courseId) => availableCourseIds.has(courseId))
+
 
     // The username is always required: the backend binds the reused cookie jar
     // to it, so without it a task could adopt a session for another account.
@@ -124,7 +137,7 @@ export default function ChaoxingFanya() {
       auth.requireCredentials()
       return
     }
-    if (selectedCourses.length === 0) {
+    if (validSelectedCourses.length === 0) {
       auth.setError('请至少选择一门课程。')
       return
     }
@@ -143,7 +156,7 @@ export default function ChaoxingFanya() {
           platform: 'chaoxing',
           username: auth.username.trim(),
           password: auth.password,
-          course_ids: selectedCourses,
+          course_ids: validSelectedCourses,
           speed: taskConfig.speed,
           concurrency: taskConfig.concurrency,
           unopened_strategy: taskConfig.unopenedStrategy,
@@ -185,7 +198,7 @@ export default function ChaoxingFanya() {
 
 
       if (!resp) return
-      if (!resp.task_id) throw new Error('后端未返回任务 ID。')
+      if (!resp.task_id) throw new Error('未返回任务 ID，任务未启动。')
 
 
       taskExec.setTaskId(resp.task_id)
@@ -204,8 +217,9 @@ export default function ChaoxingFanya() {
       )
       taskExec.appendLogs([{ timestamp: new Date().toISOString(), level: 'success', message: `任务已创建：${resp.task_id}` }])
     } catch (err) {
-      taskExec.setLoading(false)
       auth.setError(err?.message || '启动任务失败。')
+    } finally {
+      taskExec.setLoading(false)
     }
   }, [
     auth,
@@ -224,7 +238,6 @@ export default function ChaoxingFanya() {
       <div className="space-y-6">
         <section className={CARD}>
           <h1 className="text-3xl font-bold text-text">超星学习通自动刷课</h1>
-          <p className="mt-2 text-sm text-text/70">支持离开页面后恢复任务状态、日志与历史任务查看。</p>
         </section>
 
 
@@ -285,6 +298,7 @@ export default function ChaoxingFanya() {
               taskId={taskExec.taskId}
               taskStatus={taskExec.taskStatus}
               loading={taskExec.loading}
+              controlLoading={taskExec.controlLoading}
               isRunning={isRunning}
               statusText={statusText}
               startTask={startTask}

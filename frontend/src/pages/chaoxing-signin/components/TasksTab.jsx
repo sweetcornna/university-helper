@@ -25,10 +25,11 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
         <Button
           type="button"
           variant="secondary"
+          aria-label="刷新签到任务"
           className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
           onClick={fetchSigninTasks}
         >
-          <RefreshCw className="h-4 w-4" />
+          <RefreshCw className="h-4 w-4" aria-hidden="true" />
         </Button>
       </div>
       {signinTasks.length === 0 ? (
@@ -98,7 +99,7 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
                         onClick={(event) => event.stopPropagation()}
                       >
                         <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-                        学习通远程提交接口
+                        在学习通提交
                       </a>
                     )}
                   </div>

@@ -104,3 +104,62 @@ def test_get_db_session_tenant_releases_when_getconn_raises():
             assert entry.in_use == 0
     finally:
         session_mod.tenant_pools.clear()
+
+
+def test_tenant_template_is_not_a_valid_user_tenant():
+    import pytest
+
+    from app.db.session import _validate_tenant_db_name
+
+    with pytest.raises(ValueError, match="Reserved"):
+        _validate_tenant_db_name("tenant_template")
+    _validate_tenant_db_name("tenant_templates2")
+
+
+@patch('app.db.session._get_main_pool')
+def test_closed_connection_is_discarded_and_replaced(mock_pool):
+    dead = Mock(closed=2)
+    fresh = Mock(closed=0)
+    mock_pool.return_value.getconn.side_effect = [dead, fresh]
+
+    with get_db_session() as conn:
+        assert conn is fresh
+
+    mock_pool.return_value.putconn.assert_any_call(dead, close=True)
+    mock_pool.return_value.putconn.assert_called_with(fresh)
+
+
+@patch('app.db.session._get_main_pool')
+def test_connection_error_closes_instead_of_recycling(mock_pool):
+    import psycopg2
+
+    conn = Mock(closed=0)
+    mock_pool.return_value.getconn.return_value = conn
+
+    with pytest.raises(psycopg2.OperationalError):
+        with get_db_session():
+            raise psycopg2.OperationalError("server closed the connection unexpectedly")
+
+    mock_pool.return_value.putconn.assert_called_once_with(conn, close=True)
+
+
+@patch('app.db.session._get_main_pool')
+def test_application_error_keeps_connection_in_pool(mock_pool):
+    conn = Mock(closed=0)
+    mock_pool.return_value.getconn.return_value = conn
+
+    with pytest.raises(ValueError):
+        with get_db_session():
+            raise ValueError("bad input")
+
+    mock_pool.return_value.putconn.assert_called_once_with(conn)
+
+
+@patch('psycopg2.pool.ThreadedConnectionPool')
+def test_pools_enable_tcp_keepalives(mock_pool_class):
+    from app.db.session import _build_tenant_pool
+
+    _build_tenant_pool("tenant_keepalive")
+    kwargs = mock_pool_class.call_args.kwargs
+    assert kwargs["keepalives"] == 1
+    assert kwargs["connect_timeout"] == 5

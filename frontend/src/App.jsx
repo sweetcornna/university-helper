@@ -6,8 +6,10 @@ import {
   ErrorBoundary,
   PrivateRoute,
   RouteFallback,
+  RuntimeProfileProvider,
   ThemeProvider,
   ToastProvider,
+  useRuntimeProfile,
 } from './components'
 import { isAuthenticated } from './utils/auth'
 
@@ -20,38 +22,57 @@ const ChaoxingFanya = lazy(() => import('./pages/ChaoxingFanya'))
 const Zhihuishu = lazy(() => import('./pages/Zhihuishu'))
 const NotFound = lazy(() => import('./pages/NotFound'))
 
+function RuntimeRoutes() {
+  const { isLocal, loading } = useRuntimeProfile()
+
+  if (loading) return <RouteFallback />
+
+  const home = isLocal || isAuthenticated() ? '/dashboard' : '/login'
+
+  return (
+    <>
+      {!isLocal && <AuthExpiredListener />}
+      <Suspense fallback={<RouteFallback />}>
+        <Routes>
+          <Route path="/login" element={isLocal ? <Navigate to="/dashboard" replace /> : <Login />} />
+          <Route
+            path="/register"
+            element={isLocal ? <Navigate to="/dashboard" replace /> : <Register />}
+          />
+          <Route
+            path="/forgot-password"
+            element={isLocal ? <Navigate to="/dashboard" replace /> : <ForgotPassword />}
+          />
+          <Route
+            element={
+              <PrivateRoute>
+                <AppLayout />
+              </PrivateRoute>
+            }
+          >
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/chaoxing-signin" element={<ChaoxingSignin />} />
+            <Route path="/chaoxing-fanya" element={<ChaoxingFanya />} />
+            <Route path="/zhihuishu-panel" element={<Zhihuishu />} />
+          </Route>
+          <Route path="/" element={<Navigate to={home} replace />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </Suspense>
+    </>
+  )
+}
+
 function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
         <BrowserRouter>
-          <ToastProvider>
-          <AuthExpiredListener />
-          <Suspense fallback={<RouteFallback />}>
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
-              <Route path="/forgot-password" element={<ForgotPassword />} />
-              <Route
-                element={
-                  <PrivateRoute>
-                    <AppLayout />
-                  </PrivateRoute>
-                }
-              >
-                <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/chaoxing-signin" element={<ChaoxingSignin />} />
-                <Route path="/chaoxing-fanya" element={<ChaoxingFanya />} />
-                <Route path="/zhihuishu-panel" element={<Zhihuishu />} />
-              </Route>
-              <Route
-                path="/"
-                element={<Navigate to={isAuthenticated() ? '/dashboard' : '/login'} replace />}
-              />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
-          </ToastProvider>
+          <RuntimeProfileProvider>
+            <ToastProvider>
+              <RuntimeRoutes />
+            </ToastProvider>
+          </RuntimeProfileProvider>
         </BrowserRouter>
       </ThemeProvider>
     </ErrorBoundary>

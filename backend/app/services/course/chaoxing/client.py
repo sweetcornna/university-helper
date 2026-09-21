@@ -1,10 +1,9 @@
-from enum import Enum
-
 from .answer import Tiku
 from .auth_service import ChaoxingAuthService
 from .constants import (
     DEFAULT_RATE_LIMIT,
     VIDEO_LOG_RATE_LIMIT,
+    StudyResult,
 )
 from .course_data_service import ChaoxingCourseDataService
 from .course_service import ChaoxingCourseService
@@ -24,23 +23,6 @@ class Account:
     def __init__(self, _username, _password):
         self.username = _username
         self.password = _password
-
-
-class StudyResult(Enum):
-    SUCCESS = 0
-    FORBIDDEN = 1
-    ERROR = 2
-    TIMEOUT = 3
-    CANCELLED = 4
-
-    def is_success(self):
-        return self == StudyResult.SUCCESS
-
-    def is_failure(self):
-        return self in {StudyResult.FORBIDDEN, StudyResult.ERROR, StudyResult.TIMEOUT}
-
-    def is_cancelled(self):
-        return self == StudyResult.CANCELLED
 
 
 class Chaoxing:

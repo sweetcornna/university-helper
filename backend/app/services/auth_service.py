@@ -9,8 +9,10 @@ import re
 import time
 
 from app.config import settings
+from app.core.exceptions import DatabaseNotInitializedError, TenantProvisioningError
 from app.core.security import create_access_token, hash_password, verify_password
-from app.db.session import get_db_session
+from app.db.session import RESERVED_TENANT_DB_NAMES, get_db_session
+from app.schemas.auth import RESERVED_USERNAME_MESSAGE, RESERVED_USERNAMES
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,26 @@ class AuthService:
         if not re.search(r"\d", password):
             raise ValueError("Password must contain digit")
 
+    # Backoff (seconds) when PostgreSQL refuses to clone tenant_template because
+    # another session is connected to it (pg_dumpall backups, an admin psql).
+    _TEMPLATE_BUSY_BACKOFF = (0.5, 1.0, 2.0, 4.0)
+    _DDL_CONNECT_TIMEOUT = 5
+
+    @staticmethod
+    def _ddl_connect():
+        import psycopg2
+
+        conn = psycopg2.connect(
+            host=settings.MAIN_DB_HOST,
+            database=settings.MAIN_DB_NAME,
+            user=settings.MAIN_DB_USER,
+            password=settings.MAIN_DB_PASSWORD,
+            port=settings.MAIN_DB_PORT,
+            connect_timeout=AuthService._DDL_CONNECT_TIMEOUT,
+        )
+        conn.autocommit = True
+        return conn
+
     @staticmethod
     def _create_tenant_database(tenant_db_name: str) -> None:
         """Create a tenant database from template. Raises on failure.
@@ -87,57 +109,93 @@ class AuthService:
         which means the UNIQUE constraint on (username, tenant_db_name) already
         guarantees no *live* user owns this tenant DB. So an existing
         `tenant_<username>` DB here is necessarily an orphan: drop and recreate
-        it to make registration idempotent/recoverable.
+        it to make registration idempotent/recoverable. Reserved names (the
+        template itself) are never dropped.
+
+        Operational failures are mapped to 503 errors with a message the user
+        (or the operator reading it) can act on, instead of a bare 500.
         """
         import psycopg2
+        from psycopg2 import errors as pg_errors
         from psycopg2 import sql
 
-        ddl_conn = None
+        if tenant_db_name in RESERVED_TENANT_DB_NAMES:
+            raise ValueError(RESERVED_USERNAME_MESSAGE)
+
+        create_stmt = sql.SQL("CREATE DATABASE {} TEMPLATE tenant_template").format(sql.Identifier(tenant_db_name))
+        healed_template = False
+        busy_delays = list(AuthService._TEMPLATE_BUSY_BACKOFF)
+
+        while True:
+            ddl_conn = None
+            try:
+                ddl_conn = AuthService._ddl_connect()
+                with ddl_conn.cursor() as ddl_cur:
+                    try:
+                        ddl_cur.execute(create_stmt)
+                    except pg_errors.DuplicateDatabase:
+                        logger.warning(
+                            "Tenant database %s already existed (orphan); dropping and recreating",
+                            tenant_db_name,
+                        )
+                        ddl_cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(tenant_db_name)))
+                        ddl_cur.execute(create_stmt)
+                logger.info("Tenant database %s created successfully", tenant_db_name)
+                return
+            except pg_errors.ObjectInUse as exc:
+                if not busy_delays:
+                    raise TenantProvisioningError("数据库正忙（可能正在备份），请稍后再试一次注册") from exc
+                delay = busy_delays.pop(0)
+                logger.warning("tenant_template is in use; retrying %s in %.1fs", tenant_db_name, delay)
+                time.sleep(delay)
+            except pg_errors.InvalidCatalogName as exc:
+                if not healed_template and AuthService._heal_missing_template():
+                    healed_template = True
+                    continue
+                logger.error(
+                    "tenant_template database is missing; registration cannot create %s. "
+                    "Re-run the deploy script or see database/README.md.",
+                    tenant_db_name,
+                )
+                raise DatabaseNotInitializedError(
+                    "数据库还没初始化好：缺少 tenant_template 模板库。请管理员重新运行部署脚本，或查看服务端日志"
+                ) from exc
+            except pg_errors.InsufficientPrivilege as exc:
+                logger.error("Database role lacks CREATEDB; cannot create %s", tenant_db_name)
+                raise TenantProvisioningError("数据库账号没有建库权限（CREATEDB），请管理员检查数据库配置") from exc
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+                logger.error("Database unavailable while creating %s: %s", tenant_db_name, exc)
+                raise TenantProvisioningError("数据库暂时连不上，请稍后再试") from exc
+            finally:
+                if ddl_conn:
+                    ddl_conn.close()
+
+    @staticmethod
+    def _heal_missing_template() -> bool:
+        """Try to rebuild a missing tenant_template once. Returns True if healed."""
+        if settings.PROFILE == "local" or not settings.DB_AUTO_BOOTSTRAP:
+            return False
+        from app.db.bootstrap import ensure_tenant_template
+
         try:
-            ddl_conn = psycopg2.connect(
-                host=settings.MAIN_DB_HOST,
-                database=settings.MAIN_DB_NAME,
-                user=settings.MAIN_DB_USER,
-                password=settings.MAIN_DB_PASSWORD,
-                port=settings.MAIN_DB_PORT,
-            )
-            ddl_conn.autocommit = True
-            with ddl_conn.cursor() as ddl_cur:
-                try:
-                    ddl_cur.execute(
-                        sql.SQL("CREATE DATABASE {} TEMPLATE tenant_template").format(sql.Identifier(tenant_db_name))
-                    )
-                except psycopg2.errors.DuplicateDatabase:
-                    logger.warning(
-                        "Tenant database %s already existed (orphan); dropping and recreating",
-                        tenant_db_name,
-                    )
-                    ddl_cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(tenant_db_name)))
-                    ddl_cur.execute(
-                        sql.SQL("CREATE DATABASE {} TEMPLATE tenant_template").format(sql.Identifier(tenant_db_name))
-                    )
-            logger.info("Tenant database %s created successfully", tenant_db_name)
-        finally:
-            if ddl_conn:
-                ddl_conn.close()
+            ensure_tenant_template()
+        except Exception:
+            logger.exception("Automatic tenant_template repair failed")
+            return False
+        logger.warning("tenant_template was missing and has been rebuilt")
+        return True
 
     @staticmethod
     def _drop_tenant_database(tenant_db_name: str) -> None:
         """Best-effort DROP of a tenant DB (used on the rollback path so a
         partially-created DB does not become an orphan). Never raises."""
-        import psycopg2
         from psycopg2 import sql
 
+        if tenant_db_name in RESERVED_TENANT_DB_NAMES:
+            return
         ddl_conn = None
         try:
-            ddl_conn = psycopg2.connect(
-                host=settings.MAIN_DB_HOST,
-                database=settings.MAIN_DB_NAME,
-                user=settings.MAIN_DB_USER,
-                password=settings.MAIN_DB_PASSWORD,
-                port=settings.MAIN_DB_PORT,
-            )
-            ddl_conn.autocommit = True
+            ddl_conn = AuthService._ddl_connect()
             with ddl_conn.cursor() as ddl_cur:
                 ddl_cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(tenant_db_name)))
             logger.info("Dropped tenant database %s on rollback", tenant_db_name)
@@ -177,6 +235,11 @@ class AuthService:
             raise ValueError("用户名或邮箱已被占用")
         except psycopg2.errors.IntegrityError:
             raise ValueError("用户名或邮箱已被占用")
+        except psycopg2.errors.UndefinedTable as exc:
+            logger.error("users table is missing; the main schema was never applied")
+            raise DatabaseNotInitializedError(
+                "数据库还没初始化好：缺少 users 表。请管理员重新运行部署脚本，或查看服务端日志"
+            ) from exc
 
     def _rollback_user_row(self, user_id: int) -> None:
         try:
@@ -201,6 +264,8 @@ class AuthService:
     async def register_user(self, username: str, email: str, password: str) -> dict:
         if not username or not self._USERNAME_RE.match(username):
             raise ValueError("用户名只能包含小写字母和数字（a-z、0-9）")
+        if username in RESERVED_USERNAMES or f"tenant_{username}" in RESERVED_TENANT_DB_NAMES:
+            raise ValueError(RESERVED_USERNAME_MESSAGE)
         self._validate_password_strength(password)
         # bcrypt is CPU-bound; offload to thread to keep the event loop responsive.
         password_hash = await asyncio.to_thread(hash_password, password)

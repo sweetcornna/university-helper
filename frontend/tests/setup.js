@@ -1,6 +1,8 @@
 import '@testing-library/jest-dom/vitest'
 import { beforeEach, vi } from 'vitest'
 
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
 const createMemoryStorage = () => {
   const store = new Map()
   return {
@@ -19,14 +21,26 @@ const createMemoryStorage = () => {
   }
 }
 
-if (!window.localStorage || typeof window.localStorage.setItem !== 'function') {
+const hasUsableStorage = (name) => {
+  try {
+    const storage = window[name]
+    const key = '__storage_probe__'
+    storage.setItem(key, key)
+    storage.removeItem(key)
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+if (!hasUsableStorage('localStorage')) {
   Object.defineProperty(window, 'localStorage', {
     value: createMemoryStorage(),
     configurable: true,
   })
 }
 
-if (!window.sessionStorage || typeof window.sessionStorage.setItem !== 'function') {
+if (!hasUsableStorage('sessionStorage')) {
   Object.defineProperty(window, 'sessionStorage', {
     value: createMemoryStorage(),
     configurable: true,

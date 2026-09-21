@@ -3,21 +3,21 @@
 Base URL: `https://shuake.cornna.xyz/api/v1` (production)
 or `http://localhost:8000/api/v1` (local dev).
 
-Every endpoint emits JSON. Errors use the shape:
+Every endpoint returns JSON. Errors use this shape:
 
 ```json
 { "code": "ErrorClassName", "message": "Human-readable text" }
 ```
 
-For Pydantic validation failures (HTTP 422) FastAPI's default `detail`
-array is returned; the frontend `utils/api.js` flattens it before
-surfacing to the user.
+Pydantic validation failures (HTTP 422) return FastAPI's default `detail`
+array instead; the frontend `utils/api.js` flattens it before showing it to
+the user. Unexpected server errors return 500 with
+`{ "code": "InternalServerError", "message": "Internal server error" }`, and
+the real cause is only in the server log.
 
-Authoritative source: `backend/app/api/v1/`. When `DOCS_ENABLED=true` the
-service also exposes Swagger UI at `/docs` and the raw spec at
-`/openapi.json` — prefer those for live exploration.
-
----
+The route code in `backend/app/api/v1/` is the source of truth. When
+`DOCS_ENABLED=true` the service also serves Swagger UI at `/docs` and the raw
+spec at `/openapi.json`, which are easier for exploring a running instance.
 
 ## Authentication
 
@@ -31,6 +31,23 @@ Authorization: Bearer <jwt>
 Tokens are HS256, signed with `SECRET_KEY`. Claims include
 `user_id`, `tenant_db_name`, `iat`, `nbf`, `exp`, `jti`. Default lifetime
 is `ACCESS_TOKEN_EXPIRE_MINUTES` (30 min).
+
+The desktop app runs the backend with `PROFILE=local` and has no accounts.
+There, every `/auth/*` route returns 409:
+
+```json
+{ "code": "LocalProfileAuthUnavailable", "message": "桌面版不需要注册或登录，直接使用即可" }
+```
+
+### GET /runtime
+
+Public. Tells the SPA whether it has to show the login page.
+
+```json
+{ "profile": "server", "requires_auth": true }
+```
+
+The desktop build returns `"profile": "local"` and `"requires_auth": false`.
 
 ### POST /auth/register
 
@@ -53,8 +70,20 @@ Create a new user, provision a tenant DB, return a token.
 }
 ```
 
-Username must match `^[a-z0-9]+$`. Password must be ≥ 8 chars with at
-least one uppercase, one lowercase, one digit.
+Username must be 3 to 30 characters matching `^[a-z0-9]+$`. Password must be
+≥ 8 chars with at least one uppercase, one lowercase, one digit.
+
+Errors:
+
+| Status | When |
+|---|---|
+| 422 | Validation failed, including the reserved usernames `template`, `template0`, `template1`, `postgres`, `main`, `maindb`, `root` and `system`. |
+| 400 | Other registration errors with a user-facing message, such as an email that is already registered. |
+| 503 `DatabaseNotInitializedError` | The server's database is missing the `users` table or the `tenant_template` database. An administrator needs to check `/health` and the server log. |
+| 503 `TenantProvisioningError` | The tenant database could not be created: the template stayed busy after several retries, the database role lacks `CREATEDB`, or Postgres could not be reached. |
+
+Both 503 errors are subclasses of `ServiceUnavailableError`, and their
+`message` explains the problem in Chinese.
 
 When `EMAIL_VERIFICATION_ENABLED` is true the request must carry a `code`
 obtained from `/auth/send-code`; a missing or wrong code is a 400. When the
@@ -117,14 +146,12 @@ Returns the same shape as `/register`.
 ### GET /auth/shuake-token
 
 Returns a fresh 7-day compat token for clients that still use the
-shuake bearer. Only works when `SHUAKE_COMPAT_SECRET` (≥ 32 chars) is
-configured on the backend. Requires the regular JWT.
-
----
+shuake bearer. It only works when `SHUAKE_COMPAT_SECRET` (≥ 32 chars) is
+configured on the backend, and requires the regular JWT.
 
 ## Chaoxing
 
-`backend/app/api/v1/chaoxing.py` — sign-in flow + Baidu location utils.
+`backend/app/api/v1/chaoxing.py` handles the sign-in flow and the Baidu location helpers.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -156,7 +183,7 @@ session. See `ChaoxingSigninManager._resolve_client`.
 
 ## Course tasks (Chaoxing Fanya + Zhihuishu)
 
-`backend/app/api/v1/course.py` — long-running automation tasks.
+`backend/app/api/v1/course.py` runs the long-running automation tasks.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -172,20 +199,60 @@ session. See `ChaoxingSigninManager._resolve_client`.
 | POST | `/course/zhihuishu/tasks/course` | Enqueue a Zhihuishu course-learning task. |
 
 Tasks store JSONB payloads in the user's tenant DB (`course_task_store`).
-Long polling clients should use `status` + `logs` with backoff; the
-canonical client is `frontend/src/pages/ChaoxingFanya.jsx` and
-`Zhihuishu.jsx`.
+Polling clients should call `status` and `logs` with backoff. See
+`frontend/src/pages/ChaoxingFanya.jsx` and `Zhihuishu.jsx` for the reference
+client.
 
----
+## System (server edition only)
+
+`backend/app/api/v1/system.py`. This router is not mounted in the desktop
+build.
+
+### GET /system/update
+
+Tells an administrator whether a newer release exists. Requires the regular
+JWT. Returns 403 (`Administrator only`) for everyone else.
+
+Administrators are the accounts whose email is listed in `ADMIN_EMAILS`
+(comma separated, case-insensitive). If `ADMIN_EMAILS` is empty, the account
+with the smallest `users.id` is the administrator.
+
+```json
+// response (200)
+{
+  "enabled": true,
+  "current": "1.4.6",
+  "latest": "1.4.7",
+  "has_update": true,
+  "html_url": "https://github.com/sweetcornna/university-helper/releases/tag/v1.4.7",
+  "notes": "<release notes, at most 2000 characters>",
+  "published_at": "<ISO 8601 timestamp from GitHub>",
+  "checked_at": "<ISO 8601 timestamp of the last successful check>",
+  "commands": {
+    "bash": "bash scripts/deploy_server.sh --tag 1.4.7 -y",
+    "powershell": "pwsh scripts/deploy_server.ps1 -Tag 1.4.7 -Yes"
+  }
+}
+```
+
+The server fetches the GitHub Releases API (`UPDATE_CHECK_URL`) in the
+background and ignores drafts and prereleases. Until a check has succeeded,
+`latest`, `html_url`, `published_at`, `checked_at` and `commands` are `null`
+and `has_update` is `false`. With `UPDATE_CHECK_ENABLED=false` the response is
+only `{ "enabled": false, "current": "<version>", "has_update": false }`.
 
 ## Observability
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | Returns `{ "status": "ok\|degraded", "db": "ok", "cleanup_task": "alive\|dead" }`. Used by Docker healthchecks. |
+| GET | `/health` | Returns `{ "status": "ok\|degraded", "db": "ok", "cleanup_task": "alive\|dead", "schema": "ok\|missing_users\|missing_tenant_template\|unknown" }`. Used by Docker healthchecks. |
 | GET | `/metrics` | Plain-text Prometheus exposition (process uptime + per-path × status counter). |
 
----
+`/health` returns 503 when the database does not answer. The `schema` field
+only appears on the server edition with Postgres. Any value other than `ok`
+sets `status` to `degraded` but keeps the 200 status code, so the container
+stays up while registration is broken. Check this field first when
+registration fails.
 
 ## Rate limiting
 
@@ -193,7 +260,11 @@ canonical client is `frontend/src/pages/ChaoxingFanya.jsx` and
 - FastAPI middleware (`backend/app/middleware/rate_limiter.py`): per-route window counters with Postgres-backed storage and an in-memory fallback.
 - 429 responses include `Retry-After` when emitted by nginx.
 
----
+## Host header
+
+Requests whose `Host` header is not `localhost`, `127.0.0.1`, a host from
+`CORS_ORIGINS` or a name in `ALLOWED_HOSTS` get 400 with code `InvalidHost`.
+The message names the rejected host and the `ALLOWED_HOSTS` setting.
 
 ## OpenAPI
 

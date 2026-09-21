@@ -71,8 +71,11 @@ class ChaoxingMediaService:
             return None
 
         if resp.status_code != 200:
-            logger.debug("刷新视频状态返回码异常: {}", resp.status_code)
-            logger.debug(resp.text)
+            logger.debug(
+                "刷新视频状态返回码异常: status_code={}, jobid={}",
+                resp.status_code,
+                job.get("jobid"),
+            )
             return None
 
         try:
@@ -190,7 +193,7 @@ class ChaoxingMediaService:
                         except (TypeError, ValueError):
                             logger.debug("刷新返回的 duration 非法，沿用旧值: {}", refreshed_duration)
                         play_time = refreshed_meta.get("playTime", play_time)
-                        logger.debug("Refreshed token: {}, duration: {}, play time: {}", _dtoken, duration, play_time)
+                        logger.debug("Refreshed media status: duration={}, play time={}", duration, play_time)
                         continue
 
                 elif not passed and state != 200:

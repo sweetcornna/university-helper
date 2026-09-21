@@ -1,3 +1,37 @@
+export const TERMINAL_ZHIHUISHU_TASK_STATUSES = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'error',
+])
+
+const ACTION_TRANSITIONS = {
+  pause: { from: new Set(['running', 'starting', 'queued']), to: 'paused' },
+  resume: { from: new Set(['paused']), to: 'running' },
+  cancel: { from: null, to: 'cancelled' },
+}
+
+export const applyTaskActionToRecords = (
+  taskRecords,
+  { action, taskId = '', message = '', updatedAt = '' },
+) => {
+  const transition = ACTION_TRANSITIONS[action]
+  if (!transition) return taskRecords
+
+  return taskRecords.map((task) => {
+    if (taskId && task.taskId !== taskId) return task
+    const status = String(task.status || 'unknown')
+    if (TERMINAL_ZHIHUISHU_TASK_STATUSES.has(status)) return task
+    if (transition.from && !transition.from.has(status)) return task
+    return {
+      ...task,
+      status: transition.to,
+      message: message || task.message,
+      updatedAt: updatedAt || task.updatedAt,
+    }
+  })
+}
+
 export const applyCourseProgressToTaskRecords = (
   taskRecords,
   { courseId, activeTaskId, progress, updatedAt }

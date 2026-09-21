@@ -38,6 +38,7 @@ FROM nginx:1.27-alpine AS runtime
 # `upstream backend { server app:8000; }` resolves to the `app` compose service.
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
 COPY nginx/proxy_params.conf /etc/nginx/proxy_params.conf
+COPY nginx/snippets/security_headers.conf /etc/nginx/snippets/security_headers.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80

@@ -4,16 +4,17 @@
 FROM python:3.11-slim AS builder
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
-    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && echo "${PIP_INDEX_URL}" | grep -q tsinghua; then \
         sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
+        printf '%s\n' tsinghua > /tmp/apt-mirror-selection; \
+    else \
+        printf '%s\n' debian > /tmp/apt-mirror-selection; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
         build-essential libpq-dev \
@@ -27,22 +28,18 @@ RUN pip wheel --wheel-dir=/wheels --default-timeout=1000 \
 # ---------- runtime ----------
 FROM python:3.11-slim AS runtime
 
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_INDEX_URL=${PIP_INDEX_URL} \
-    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_INDEX=1
 
-RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && echo "${PIP_INDEX_URL}" | grep -q tsinghua; then \
+COPY --from=builder /tmp/apt-mirror-selection /tmp/apt-mirror-selection
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && [ "$(cat /tmp/apt-mirror-selection)" = tsinghua ]; then \
         sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
         libpq5 tini \
-    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/lib/apt/lists/* /tmp/apt-mirror-selection \
     && groupadd -r app --gid 10001 \
     && useradd -r -g app --uid 10001 --home-dir /srv/backend --shell /usr/sbin/nologin app
 
@@ -53,6 +50,9 @@ RUN pip install --no-cache-dir --find-links=/wheels --no-index $(ls /wheels/*.wh
     && rm -rf /wheels
 
 COPY --chown=app:app backend /srv/backend
+# Schema files for app/db/bootstrap.py: lets the app rebuild the users table and
+# tenant_template when the Postgres init scripts never ran on this volume.
+COPY --chown=app:app database/00-schema.sql database/templates/tenant_template.sql /srv/backend/app/db/sql/
 
 USER app
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import PrivateRoute from '../../src/components/PrivateRoute'
+import { RuntimeProfileContext } from '../../src/components/runtimeProfileContext'
 
 const Protected = () => <div>protected</div>
 const Login = () => <div>login-page</div>
@@ -11,19 +12,24 @@ const renderWithAuth = (token) => {
     window.sessionStorage.setItem('auth_token', token)
   }
   return render(
-    <MemoryRouter initialEntries={['/dashboard']}>
-      <Routes>
-        <Route
-          path="/dashboard"
-          element={
-            <PrivateRoute>
-              <Protected />
-            </PrivateRoute>
-          }
-        />
-        <Route path="/login" element={<Login />} />
-      </Routes>
-    </MemoryRouter>
+    <RuntimeProfileContext.Provider value={{ profile: 'server', isLocal: false, requiresAuth: true, loading: false }}>
+      <MemoryRouter
+        initialEntries={['/dashboard']}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
+        <Routes>
+          <Route
+            path="/dashboard"
+            element={
+              <PrivateRoute>
+                <Protected />
+              </PrivateRoute>
+            }
+          />
+          <Route path="/login" element={<Login />} />
+        </Routes>
+      </MemoryRouter>
+    </RuntimeProfileContext.Provider>
   )
 }
 

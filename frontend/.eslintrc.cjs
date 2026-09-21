@@ -22,11 +22,6 @@ module.exports = {
     'react/prop-types': 'off',
     // Allow common React idioms with newer JSX runtime.
     'react/react-in-jsx-scope': 'off',
-    // The label/control association rule misfires on group-of-buttons
-    // patterns where the label sits next to a button-group rather than a
-    // single input. The proper fix is fieldset/legend for those areas;
-    // disable globally and re-enable case-by-case once that pass lands.
-    'jsx-a11y/label-has-associated-control': 'off',
   },
   overrides: [
     {

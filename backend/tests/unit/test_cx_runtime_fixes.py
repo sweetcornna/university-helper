@@ -309,34 +309,102 @@ def test_f47_media_should_stop_honored():
 # F49: live.get_status must send the real top-level jobid
 # ---------------------------------------------------------------------------
 
-def test_f49_live_get_status_uses_top_level_jobid(monkeypatch):
+class _LiveResponse:
+    def __init__(self, text, error=None):
+        self.text = text
+        self.error = error
+
+    def raise_for_status(self):
+        if self.error:
+            raise self.error
+
+
+class _LiveSession:
+    def __init__(self, response=None, error=None):
+        self.response = response
+        self.error = error
+        self.calls = []
+
+    def get(self, url, headers=None, timeout=None):
+        self.calls.append((url, headers, timeout))
+        if self.error:
+            raise self.error
+        return self.response
+
+
+class _LiveSessionManager:
+    """A real instance method keeps the SessionManager descriptor behavior."""
+
+    def __init__(self, session):
+        self.session = session
+        self.calls = 0
+
+    def get_session(self):
+        self.calls += 1
+        return self.session
+
+
+def _live_attachment():
+    return {
+        "jobid": "JOB-123",
+        "property": {
+            "liveId": "L1",
+            "streamName": "stream-1",
+            "vdoid": "vdo-1",
+            "title": "t",
+        },
+    }
+
+
+_LIVE_DEFAULTS = {"userid": "u1", "clazzId": "c1", "knowledgeid": "k1"}
+
+
+def test_f49_live_get_status_uses_top_level_jobid():
     import app.services.course.chaoxing.live as live_mod
 
-    captured = {}
+    session = _LiveSession(_LiveResponse('{"ok": 1}'))
+    session_manager = _LiveSessionManager(session)
+    live = live_mod.Live(_live_attachment(), _LIVE_DEFAULTS, course_id="co1", session_manager=session_manager)
+    assert live.get_status() == {"ok": 1}
 
-    class _FakeResp:
-        text = '{"ok": 1}'
+    assert session_manager.calls == 1
+    assert session.calls[0][0].count("jobid=JOB-123") == 1
+    assert "jobid=&" not in session.calls[0][0]
 
-        def raise_for_status(self):
-            pass
 
-    class _FakeSession:
-        def get(self, url, headers=None, timeout=None):
-            captured["url"] = url
-            return _FakeResp()
+def test_f49_live_get_status_failure_is_swallowed_without_typeerror():
+    import app.services.course.chaoxing.live as live_mod
 
-    monkeypatch.setattr(live_mod.SessionManager, "get_session", staticmethod(lambda: _FakeSession()))
+    session = _LiveSession(error=RuntimeError("status unavailable"))
+    session_manager = _LiveSessionManager(session)
+    live = live_mod.Live(_live_attachment(), _LIVE_DEFAULTS, course_id="co1", session_manager=session_manager)
 
-    attachment = {
-        "jobid": "JOB-123",
-        "property": {"liveId": "L1", "title": "t"},
-    }
-    defaults = {"userid": "u1", "clazzId": "c1", "knowledgeid": "k1"}
-    live = live_mod.Live(attachment, defaults, course_id="co1")
-    live.get_status()
+    assert live.get_status() is None
+    assert session_manager.calls == 1
+    assert live.session_manager is session_manager
 
-    assert "jobid=JOB-123" in captured["url"]
-    assert "jobid=&" not in captured["url"]
+
+def test_be005_live_do_finish_uses_authenticated_session_success():
+    import app.services.course.chaoxing.live as live_mod
+
+    session = _LiveSession(_LiveResponse("@success"))
+    session_manager = _LiveSessionManager(session)
+    live = live_mod.Live(_live_attachment(), _LIVE_DEFAULTS, course_id="co1", session_manager=session_manager)
+
+    assert live.do_finish() is True
+    assert session_manager.calls == 1
+    assert session.calls[0][0].startswith("https://zhibo.chaoxing.com/saveTimePc?")
+
+
+def test_be005_live_do_finish_failure_is_swallowed_without_typeerror():
+    import app.services.course.chaoxing.live as live_mod
+
+    session = _LiveSession(error=RuntimeError("submit unavailable"))
+    session_manager = _LiveSessionManager(session)
+    live = live_mod.Live(_live_attachment(), _LIVE_DEFAULTS, course_id="co1", session_manager=session_manager)
+
+    assert live.do_finish() is False
+    assert session_manager.calls == 1
 
 
 # ---------------------------------------------------------------------------

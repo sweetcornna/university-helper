@@ -5,6 +5,11 @@ const API_BASE =
   import.meta.env.VITE_API_BASE_URL ||
   '/api/v1'
 const DEFAULT_TIMEOUT_MS = 20000
+let runtimeProfile = 'server'
+
+export const setApiRuntimeProfile = (profile) => {
+  runtimeProfile = profile === 'local' ? 'local' : 'server'
+}
 
 // Custom event that the app shell (App.jsx / a top-level effect) can listen
 // to in order to navigate to /login on session expiry — keeps api.js free of
@@ -34,12 +39,31 @@ const isSoftAuthFailure = (payload) => {
 
 const parsePayload = async (response) => {
   const text = await response.text()
-  if (!text) return {}
+  if (!text) return { payload: {}, isJson: false }
   try {
-    return JSON.parse(text)
+    return { payload: JSON.parse(text), isJson: true }
   } catch (_) {
-    return { message: text }
+    return { payload: { message: text }, isJson: false }
   }
+}
+
+export const SERVER_ERROR_MESSAGE = (status) =>
+  `服务器出错了（${status}），请稍后再试。如果一直这样，请联系管理员查看服务端日志。`
+export const NETWORK_ERROR_MESSAGE = '连不上服务器。请检查网络，或确认服务已经启动。'
+// Error code the desktop build returns from /auth/register and /auth/login.
+export const LOCAL_PROFILE_AUTH_CODE = 'LocalProfileAuthUnavailable'
+
+// A 5xx without a specific, server-authored message (the global 500 handler's
+// "Internal server error", an nginx HTML error page, an empty body) is not
+// something a user can act on, so it is replaced with plain guidance. 5xx
+// responses that carry their own `code` (e.g. 503 DatabaseNotInitializedError)
+// keep the server's message, which explains what to do.
+const isGenericServerError = (status, payload, isJson) => {
+  if (status < 500) return false
+  if (!isJson) return true
+  if (payload?.code === 'InternalServerError') return true
+  const message = String(messageOf(payload))
+  return !message || /internal server error/i.test(message)
 }
 
 const formatDetail = (detail) => {
@@ -122,7 +146,7 @@ export class ApiError extends Error {
 }
 
 export const api = async (endpoint, options = {}) => {
-  const token = getToken()
+  const token = runtimeProfile === 'local' ? null : getToken()
   const timeoutMs = Number(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   const hasCustomSignal = Boolean(options.signal)
   const controller = hasCustomSignal ? null : new AbortController()
@@ -145,8 +169,18 @@ export const api = async (endpoint, options = {}) => {
   delete requestOptions.timeoutMs
 
   try {
-    const response = await fetch(`${API_BASE}${endpoint}`, requestOptions)
-    const payload = await parsePayload(response)
+    let response
+    try {
+      response = await fetch(`${API_BASE}${endpoint}`, requestOptions)
+    } catch (error) {
+      // fetch() rejects with a TypeError when the server cannot be reached at all
+      // (DNS failure, connection refused, CORS/mixed-content block).
+      if (error instanceof TypeError) {
+        throw new ApiError(NETWORK_ERROR_MESSAGE, { status: 0 })
+      }
+      throw error
+    }
+    const { payload, isJson } = await parsePayload(response)
 
     // Only treat 401 as session expiry when this request was actually
     // authenticated. A 401 on /auth/login etc. is "wrong credentials" and
@@ -160,6 +194,13 @@ export const api = async (endpoint, options = {}) => {
         pickErrorMessage(payload, response.status) || '登录状态已失效，请重新登录。',
         { status: 401, payload },
       )
+    }
+
+    if (isGenericServerError(response.status, payload, isJson)) {
+      throw new ApiError(SERVER_ERROR_MESSAGE(response.status), {
+        status: response.status,
+        payload,
+      })
     }
 
     if (!response.ok || payload?.status === false) {

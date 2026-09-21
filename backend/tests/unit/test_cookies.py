@@ -1,36 +1,37 @@
-import pytest
 import json
-from pathlib import Path
-from unittest.mock import Mock, patch
-from app.services.course.chaoxing.cookies import save_cookies, use_cookies, COOKIES_FILE
+from unittest.mock import Mock
+
+import pytest
+
+from app.services.course.chaoxing import cookies
 
 
 @pytest.fixture
-def cleanup_cookies():
-    yield
-    if COOKIES_FILE.exists():
-        COOKIES_FILE.unlink()
+def cookies_file(tmp_path, monkeypatch):
+    path = tmp_path / "cookies.json"
+    monkeypatch.setattr(cookies, "COOKIES_FILE", path)
+    return path
 
 
-def test_save_cookies(cleanup_cookies):
+def test_save_cookies(cookies_file):
     mock_session = Mock()
     mock_session.cookies.get_dict.return_value = {"key": "value"}
 
-    save_cookies(mock_session)
+    cookies.save_cookies(mock_session)
 
-    assert COOKIES_FILE.exists()
-    data = json.loads(COOKIES_FILE.read_text())
+    assert cookies_file.exists()
+    data = json.loads(cookies_file.read_text())
     assert data == {"key": "value"}
 
 
-def test_use_cookies_exists(cleanup_cookies):
-    COOKIES_FILE.write_text(json.dumps({"key": "value"}))
+def test_use_cookies_exists(cookies_file):
+    cookies_file.write_text(json.dumps({"key": "value"}))
 
-    result = use_cookies()
+    result = cookies.use_cookies()
 
     assert result == {"key": "value"}
 
 
-def test_use_cookies_not_exists(cleanup_cookies):
-    result = use_cookies()
+def test_use_cookies_not_exists(cookies_file):
+    result = cookies.use_cookies()
     assert result == {}

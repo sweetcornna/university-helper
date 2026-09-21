@@ -3,14 +3,19 @@ import base64
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.dependencies import get_current_user
 from app.services.course.chaoxing.course_portal_service import chaoxing_course_portal_service
+from app.services.course.chaoxing.endpoint_security import (
+    INVALID_ENDPOINT_CONFIG_DETAIL,
+    UnsafeEndpointError,
+    validate_tiku_config,
+)
 from app.services.course.chaoxing.preferences import (
     build_notify_config,
     build_tiku_config,
@@ -20,7 +25,12 @@ from app.services.course.chaoxing.preferences import (
     save_preferences,
 )
 from app.services.course.chaoxing.signin import signin_manager
-from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
+from app.services.course.chaoxing.task_admission import TaskAdmissionError
+from app.services.course.zhihuishu.adapter import (
+    TASK_CONFLICT_DETAIL,
+    ZhihuishuAdapter,
+    ZhihuishuTaskConflictError,
+)
 from app.services.notification import NotificationFactory
 from app.services.notification.providers import validate_notification_url
 
@@ -29,12 +39,14 @@ logger = logging.getLogger(__name__)
 _QR_SESSION_TTL_SECONDS = 10 * 60
 _USER_ADAPTER_TTL_SECONDS = 60 * 60  # 1 hour
 _COURSE_TASK_TTL_SECONDS = 2 * 60 * 60  # 2 hours
-_qr_sessions: Dict[str, Dict[str, Any]] = {}
+_TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "cancelled", "error"})
+_qr_sessions: dict[str, dict[str, Any]] = {}
 _qr_sessions_lock = threading.Lock()
-_user_adapters: Dict[str, Dict[str, Any]] = {}  # {"adapter": ..., "last_access": ...}
-_course_tasks: Dict[str, Dict[str, Any]] = {}
+_user_adapters: dict[str, dict[str, Any]] = {}  # {"adapter": ..., "last_access": ...}
+_course_tasks: dict[str, dict[str, Any]] = {}
 _course_tasks_lock = threading.Lock()
 _learning_manager_instance: Any = None
+_NOTIFICATION_SERVICE_LABELS = frozenset({"ServerChan", "Qmsg", "Bark", "Telegram"})
 THREAD_START_FAILURE_DETAIL = (
     "Server cannot start a new background thread. Stop existing tasks and retry, "
     "or restart the service if the problem persists."
@@ -48,40 +60,40 @@ class CourseStartRequest(BaseModel):
     # the password is absent (see learning_manager._run_task_worker). The
     # username stays required — it binds the reused jar to an account.
     password: str = ""
-    course_ids: Optional[List[str]] = None
+    course_ids: list[str] | None = None
     speed: float = 1.0
     concurrency: int = 4
     unopened_strategy: str = "retry"
-    tiku_config: Optional[dict] = None
-    notify_config: Optional[dict] = None
+    tiku_config: dict | None = None
+    notify_config: dict | None = None
 
 
 class ChaoxingPreferencesRequest(BaseModel):
     """Saved task settings. Every field is optional: one that is absent (or null)
     leaves the stored value untouched. See preferences.save_preferences."""
 
-    speed: Optional[float] = None
-    concurrency: Optional[int] = None
-    unopened_strategy: Optional[str] = None
-    tiku_provider: Optional[List[str]] = None
-    tiku_token: Optional[str] = None
-    ai_endpoint: Optional[str] = None
-    ai_key: Optional[str] = None
-    ai_model: Optional[str] = None
-    coverage_threshold: Optional[float] = None
-    correct_options: Optional[str] = None
-    wrong_options: Optional[str] = None
-    submit_mode: Optional[str] = None
-    notify_service: Optional[str] = None
-    notify_url: Optional[str] = None
+    speed: float | None = None
+    concurrency: int | None = None
+    unopened_strategy: str | None = None
+    tiku_provider: list[str] | None = None
+    tiku_token: str | None = None
+    ai_endpoint: str | None = None
+    ai_key: str | None = None
+    ai_model: str | None = None
+    coverage_threshold: float | None = None
+    correct_options: str | None = None
+    wrong_options: str | None = None
+    submit_mode: str | None = None
+    notify_service: str | None = None
+    notify_url: str | None = None
 
 
 class CourseStatusResponse(BaseModel):
     status: str
     message: str
-    progress: Optional[dict] = None
-    task_id: Optional[str] = None
-    current_task: Optional[str] = None
+    progress: dict | None = None
+    task_id: str | None = None
+    current_task: str | None = None
 
 
 class ZhihuishuQRLoginResponse(BaseModel):
@@ -98,7 +110,7 @@ class ZhihuishuQRStatusResponse(BaseModel):
     # Carry the (possibly refreshed) QR image so the client can re-render it when
     # the original expires — qr_login regenerates the QR on expiry, but without
     # this field the poller never sees the new code. (F-qr-refresh)
-    qr_code: Optional[str] = None
+    qr_code: str | None = None
 
 
 class ZhihuishuPasswordLoginRequest(BaseModel):
@@ -106,23 +118,33 @@ class ZhihuishuPasswordLoginRequest(BaseModel):
     password: str
 
 
-class ZhihuishuCourseRequest(BaseModel):
-    course_id: str
-    speed: float = 1.0
+class _ZhihuishuCourseIdRequest(BaseModel):
+    course_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("course_id")
+    @classmethod
+    def validate_course_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("course_id must not be blank")
+        return normalized
+
+
+class ZhihuishuCourseRequest(_ZhihuishuCourseIdRequest):
+    speed: float = Field(default=1.0, gt=0, le=4)
     auto_answer: bool = True
 
 
-class ZhihuishuTaskStartRequest(BaseModel):
-    course_id: str
-    speed: Optional[float] = None
-    auto_answer: Optional[bool] = None
+class ZhihuishuTaskStartRequest(_ZhihuishuCourseIdRequest):
+    speed: float | None = Field(default=None, gt=0, le=4)
+    auto_answer: bool | None = None
 
 
 class ZhihuishuConfigUpdateRequest(BaseModel):
-    speed: Optional[float] = None
-    auto_answer: Optional[bool] = None
-    proxies: Optional[Dict[str, Any]] = None
-    ai_config: Optional[Dict[str, Any]] = None
+    speed: float | None = Field(default=None, gt=0, le=4)
+    auto_answer: bool | None = None
+    proxies: dict[str, Any] | None = None
+    ai_config: dict[str, Any] | None = None
 
 
 def _internal_error(message: str, exc: Exception) -> HTTPException:
@@ -153,7 +175,7 @@ _PREFERENCE_BACKED_FIELDS = frozenset(
 )
 
 
-async def _start_task_payload(request: CourseStartRequest, user_id: str) -> Dict[str, Any]:
+async def _start_task_payload(request: CourseStartRequest, user_id: str) -> dict[str, Any]:
     """Build the learning-manager payload, filling omitted fields from saved prefs.
 
     ``model_fields_set`` records what the client actually sent, so an explicitly
@@ -161,7 +183,7 @@ async def _start_task_payload(request: CourseStartRequest, user_id: str) -> Dict
     the stored preferences are not even read.
     """
     supplied = request.model_fields_set
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "platform": request.platform,
         "username": request.username,
         "password": request.password,
@@ -192,6 +214,32 @@ async def _start_task_payload(request: CourseStartRequest, user_id: str) -> Dict
     return payload
 
 
+def _cancel_qr_sessions(session_ids: list[str]) -> None:
+    """Signal QR workers before removing their registry entries."""
+    cancel_events: list[threading.Event] = []
+    with _qr_sessions_lock:
+        for session_id in session_ids:
+            state = _qr_sessions.pop(session_id, None)
+            cancel_event = state.get("cancel_event") if state else None
+            if isinstance(cancel_event, threading.Event):
+                cancel_events.append(cancel_event)
+    for cancel_event in cancel_events:
+        cancel_event.set()
+
+
+def _cancel_qr_sessions_for_user(user_id: str) -> None:
+    with _qr_sessions_lock:
+        session_ids = [session_id for session_id, state in _qr_sessions.items() if str(state.get("user_id")) == user_id]
+    _cancel_qr_sessions(session_ids)
+
+
+def cancel_all_qr_sessions() -> None:
+    """Cooperatively stop every remaining QR worker during app shutdown."""
+    with _qr_sessions_lock:
+        session_ids = list(_qr_sessions)
+    _cancel_qr_sessions(session_ids)
+
+
 @router.post("/start", response_model=CourseStatusResponse)
 async def start_course_learning(
     request: CourseStartRequest,
@@ -201,6 +249,11 @@ async def start_course_learning(
         raise HTTPException(status_code=400, detail="Only chaoxing is supported")
 
     user_id = _current_user_id(current_user)
+    try:
+        await _run_blocking(validate_tiku_config, request.tiku_config or {})
+    except UnsafeEndpointError as exc:
+        raise HTTPException(status_code=422, detail=INVALID_ENDPOINT_CONFIG_DETAIL) from exc
+
     try:
         learning_manager = _get_learning_manager()
         payload = await _start_task_payload(request, user_id)
@@ -222,6 +275,10 @@ async def start_course_learning(
             task_id=task_id,
             current_task="preparing",
         )
+    except UnsafeEndpointError as exc:
+        raise HTTPException(status_code=422, detail=INVALID_ENDPOINT_CONFIG_DETAIL) from exc
+    except TaskAdmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except Exception as exc:
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start course learning task", exc) from exc
@@ -261,13 +318,16 @@ async def get_course_status(task_id: str, current_user: dict = Depends(get_curre
             progress = await _run_blocking(adapter.get_progress, str(task.get("course_id") or ""))
             task_status = progress.get("status", task.get("status", "running"))
             task_message = progress.get("message", task.get("message", "Task is running"))
-            task = _update_course_task(
-                task_id,
-                status=task_status,
-                message=task_message,
-                progress=progress,
-                current_task=progress.get("current_video"),
-            ) or task
+            task = (
+                _update_course_task(
+                    task_id,
+                    status=task_status,
+                    message=task_message,
+                    progress=progress,
+                    current_task=progress.get("current_video"),
+                )
+                or task
+            )
 
     return CourseStatusResponse(
         status=str(task.get("status", "running")),
@@ -289,7 +349,7 @@ async def get_course_tasks(current_user: dict = Depends(get_current_user)):
 @router.get("/logs/{task_id}")
 async def get_course_logs(
     task_id: str,
-    cursor: Optional[int] = None,
+    cursor: int | None = None,
     current_user: dict = Depends(get_current_user),
 ):
     user_id = _current_user_id(current_user)
@@ -343,8 +403,8 @@ def cleanup_expired_entries() -> None:
             for session_id, state in _qr_sessions.items()
             if now - state.get("updated_at", now) > _QR_SESSION_TTL_SECONDS
         ]
-        for session_id in expired:
-            _qr_sessions.pop(session_id, None)
+    _cancel_qr_sessions(expired)
+    with _qr_sessions_lock:
         expired_adapters = [
             user_id
             for user_id, entry in _user_adapters.items()
@@ -357,7 +417,7 @@ def cleanup_expired_entries() -> None:
             task_id
             for task_id, task in _course_tasks.items()
             if now - task.get("updated_at", task.get("created_at", now)) > _COURSE_TASK_TTL_SECONDS
-            and task.get("status") in ("completed", "failed", "cancelled", None)
+            and (task.get("status") in _TERMINAL_TASK_STATUSES or task.get("status") is None)
         ]
         for task_id in expired_tasks:
             _course_tasks.pop(task_id, None)
@@ -385,18 +445,18 @@ def _get_learning_manager():
     return _learning_manager_instance
 
 
-def _set_course_task(task_id: str, payload: Dict[str, Any]) -> None:
+def _set_course_task(task_id: str, payload: dict[str, Any]) -> None:
     with _course_tasks_lock:
         _course_tasks[task_id] = payload
 
 
-def _get_course_task(task_id: str) -> Optional[Dict[str, Any]]:
+def _get_course_task(task_id: str) -> dict[str, Any] | None:
     with _course_tasks_lock:
         task = _course_tasks.get(task_id)
         return dict(task) if task else None
 
 
-def _update_course_task(task_id: str, **changes: Any) -> Optional[Dict[str, Any]]:
+def _update_course_task(task_id: str, **changes: Any) -> dict[str, Any] | None:
     with _course_tasks_lock:
         task = _course_tasks.get(task_id)
         if not task:
@@ -406,7 +466,7 @@ def _update_course_task(task_id: str, **changes: Any) -> Optional[Dict[str, Any]
         return dict(task)
 
 
-def _get_zhihuishu_adapter(user_id: str, required: bool = True) -> Optional[ZhihuishuAdapter]:
+def _get_zhihuishu_adapter(user_id: str, required: bool = True) -> ZhihuishuAdapter | None:
     with _qr_sessions_lock:
         entry = _user_adapters.get(user_id)
         if entry is not None:
@@ -434,7 +494,7 @@ async def _resolve_chaoxing_course_context(user_id: str, course_id: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-async def _load_chaoxing_course_tab(user_id: str, course_id: str, tab_key: str) -> Dict[str, Any]:
+async def _load_chaoxing_course_tab(user_id: str, course_id: str, tab_key: str) -> dict[str, Any]:
     client = await _get_chaoxing_client(user_id)
     context = await _resolve_chaoxing_course_context(user_id, course_id)
     try:
@@ -454,7 +514,7 @@ def _register_zhihuishu_course_task(
     user_id: str,
     course_id: str,
     task_id: str,
-    progress: Dict[str, Any],
+    progress: dict[str, Any],
     task_type: str = "course",
 ) -> None:
     _set_course_task(
@@ -480,17 +540,21 @@ async def start_zhihuishu_qr_login(current_user: dict = Depends(get_current_user
     cleanup_expired_entries()
     user_id = _current_user_id(current_user)
 
+    _cancel_qr_sessions_for_user(user_id)
+
     session_id = uuid4().hex
     adapter = ZhihuishuAdapter()
     qr_ready_event = threading.Event()
+    cancel_event = threading.Event()
 
-    state: Dict[str, Any] = {
+    state: dict[str, Any] = {
         "status": "pending",
         "message": "Waiting for scan",
         "qr_code": None,
         "updated_at": time.time(),
         "user_id": user_id,
         "adapter": adapter,
+        "cancel_event": cancel_event,
     }
 
     with _qr_sessions_lock:
@@ -508,7 +572,7 @@ async def start_zhihuishu_qr_login(current_user: dict = Depends(get_current_user
 
     def login_worker() -> None:
         try:
-            result = adapter.login_with_qr(qr_callback)
+            result = adapter.login_with_qr(qr_callback, cancel_event=cancel_event)
             success = bool(result.get("success"))
             with _qr_sessions_lock:
                 current_state = _qr_sessions.get(session_id)
@@ -531,15 +595,13 @@ async def start_zhihuishu_qr_login(current_user: dict = Depends(get_current_user
     try:
         threading.Thread(target=login_worker, daemon=True).start()
     except Exception as exc:
-        with _qr_sessions_lock:
-            _qr_sessions.pop(session_id, None)
+        _cancel_qr_sessions([session_id])
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start Zhihuishu QR login worker", exc) from exc
         raise _internal_error("Failed to start Zhihuishu QR login worker", exc) from exc
 
     if not await asyncio.to_thread(qr_ready_event.wait, 12):
-        with _qr_sessions_lock:
-            _qr_sessions.pop(session_id, None)
+        _cancel_qr_sessions([session_id])
         raise HTTPException(status_code=504, detail="Failed to generate QR code")
 
     with _qr_sessions_lock:
@@ -639,17 +701,15 @@ async def zhihuishu_logout(current_user: dict = Depends(get_current_user)):
 
     with _qr_sessions_lock:
         _user_adapters.pop(user_id, None)
-        expired_sessions = [
-            session_id
-            for session_id, state in _qr_sessions.items()
-            if str(state.get("user_id")) == user_id
-        ]
-        for session_id in expired_sessions:
-            _qr_sessions.pop(session_id, None)
+    _cancel_qr_sessions_for_user(user_id)
 
     with _course_tasks_lock:
         for task in _course_tasks.values():
-            if str(task.get("user_id")) == user_id and task.get("platform") == "zhihuishu":
+            if (
+                str(task.get("user_id")) == user_id
+                and task.get("platform") == "zhihuishu"
+                and task.get("status") not in _TERMINAL_TASK_STATUSES
+            ):
                 task["status"] = "cancelled"
                 task["message"] = "Task cancelled by logout"
                 task["updated_at"] = time.time()
@@ -719,24 +779,30 @@ async def zhihuishu_start_course(
 
     try:
         if hasattr(adapter, "start_course_task"):
-            result = adapter.start_course_task(
+            result = await _run_blocking(
+                adapter.start_course_task,
                 request.course_id,
                 speed=request.speed,
                 auto_answer=request.auto_answer,
                 task_type="course",
             )
         else:
-            result = adapter.start_course(
+            result = await _run_blocking(
+                adapter.start_course,
                 request.course_id,
                 speed=request.speed,
                 auto_answer=request.auto_answer,
             )
+    except ZhihuishuTaskConflictError as exc:
+        raise HTTPException(status_code=409, detail=TASK_CONFLICT_DETAIL) from exc
     except Exception as exc:
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start Zhihuishu task", exc) from exc
         raise _internal_error("Failed to start Zhihuishu task", exc) from exc
 
-    task_id = str(result.get("task_id") or uuid4().hex)
+    task_id = str(result.get("task_id") or "")
+    if not task_id:
+        raise HTTPException(status_code=502, detail="Zhihuishu did not return a task id")
     progress = result.get("progress", {})
     _register_zhihuishu_course_task(user_id, request.course_id, task_id, progress, task_type="course")
 
@@ -756,32 +822,40 @@ async def zhihuishu_start_course_task(
     user_id = _current_user_id(current_user)
     adapter = _get_zhihuishu_adapter(user_id)
 
-    config = adapter.get_config() if hasattr(adapter, "get_config") else {"speed": 1.0, "auto_answer": True}
-    speed = request.speed if request.speed is not None else float(config.get("speed", 1.0))
-    auto_answer = request.auto_answer if request.auto_answer is not None else bool(
-        config.get("auto_answer", True)
+    config = (
+        await _run_blocking(adapter.get_config)
+        if hasattr(adapter, "get_config")
+        else {"speed": 1.0, "auto_answer": True}
     )
+    speed = request.speed if request.speed is not None else float(config.get("speed", 1.0))
+    auto_answer = request.auto_answer if request.auto_answer is not None else bool(config.get("auto_answer", True))
 
     try:
         if hasattr(adapter, "start_course_task"):
-            result = adapter.start_course_task(
+            result = await _run_blocking(
+                adapter.start_course_task,
                 request.course_id,
                 speed=speed,
                 auto_answer=auto_answer,
                 task_type="course",
             )
         else:
-            result = adapter.start_course(
+            result = await _run_blocking(
+                adapter.start_course,
                 request.course_id,
                 speed=speed,
                 auto_answer=auto_answer,
             )
+    except ZhihuishuTaskConflictError as exc:
+        raise HTTPException(status_code=409, detail=TASK_CONFLICT_DETAIL) from exc
     except Exception as exc:
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start Zhihuishu course task", exc) from exc
         raise _internal_error("Failed to start Zhihuishu course task", exc) from exc
 
-    task_id = str(result.get("task_id") or uuid4().hex)
+    task_id = str(result.get("task_id") or "")
+    if not task_id:
+        raise HTTPException(status_code=502, detail="Zhihuishu did not return a task id")
     progress = result.get("progress", {})
     _register_zhihuishu_course_task(user_id, request.course_id, task_id, progress, task_type="course")
     return {"status": "success", "message": "Task started", "task_id": task_id, "data": result}
@@ -795,24 +869,29 @@ async def zhihuishu_start_ai_course_task(
     user_id = _current_user_id(current_user)
     adapter = _get_zhihuishu_adapter(user_id)
 
-    config = adapter.get_config() if hasattr(adapter, "get_config") else {"speed": 1.0}
+    config = await _run_blocking(adapter.get_config) if hasattr(adapter, "get_config") else {"speed": 1.0}
     speed = request.speed if request.speed is not None else float(config.get("speed", 1.0))
 
     try:
         if hasattr(adapter, "start_ai_course_task"):
-            result = adapter.start_ai_course_task(request.course_id, speed=speed)
+            result = await _run_blocking(adapter.start_ai_course_task, request.course_id, speed=speed)
         else:
-            result = adapter.start_course(
+            result = await _run_blocking(
+                adapter.start_course,
                 request.course_id,
                 speed=speed,
                 auto_answer=True,
             )
+    except ZhihuishuTaskConflictError as exc:
+        raise HTTPException(status_code=409, detail=TASK_CONFLICT_DETAIL) from exc
     except Exception as exc:
         if _is_thread_start_failure(exc):
             raise _thread_start_unavailable("Failed to start Zhihuishu AI course task", exc) from exc
         raise _internal_error("Failed to start Zhihuishu AI course task", exc) from exc
 
-    task_id = str(result.get("task_id") or uuid4().hex)
+    task_id = str(result.get("task_id") or "")
+    if not task_id:
+        raise HTTPException(status_code=502, detail="Zhihuishu did not return a task id")
     progress = result.get("progress", {})
     _register_zhihuishu_course_task(user_id, request.course_id, task_id, progress, task_type="ai-course")
     return {"status": "success", "message": "AI course task started", "task_id": task_id, "data": result}
@@ -820,22 +899,25 @@ async def zhihuishu_start_ai_course_task(
 
 @router.get("/zhihuishu/tasks")
 async def zhihuishu_list_tasks(
-    task_type: Optional[str] = None,
-    course_id: Optional[str] = None,
+    task_type: str | None = None,
+    course_id: str | None = None,
     current_user: dict = Depends(get_current_user),
 ):
     user_id = _current_user_id(current_user)
-    adapter = _get_zhihuishu_adapter(user_id)
+    adapter = _get_zhihuishu_adapter(user_id, required=False)
 
     try:
-        if hasattr(adapter, "list_tasks"):
-            tasks = adapter.list_tasks(task_type=task_type, course_id=course_id)
+        if adapter is not None and hasattr(adapter, "list_tasks"):
+            tasks = await _run_blocking(adapter.list_tasks, task_type=task_type, course_id=course_id)
         else:
             with _course_tasks_lock:
                 tasks = [
                     dict(task)
                     for task in _course_tasks.values()
-                    if str(task.get("user_id")) == user_id and task.get("platform") == "zhihuishu"
+                    if str(task.get("user_id")) == user_id
+                    and task.get("platform") == "zhihuishu"
+                    and (task_type is None or task.get("task_type") == task_type)
+                    and (course_id is None or str(task.get("course_id")) == course_id)
                 ]
     except Exception as exc:
         raise _internal_error("Failed to load Zhihuishu tasks", exc) from exc
@@ -850,7 +932,7 @@ async def zhihuishu_get_task(task_id: str, current_user: dict = Depends(get_curr
 
     try:
         if hasattr(adapter, "get_task"):
-            task = adapter.get_task(task_id)
+            task = await _run_blocking(adapter.get_task, task_id)
         else:
             task = _get_course_task(task_id)
             if task and (str(task.get("user_id")) != user_id or task.get("platform") != "zhihuishu"):
@@ -869,18 +951,23 @@ async def zhihuishu_cancel_task(task_id: str, current_user: dict = Depends(get_c
     adapter = _get_zhihuishu_adapter(user_id)
 
     if hasattr(adapter, "cancel_task_by_id"):
-        result = adapter.cancel_task_by_id(task_id)
+        result = await _run_blocking(adapter.cancel_task_by_id, task_id)
         if result.get("status") == "idle":
             raise HTTPException(status_code=404, detail="Task not found")
     else:
         existing = _get_course_task(task_id)
         if existing is None or str(existing.get("user_id")) != user_id:
             raise HTTPException(status_code=404, detail="Task not found")
-        result = adapter.cancel_task()
+        result = await _run_blocking(adapter.cancel_task)
 
     with _course_tasks_lock:
         task = _course_tasks.get(task_id)
-        if task and str(task.get("user_id")) == user_id and task.get("platform") == "zhihuishu":
+        if (
+            task
+            and str(task.get("user_id")) == user_id
+            and task.get("platform") == "zhihuishu"
+            and task.get("status") not in _TERMINAL_TASK_STATUSES
+        ):
             task["status"] = "cancelled"
             task["message"] = result.get("message", "Task cancelled")
             task["updated_at"] = time.time()
@@ -896,7 +983,7 @@ async def zhihuishu_get_config(current_user: dict = Depends(get_current_user)):
 
     try:
         if hasattr(adapter, "get_config"):
-            config = adapter.get_config()
+            config = await _run_blocking(adapter.get_config)
         else:
             config = {"speed": 1.0, "auto_answer": True, "ai_config": {"enabled": False}}
     except Exception as exc:
@@ -916,7 +1003,7 @@ async def zhihuishu_update_config(
     updates = request.model_dump(exclude_none=True)
     try:
         if hasattr(adapter, "update_config"):
-            config = adapter.update_config(updates)
+            config = await _run_blocking(adapter.update_config, updates)
         else:
             config = updates
     except Exception as exc:
@@ -981,10 +1068,14 @@ async def zhihuishu_pause(current_user: dict = Depends(get_current_user)):
     user_id = _current_user_id(current_user)
     adapter = _get_zhihuishu_adapter(user_id)
 
-    result = adapter.pause_task()
+    result = await _run_blocking(adapter.pause_task)
     with _course_tasks_lock:
         for task in _course_tasks.values():
-            if str(task.get("user_id")) == user_id and task.get("platform") == "zhihuishu":
+            if (
+                str(task.get("user_id")) == user_id
+                and task.get("platform") == "zhihuishu"
+                and task.get("status") not in _TERMINAL_TASK_STATUSES
+            ):
                 task["status"] = "paused"
                 task["message"] = result.get("message", "Task paused")
                 task["updated_at"] = time.time()
@@ -997,10 +1088,14 @@ async def zhihuishu_resume(current_user: dict = Depends(get_current_user)):
     user_id = _current_user_id(current_user)
     adapter = _get_zhihuishu_adapter(user_id)
 
-    result = adapter.resume_task()
+    result = await _run_blocking(adapter.resume_task)
     with _course_tasks_lock:
         for task in _course_tasks.values():
-            if str(task.get("user_id")) == user_id and task.get("platform") == "zhihuishu":
+            if (
+                str(task.get("user_id")) == user_id
+                and task.get("platform") == "zhihuishu"
+                and task.get("status") not in _TERMINAL_TASK_STATUSES
+            ):
                 task["status"] = "running"
                 task["message"] = result.get("message", "Task resumed")
                 task["updated_at"] = time.time()
@@ -1013,10 +1108,14 @@ async def zhihuishu_cancel(current_user: dict = Depends(get_current_user)):
     user_id = _current_user_id(current_user)
     adapter = _get_zhihuishu_adapter(user_id)
 
-    result = adapter.cancel_task()
+    result = await _run_blocking(adapter.cancel_task)
     with _course_tasks_lock:
         for task in _course_tasks.values():
-            if str(task.get("user_id")) == user_id and task.get("platform") == "zhihuishu":
+            if (
+                str(task.get("user_id")) == user_id
+                and task.get("platform") == "zhihuishu"
+                and task.get("status") not in _TERMINAL_TASK_STATUSES
+            ):
                 task["status"] = "cancelled"
                 task["message"] = result.get("message", "Task cancelled")
                 task["updated_at"] = time.time()
@@ -1035,6 +1134,7 @@ async def course_login(
     user_id = _current_user_id(current_user)
     try:
         import asyncio
+
         login_result = await asyncio.to_thread(
             signin_manager.login,
             user_id,
@@ -1226,14 +1326,23 @@ async def get_chapters(
 async def test_notification(request: dict, current_user: dict = Depends(get_current_user)):
     _current_user_id(current_user)
 
-    service = request.get("service")
+    requested_service = request.get("service")
     url = request.get("url")
 
-    if not service or not url:
+    if not requested_service or not url:
         raise HTTPException(status_code=400, detail="service and url are required")
 
+    if not isinstance(requested_service, str) or requested_service not in _NOTIFICATION_SERVICE_LABELS:
+        raise HTTPException(status_code=400, detail="Unsupported notification service")
+    service = requested_service
+
     # SSRF guard: never let the test endpoint POST to an internal/loopback host.
-    if not validate_notification_url(url):
+    try:
+        url_allowed = validate_notification_url(url)
+    except Exception:
+        logger.warning("Notification URL validation failed")
+        url_allowed = False
+    if not url_allowed:
         raise HTTPException(
             status_code=400,
             detail="Notification URL must be a public http(s) address",
@@ -1245,13 +1354,13 @@ async def test_notification(request: dict, current_user: dict = Depends(get_curr
         config["tg_chat_id"] = str(tg_chat_id)
 
     def _deliver() -> bool:
-        provider = NotificationFactory.create_service(config)
-        if getattr(provider, "disabled", False):
-            return False
         try:
+            provider = NotificationFactory.create_service(config)
+            if getattr(provider, "disabled", False):
+                return False
             return bool(provider.send("University-Helper 测试通知 / test notification"))
-        except Exception as exc:
-            logger.warning("Test notification delivery failed: %s", exc)
+        except Exception:
+            logger.warning("Test notification delivery failed")
             return False
 
     delivered = await _run_blocking(_deliver)
@@ -1259,7 +1368,7 @@ async def test_notification(request: dict, current_user: dict = Depends(get_curr
     if not delivered:
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to send test notification via {service}",
+            detail="Failed to send test notification",
         )
 
     return {"status": "success", "message": f"Test notification sent via {service}"}

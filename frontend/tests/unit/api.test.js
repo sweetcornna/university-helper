@@ -51,9 +51,15 @@ describe('api', () => {
   })
 
   it('falls back to status code message when no error field present', async () => {
+    mockFetchResponse({}, { ok: false, status: 404 })
+
+    await expect(api('/broken')).rejects.toThrow('请求失败（404）')
+  })
+
+  it('uses readable guidance for a 5xx without a specific message', async () => {
     mockFetchResponse({}, { ok: false, status: 500 })
 
-    await expect(api('/broken')).rejects.toThrow('请求失败（500）')
+    await expect(api('/broken')).rejects.toThrow('服务器出错了（500）')
   })
 
   it('attaches Authorization header when token exists', async () => {

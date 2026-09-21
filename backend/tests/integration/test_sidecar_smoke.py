@@ -82,5 +82,17 @@ def test_sidecar_boots_and_health_ok():
             except Exception:
                 time.sleep(0.2)
         assert ok, "/health never returned 200"
+
+        # 3) The frozen local profile must expose its no-JWT capability and serve
+        # the actual SPA shell that the Tauri webview will route to /dashboard.
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/runtime", timeout=2) as r:
+            runtime = r.read().decode("utf-8")
+        assert '"profile":"local"' in runtime
+        assert '"requires_auth":false' in runtime
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2) as r:
+            shell = r.read().decode("utf-8")
+        assert '<div id="root"></div>' in shell
+        assert '<script type="module"' in shell
     finally:
         _kill(proc)

@@ -31,4 +31,9 @@ else
     echo "[bootstrap] WARNING: $TEMPLATE_SCHEMA not found; skipping."
 fi
 
+# Mark it as a template so PostgreSQL refuses `DROP DATABASE tenant_template`.
+# Connections stay allowed on purpose: pg_dumpall (scripts/db_backup.sh) skips
+# databases with ALLOW_CONNECTIONS false, which would drop it from backups.
+psql -v ON_ERROR_STOP=1 -U "$USER" -d "$DB" -c "ALTER DATABASE tenant_template WITH IS_TEMPLATE true;"
+
 echo "[bootstrap] done."

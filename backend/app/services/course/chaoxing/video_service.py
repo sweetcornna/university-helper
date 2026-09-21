@@ -18,6 +18,7 @@ from .constants import (
     VIDEO_SLEEP_THRESHOLD,
     VIDEO_WAIT_TIME_MAX,
     VIDEO_WAIT_TIME_MIN,
+    StudyResult,
 )
 from .course_service import get_timestamp
 from .rate_limiter import RateLimiter
@@ -134,38 +135,28 @@ class ChaoxingVideoService:
                 params.update({"rt": rt, "_t": get_timestamp()})
                 resp = _session.get(_url, params=params, headers=headers)
                 if resp.status_code == 200:
-                    logger.trace(resp.text)
                     return resp.json()["isPassed"], 200
                 if resp.status_code == 403:
                     logger.warning("出现403报错, 正常尝试切换rt")
                 else:
                     logger.warning(
-                        "未知错误 jobid={}, status_code={}, 摘要:\n{}",
+                        "未知错误 jobid={}, status_code={}",
                         _job.get("jobid"),
                         resp.status_code,
-                        resp.text[:200],
                     )
                     break
 
         if resp.status_code == 200:
-            logger.trace(resp.text)
             return resp.json()["isPassed"], 200
 
         if resp.status_code == 403:
-            logger.debug(
-                "视频进度上报返回403, jobid={}, 摘要={}",
-                _job.get("jobid"),
-                resp.text[:200],
-            )
+            logger.debug("视频进度上报返回403, jobid={}, status_code={}", _job.get("jobid"), resp.status_code)
 
             logger.error("出现403报错, 尝试修复无效, 正在跳过当前任务点...")
-            logger.error("请求url: {}", resp.url)
-            logger.error("请求头: {}", dict(_session.headers) | headers)
+            logger.error("请求失败, status_code={}, jobid={}", resp.status_code, _job.get("jobid"))
             return False, 403
 
-        logger.error(f"未知错误: {resp.status_code}")
-        logger.error("请求url: {}", resp.url)
-        logger.error("请求头: {}", dict(_session.headers) | headers)
+        logger.error("请求失败, status_code={}, jobid={}", resp.status_code, _job.get("jobid"))
         return False, resp.status_code
 
     # ------------------------------------------------------------------
@@ -185,8 +176,11 @@ class ChaoxingVideoService:
             return None
 
         if resp.status_code != 200:
-            logger.debug("刷新视频状态返回码异常: {}", resp.status_code)
-            logger.debug(resp.text)
+            logger.debug(
+                "刷新视频状态返回码异常: status_code={}, jobid={}",
+                resp.status_code,
+                job.get("jobid"),
+            )
             return None
 
         try:
@@ -227,8 +221,6 @@ class ChaoxingVideoService:
         Returns:
             StudyResult indicating success, forbidden, error, or timeout
         """
-        from .client import StudyResult
-
         _session = self.session_manager.get_session()
 
         headers = gc.VIDEO_HEADERS if _type == "Video" else gc.AUDIO_HEADERS

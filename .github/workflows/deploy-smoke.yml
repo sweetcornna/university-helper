@@ -1,0 +1,142 @@
+name: deploy-smoke
+
+# Runs the one-click installer on a clean Ubuntu runner and signs up through
+# the real stack: after a container restart, after tenant_template is dropped
+# (with and without an app restart), and after re-running the installer.
+on:
+  pull_request:
+    paths:
+      - "scripts/deploy_server.sh"
+      - "database/**"
+      - "docker-compose.release.yml"
+      - "Dockerfile.server"
+      - "Dockerfile.web"
+      - "backend/app/db/**"
+      - "backend/app/main.py"
+      - "backend/app/config.py"
+      - "backend/app/services/auth_service.py"
+      - "backend/app/middleware/allowed_hosts.py"
+      - ".github/workflows/deploy-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-and-register:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BUILD_NPM_REGISTRY: ""
+      BUILD_PIP_INDEX_URL: https://pypi.org/simple
+      BASE_URL: http://127.0.0.1:8080
+      ADMIN_EMAIL: admin@example.com
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install with the one-click script
+        run: bash scripts/deploy_server.sh --build -y --no-tls --admin-email "$ADMIN_EMAIL"
+
+      - name: Sign up survives restarts and a lost tenant_template
+        run: |
+          set -euo pipefail
+          PASSWORD="Smoke12345"
+
+          wait_schema_ok() {
+            local body=""
+            for _ in $(seq 1 90); do
+              body="$(curl -fsS "$BASE_URL/health" 2>/dev/null || true)"
+              case "$body" in *'"schema":"ok"'*) return 0 ;; esac
+              sleep 2
+            done
+            echo "health never reported schema ok: $body" >&2
+            return 1
+          }
+
+          # register <username> <email> <expected status>; prints the body.
+          # Sign-up is rate limited to 5 requests a minute per client.
+          register() {
+            local code
+            for _ in $(seq 1 8); do
+              code="$(curl -sS -o /tmp/register.json -w '%{http_code}' \
+                -H 'Content-Type: application/json' \
+                -d "{\"username\":\"$1\",\"email\":\"$2\",\"password\":\"$PASSWORD\"}" \
+                "$BASE_URL/api/v1/auth/register")"
+              [ "$code" = "429" ] || break
+              sleep 15
+            done
+            if [ "$code" != "$3" ]; then
+              echo "register $1: expected HTTP $3, got $code: $(cat /tmp/register.json)" >&2
+              return 1
+            fi
+            cat /tmp/register.json
+          }
+
+          token() { python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'; }
+
+          update_status() {
+            curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $1" "$BASE_URL/api/v1/system/update"
+          }
+
+          psql_main() {
+            docker exec shuake-easy-learning-db psql -v ON_ERROR_STOP=1 -U easylearning -d main_db "$@"
+          }
+
+          drop_template() {
+            psql_main -c "ALTER DATABASE tenant_template WITH IS_TEMPLATE false;"
+            psql_main -c "DROP DATABASE tenant_template;"
+          }
+
+          wait_schema_ok
+          echo "== fresh install"
+          admin_token="$(register smokeadmin "$ADMIN_EMAIL" 201 | token)"
+          register template template@example.com 422 >/dev/null
+          echo "== template is protected"
+          if psql_main -c "DROP DATABASE tenant_template;"; then
+            echo "tenant_template could be dropped while marked as a template" >&2
+            exit 1
+          fi
+
+          echo "== after an app restart"
+          docker restart shuake-easy-learning-app
+          wait_schema_ok
+          user_token="$(register smokeuser1 user1@example.com 201 | token)"
+
+          echo "== admin rule"
+          [ "$(update_status "$admin_token")" = "200" ]
+          [ "$(update_status "$user_token")" = "403" ]
+
+          echo "== tenant_template dropped while the app runs"
+          drop_template
+          register smokeuser2 user2@example.com 201 >/dev/null
+
+          echo "== tenant_template dropped, then the app restarts"
+          drop_template
+          docker restart shuake-easy-learning-app
+          wait_schema_ok
+          register smokeuser3 user3@example.com 201 >/dev/null
+
+          echo "$admin_token" > /tmp/admin_token
+
+      - name: Re-running the installer keeps secrets and data
+        run: |
+          set -euo pipefail
+          cp .env /tmp/env.before
+          bash scripts/deploy_server.sh --build -y --no-tls
+          for key in POSTGRES_PASSWORD SECRET_KEY CREDENTIAL_ENCRYPTION_KEY ADMIN_EMAILS; do
+            if [ "$(grep "^${key}=" /tmp/env.before)" != "$(grep "^${key}=" .env)" ]; then
+              echo "$key changed on re-run" >&2
+              exit 1
+            fi
+          done
+          code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $(cat /tmp/admin_token)" "$BASE_URL/api/v1/system/update")"
+          [ "$code" = "200" ] || { echo "admin token rejected after re-run: HTTP $code" >&2; exit 1; }
+
+      - name: Container logs
+        if: failure()
+        run: docker compose -p university-helper -f docker-compose.release.yml logs --tail=200 app postgres web

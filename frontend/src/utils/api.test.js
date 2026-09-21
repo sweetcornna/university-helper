@@ -107,3 +107,60 @@ describe('api() auth handling', () => {
     expect(getToken()).toBe('valid.jwt.token')
   })
 })
+
+describe('api() server and network errors', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  test('replaces the generic 500 handler message with readable guidance', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse(500, { code: 'InternalServerError', message: 'Internal server error' }),
+      ),
+    )
+
+    await expect(api('/auth/register', { method: 'POST' })).rejects.toMatchObject({
+      status: 500,
+      message: expect.stringContaining('服务器出错了（500）'),
+    })
+  })
+
+  test('replaces an HTML proxy error page', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 502,
+        text: async () => '<html><body>502 Bad Gateway</body></html>',
+      }),
+    )
+
+    await expect(api('/auth/register', { method: 'POST' })).rejects.toMatchObject({
+      status: 502,
+      message: expect.stringContaining('服务器出错了（502）'),
+    })
+  })
+
+  test('keeps a specific 503 message authored by the server', async () => {
+    const message = '数据库还没初始化好：缺少 tenant_template 模板库'
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.resolve(jsonResponse(503, { code: 'DatabaseNotInitializedError', message })),
+    )
+
+    await expect(api('/auth/register', { method: 'POST' })).rejects.toMatchObject({
+      status: 503,
+      message,
+    })
+  })
+
+  test('reports an unreachable server instead of "Failed to fetch"', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.reject(new TypeError('Failed to fetch')),
+    )
+
+    const error = await api('/auth/login', { method: 'POST' }).catch((e) => e)
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.status).toBe(0)
+    expect(error.message).toContain('连不上服务器')
+  })
+})

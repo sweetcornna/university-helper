@@ -1,7 +1,7 @@
 """智慧树二维码登录模块"""
 
 import json
-import time
+import threading
 from base64 import b64decode
 from collections.abc import Callable
 from urllib.parse import unquote
@@ -55,19 +55,14 @@ class ZhihuishuAuth:
             normalized[cookie.name] = cookie.value
         return normalized
 
-    def qr_login(self, qr_callback: Callable[[bytes], None], _retries: int = 3) -> dict:
-        """
-        二维码登录
-
-        Args:
-            qr_callback: 二维码回调函数，接收二维码图片字节数据
-
-        Returns:
-            登录后的 cookies 字典
-        """
-        if _retries <= 0:
-            raise TimeoutError("QR login retries exhausted")
-
+    def qr_login(
+        self,
+        qr_callback: Callable[[bytes], None],
+        _retries: int = 3,
+        cancel_event: threading.Event | None = None,
+    ) -> dict:
+        """Log in with a refreshable QR code and cooperative cancellation."""
+        cancel_event = cancel_event or threading.Event()
         login_page = (
             "https://passport.zhihuishu.com/login?service=https://onlineservice-api.zhihuishu.com/login/gologin"
         )
@@ -75,38 +70,44 @@ class ZhihuishuAuth:
         query_page = "https://passport.zhihuishu.com/qrCodeLogin/getLoginQrInfo"
 
         try:
-            r = self.session.get(qr_page, timeout=10).json()
-            qr_token = r["qrToken"]
-            img = b64decode(r["img"])
-            qr_callback(img)
+            for attempt in range(_retries):
+                if cancel_event.is_set():
+                    raise InterruptedError("QR login cancelled")
 
-            scanned = False
-            while True:
-                time.sleep(0.5)
-                msg = self.session.get(query_page, params={"qrToken": qr_token}, timeout=10).json()
+                r = self.session.get(qr_page, timeout=10).json()
+                qr_token = r["qrToken"]
+                qr_callback(b64decode(r["img"]))
 
-                status = msg.get("status")
-                if status == -1:
-                    continue  # 未扫描
-                if status == 0:
-                    if not scanned:
-                        scanned = True
-                elif status == 1:
-                    # 登录成功
-                    self.session.get(login_page, params={"pwd": msg["oncePassword"]}, proxies=self.proxies, timeout=10)
-                    self.cookies = self.session.cookies
-                    if not self.cookies:
-                        raise Exception("No cookies found")
-                    return self.cookies
-                elif status == 2:
-                    raise TimeoutError("QR code expired")
-                elif status == 3:
-                    raise Exception("Login canceled")
-                else:
+                while not cancel_event.wait(0.5):
+                    msg = self.session.get(query_page, params={"qrToken": qr_token}, timeout=10).json()
+                    status = msg.get("status")
+                    if status in {-1, 0}:
+                        continue
+                    if status == 1:
+                        if cancel_event.is_set():
+                            raise InterruptedError("QR login cancelled")
+                        self.session.get(
+                            login_page,
+                            params={"pwd": msg["oncePassword"]},
+                            proxies=self.proxies,
+                            timeout=10,
+                        )
+                        self.cookies = self.session.cookies
+                        if not self.cookies:
+                            raise Exception("No cookies found")
+                        return self.cookies
+                    if status == 2:
+                        break
+                    if status == 3:
+                        raise Exception("Login canceled")
                     raise Exception(f"Unknown status: {status}")
+                else:
+                    raise InterruptedError("QR login cancelled")
 
-        except TimeoutError:
-            return self.qr_login(qr_callback, _retries=_retries - 1)
+                if attempt == _retries - 1:
+                    raise TimeoutError("QR login retries exhausted")
+        except InterruptedError:
+            raise
         except Exception as e:
             raise Exception(f"QR login failed: {e}") from e
 

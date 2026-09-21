@@ -1,12 +1,12 @@
 {
-  "name": "University Helper",
-  "short_name": "UH",
-  "description": "校园签到与课程任务一体化助手",
+  "name": "学道 · 课程任务工作台",
+  "short_name": "学道",
+  "description": "校园签到与课程任务工作台，支持学习通与智慧树。",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#F8FAFC",
-  "theme_color": "#2563EB",
+  "background_color": "#F4F6F1",
+  "theme_color": "#167C80",
   "lang": "zh-CN",
   "dir": "ltr",
   "orientation": "any",
@@ -16,11 +16,6 @@
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"
-    },
-    {
-      "src": "/favicon.ico",
-      "sizes": "32x32",
-      "type": "image/x-icon"
     }
   ]
 }

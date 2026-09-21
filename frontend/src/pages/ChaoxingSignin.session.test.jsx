@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { ToastProvider } from '../components'
+import { RuntimeProfileContext } from '../components/runtimeProfileContext'
 import ChaoxingSignin from './ChaoxingSignin'
 import { QR_POLL_INTERVAL_MS } from './chaoxing-shared/utils'
 
@@ -93,11 +94,15 @@ describe('ChaoxingSignin shared session', () => {
   const render = async () => {
     await act(async () => {
       root.render(
-        <MemoryRouter>
+        <RuntimeProfileContext.Provider
+          value={{ profile: 'server', isLocal: false, requiresAuth: true, loading: false }}
+        >
           <ToastProvider>
-            <ChaoxingSignin />
+            <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+              <ChaoxingSignin />
+            </MemoryRouter>
           </ToastProvider>
-        </MemoryRouter>
+        </RuntimeProfileContext.Provider>
       )
     })
     await waitFor(() => findButton(container, '课程签到'))

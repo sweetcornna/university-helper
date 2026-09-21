@@ -1,27 +1,28 @@
 import asyncio
 import logging
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import auth, chaoxing
-from app.api.v1.course import cleanup_expired_entries
+from app.api.v1.course import cancel_all_qr_sessions, cleanup_expired_entries
 from app.api.v1.metrics import record_request
 from app.api.v1.metrics import router as metrics_router
-from app.config import LOCAL_USER_ID, settings
+from app.config import LOCAL_USER_ID, settings, split_csv
 from app.core.credential_crypto import init_cipher
-from app.core.exceptions import AppException
+from app.core.exceptions import AppException, LocalProfileAuthUnavailable
 from app.core.logging_setup import configure_logging
 from app.core.tracing import configure_tracing
 from app.dependencies import get_current_user, get_current_user_id
+from app.middleware.allowed_hosts import AllowedHostsMiddleware
 from app.middleware.tenant_isolation import tenant_isolation_middleware
 from app.storage.factory import get_storage
 
@@ -32,8 +33,8 @@ _LOCAL_SPA_CSP = "; ".join(
     [
         "default-src 'self'",
         "script-src 'self'",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "font-src 'self' data: https://fonts.gstatic.com",
+        "style-src 'self' 'unsafe-inline'",
+        "font-src 'self' data:",
         "img-src 'self' data: blob: https:",
         "connect-src 'self'",
         "manifest-src 'self'",
@@ -64,6 +65,8 @@ def _validate_runtime_settings() -> None:
         bad = [o for o in origins if o.startswith("http://") and "localhost" not in o]
         if bad:
             raise RuntimeError(f"CORS_ORIGINS in production must use https://: {bad}")
+        if "*" in split_csv(settings.ALLOWED_HOSTS):
+            raise RuntimeError("ALLOWED_HOSTS='*' is not allowed in production")
 
 
 async def _periodic_cleanup_loop() -> None:
@@ -73,6 +76,41 @@ async def _periodic_cleanup_loop() -> None:
         except Exception:
             logger.exception("cleanup_expired_entries iteration failed")
         await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
+
+
+def _db_bootstrap_enabled() -> bool:
+    return settings.PROFILE != "local" and settings.STORAGE_BACKEND == "postgres" and settings.DB_AUTO_BOOTSTRAP
+
+
+async def _run_db_bootstrap(app: FastAPI, stop_event: threading.Event) -> None:
+    from app.db.bootstrap import run_bootstrap_with_retry
+
+    app.state.schema_status = await asyncio.to_thread(run_bootstrap_with_retry, stop_event)
+
+
+def _update_check_enabled() -> bool:
+    return settings.PROFILE != "local" and settings.UPDATE_CHECK_ENABLED
+
+
+async def _update_check_loop(checker) -> None:
+    # Give the app a moment to finish starting before the first outbound call.
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await checker.refresh()
+        except Exception:
+            logger.exception("update check iteration failed")
+        await asyncio.sleep(max(60, settings.UPDATE_CHECK_INTERVAL_SECONDS))
+
+
+async def _cancel_task(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 @asynccontextmanager
@@ -85,22 +123,37 @@ async def lifespan(app: FastAPI):
     # Opt-in OTel tracing when OTEL_EXPORTER_OTLP_ENDPOINT is set.
     configure_tracing(app)
     app.state.cleanup_task = asyncio.create_task(_periodic_cleanup_loop())
+    bootstrap_stop = threading.Event()
+    app.state.db_bootstrap_task = None
+    if _db_bootstrap_enabled():
+        # Runs in the background so a slow or still-initialising Postgres never
+        # blocks startup; /health reports the outcome in its `schema` field.
+        app.state.db_bootstrap_task = asyncio.create_task(_run_db_bootstrap(app, bootstrap_stop))
+    app.state.update_checker = None
+    app.state.update_check_task = None
+    if _update_check_enabled():
+        from app.services.update_check import UpdateChecker
+
+        app.state.update_checker = UpdateChecker(
+            current_version=app.version,
+            url=settings.UPDATE_CHECK_URL,
+            ttl_seconds=settings.UPDATE_CHECK_INTERVAL_SECONDS,
+        )
+        app.state.update_check_task = asyncio.create_task(_update_check_loop(app.state.update_checker))
     try:
         yield
     finally:
-        task = getattr(app.state, "cleanup_task", None)
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        bootstrap_stop.set()
+        await _cancel_task(getattr(app.state, "cleanup_task", None))
+        await _cancel_task(getattr(app.state, "db_bootstrap_task", None))
+        await _cancel_task(getattr(app.state, "update_check_task", None))
+        cancel_all_qr_sessions()
 
 
 app = FastAPI(
     title="University Helper API",
     description="Multi-tenant campus helper platform with database-per-tenant isolation",
-    version="1.4.5",
+    version="1.4.7",
     docs_url="/docs" if settings.DOCS_ENABLED else None,
     redoc_url="/redoc" if settings.DOCS_ENABLED else None,
     openapi_url="/openapi.json" if settings.DOCS_ENABLED else None,
@@ -108,8 +161,8 @@ app = FastAPI(
 )
 
 
-def _build_allowed_hosts(origins: list[str]) -> list[str]:
-    hosts = {"localhost", "127.0.0.1"}
+def _build_allowed_hosts(origins: list[str], extra: list[str] | None = None) -> list[str]:
+    hosts = {"localhost", "127.0.0.1", *(extra or [])}
     for origin in origins:
         value = str(origin or "").strip()
         if not value:
@@ -179,7 +232,7 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault(
         "Permissions-Policy",
-        "geolocation=(), microphone=(), camera=(), payment=()",
+        "geolocation=(self), microphone=(), camera=(), payment=()",
     )
     response.headers.setdefault("Content-Security-Policy", _content_security_policy_for(request))
     if settings.ENFORCE_HTTPS:
@@ -192,8 +245,8 @@ async def security_headers_middleware(request: Request, call_next):
 
 # Host-header validation (NOT CSRF — CSRF would need cookie-based auth + token).
 app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=_build_allowed_hosts(settings.CORS_ORIGINS),
+    AllowedHostsMiddleware,
+    allowed_hosts=_build_allowed_hosts(settings.CORS_ORIGINS, split_csv(settings.ALLOWED_HOSTS)),
 )
 
 app.add_middleware(
@@ -285,14 +338,32 @@ def resolve_frontend_dist() -> Path | None:
     return None
 
 
+def _reject_auth_in_local_profile() -> None:
+    raise LocalProfileAuthUnavailable("桌面版不需要注册或登录，直接使用即可")
+
+
 # Routes
-app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+# The desktop build has no users table (SQLite, psycopg2 not bundled), so
+# register/login would crash with a 500. Answer with a clear 409 instead; the SPA
+# uses it as a signal to re-read /api/v1/runtime and skip the auth pages.
+app.include_router(
+    auth.router,
+    prefix="/api/v1/auth",
+    tags=["auth"],
+    dependencies=[Depends(_reject_auth_in_local_profile)] if settings.PROFILE == "local" else [],
+)
 
 from app.api.v1 import course
 
 app.include_router(course.router, prefix="/api/v1/course", tags=["course"])
 app.include_router(chaoxing.router, prefix="/api/v1/chaoxing", tags=["chaoxing"])
 app.include_router(metrics_router, tags=["metrics"])
+
+if settings.PROFILE != "local":
+    # Update notices for server administrators; the desktop app updates itself.
+    from app.api.v1 import system
+
+    app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
 
 
 # PROFILE=local: inject the implicit single-user identity so the HTTPBearer
@@ -317,14 +388,36 @@ async def root():
     return {"message": "University Helper API"}
 
 
+@app.get("/api/v1/runtime", include_in_schema=False)
+def runtime_profile():
+    """Expose only the capabilities the SPA needs to choose its auth flow."""
+    is_local = settings.PROFILE == "local"
+    return {
+        "profile": settings.PROFILE,
+        "requires_auth": not is_local,
+    }
+
+
 @app.get("/health")
 def health():
     cleanup_task = getattr(app.state, "cleanup_task", None)
     cleanup_alive = bool(cleanup_task and not cleanup_task.done())
     if not get_storage().probe.ping():
         raise HTTPException(status_code=503, detail="db unavailable")
-    status = "ok" if cleanup_alive else "degraded"
-    return {"status": status, "db": "ok", "cleanup_task": "alive" if cleanup_alive else "dead"}
+    body = {
+        "status": "ok" if cleanup_alive else "degraded",
+        "db": "ok",
+        "cleanup_task": "alive" if cleanup_alive else "dead",
+    }
+    if settings.PROFILE != "local" and settings.STORAGE_BACKEND == "postgres":
+        from app.db.bootstrap import cached_schema_status
+
+        # Registration needs the users table and tenant_template; a missing one
+        # keeps the site up (200) but is reported so installers and operators see it.
+        body["schema"] = cached_schema_status()
+        if body["schema"] != "ok":
+            body["status"] = "degraded"
+    return body
 
 
 def _mount_spa(application: FastAPI, dist: Path) -> None:
@@ -340,6 +433,8 @@ def _mount_spa(application: FastAPI, dist: Path) -> None:
     @application.get("/{full_path:path}", include_in_schema=False, name="spa")
     async def spa(full_path: str):
         candidate = (dist / full_path).resolve()
+        if full_path == "api" or full_path == "metrics" or full_path.startswith(("api/", "metrics/")):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
         # Serve a real in-tree static file (favicon.svg, sw.js, robots.txt, ...).
         # `dist.resolve() in candidate.parents` blocks traversal escapes such as
         # '../../etc/passwd' (candidate would resolve outside dist).

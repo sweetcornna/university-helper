@@ -5,9 +5,9 @@ services:
       dockerfile: Dockerfile.server
     image: university-helper-app:latest
     container_name: shuake-easy-learning-app
-    restart: on-failure:5
+    restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
     environment:
       MAIN_DB_HOST: postgres
       MAIN_DB_NAME: main_db
@@ -18,6 +18,9 @@ services:
       SHUAKE_COMPAT_SECRET: ${SHUAKE_COMPAT_SECRET}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY}
       CORS_ORIGINS: ${CORS_ORIGINS}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      UPDATE_CHECK_ENABLED: ${UPDATE_CHECK_ENABLED:-true}
       ENFORCE_HTTPS: "false"
       ENV: ${ENV:-production}
       # When REDIS_URL is set, app/core/redis_session_store.SessionStore writes
@@ -56,7 +59,7 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: shuake-easy-learning-db
-    restart: on-failure:5
+    restart: unless-stopped
     command:
       - "postgres"
       - "-c"
@@ -116,7 +119,7 @@ services:
     image: redis:7-alpine
     container_name: shuake-easy-learning-redis
     profiles: ["redis"]
-    restart: on-failure:5
+    restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
     healthcheck:
       test: ["CMD", "redis-cli", "PING"]

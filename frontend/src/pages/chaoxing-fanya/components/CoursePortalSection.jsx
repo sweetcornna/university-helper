@@ -109,7 +109,7 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
           remoteUrl,
           message: data.message || '',
         })
-        setNotice?.(`已通过后端加载学习通「${tabLabel(tabKey)}」：${items.length} 条`)
+        setNotice?.(`已加载学习通「${tabLabel(tabKey)}」：${items.length} 条`)
       } catch (err) {
         if (!isCurrent()) return
         const message =
@@ -138,14 +138,10 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
   return (
     <section className={CARD}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold text-text">学习通课程接口</h2>
-          <p className="mt-1 text-xs text-text-muted">
-            数据由后端携带你的学习通登录态请求，浏览器不直接访问学习通，避免 CORS 与跨站登录态限制
-          </p>
-        </div>
+        <h2 className="text-xl font-semibold text-text">学习通课程</h2>
         <div className="flex flex-wrap items-center gap-2">
           <select
+            aria-label="选择学习通课程"
             className="min-h-[44px] rounded-lg border border-border bg-surface px-3 text-sm text-text/80"
             value={activeCourseId}
             onChange={(event) => setActiveCourseId(event.target.value)}
@@ -163,9 +159,10 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
               void loadTab(activeCourseId, activeTab)
             }}
             disabled={loading || !activeCourseId}
+            aria-label="刷新学习通课程内容"
             title="刷新"
           >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}
           </button>
         </div>
       </div>

@@ -122,6 +122,36 @@ class TestAuthRegistration:
 
 
 class TestAuthLogin:
+    def test_register_reserved_username_rejected(self, client):
+        response = client.post("/api/v1/auth/register", json={
+            "username": "template",
+            "email": "t@example.com",
+            "password": "Test1234"
+        })
+
+        assert response.status_code == 422
+        assert "保留" in response.text
+
+    def test_register_missing_template_returns_actionable_503(self, client, mock_db):
+        from app.core.exceptions import DatabaseNotInitializedError
+
+        mock_db.fetchone.return_value = {"id": 3}
+        with patch(
+            "app.services.auth_service.AuthService._create_tenant_database",
+            side_effect=DatabaseNotInitializedError("数据库还没初始化好：缺少 tenant_template 模板库"),
+        ), patch("app.services.auth_service.AuthService._drop_tenant_database"):
+            response = client.post("/api/v1/auth/register", json={
+                "username": "newbie",
+                "email": "newbie@example.com",
+                "password": "Test1234"
+            })
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "code": "DatabaseNotInitializedError",
+            "message": "数据库还没初始化好：缺少 tenant_template 模板库",
+        }
+
     def test_login_success(self, client, mock_db):
         from app.core.security import hash_password
         mock_db.fetchone.return_value = {
