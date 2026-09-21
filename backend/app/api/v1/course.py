@@ -170,9 +170,7 @@ async def _run_blocking(func, *args, **kwargs):
 
 
 # Fields of CourseStartRequest that saved preferences can supply a default for.
-_PREFERENCE_BACKED_FIELDS = frozenset(
-    {"speed", "concurrency", "unopened_strategy", "tiku_config", "notify_config"}
-)
+_PREFERENCE_BACKED_FIELDS = frozenset({"speed", "concurrency", "unopened_strategy", "tiku_config", "notify_config"})
 
 
 async def _start_task_payload(request: CourseStartRequest, user_id: str) -> dict[str, Any]:
@@ -1371,7 +1369,9 @@ async def test_notification(request: dict, current_user: dict = Depends(get_curr
             detail="Failed to send test notification",
         )
 
-    return {"status": "success", "message": f"Test notification sent via {service}"}
+    # Exact wording is asserted by tests/unit/test_notification_api.py — keep the
+    # service name out of it.
+    return {"status": "success", "message": "Test notification sent"}
 
 
 class AiProbeRequest(BaseModel):
