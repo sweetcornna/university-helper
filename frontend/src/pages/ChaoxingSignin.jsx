@@ -96,6 +96,12 @@ export default function ChaoxingSignin() {
 
   const [signinTasks, setSigninTasks] = useState([])
 
+  // Drives the refresh spinner in the banner and the tasks tab. Both call
+  // fetchSigninTasks, and without this a manual refresh gave no feedback at
+  // all: an empty result renders exactly like the state before the click, so
+  // the button looked dead.
+  const [refreshingSigninTasks, setRefreshingSigninTasks] = useState(false)
+
   const [signinHistory, setSigninHistory] = useState([])
 
   const [backgroundTaskHistory, setBackgroundTaskHistory] = useState([])
@@ -352,6 +358,8 @@ export default function ChaoxingSignin() {
   }, [requestChaoxingApi])
 
   const fetchSigninTasks = useCallback(async () => {
+    setRefreshingSigninTasks(true)
+
     try {
       const resp = await requestChaoxingApi('/tasks')
 
@@ -360,6 +368,8 @@ export default function ChaoxingSignin() {
       if (!redirectingRef.current) {
         console.error('Failed to fetch signin tasks:', err)
       }
+    } finally {
+      setRefreshingSigninTasks(false)
     }
   }, [requestChaoxingApi])
 
@@ -1437,6 +1447,7 @@ export default function ChaoxingSignin() {
                 onApplyTask={applyDetectedTask}
                 onApplyAndSubmit={applyAndSubmitDetectedTask}
                 onRefresh={fetchSigninTasks}
+                refreshing={refreshingSigninTasks}
               />
 
               {chaoxingSession.authenticated && (
@@ -2121,6 +2132,7 @@ export default function ChaoxingSignin() {
               <TasksTab
                 signinTasks={signinTasks}
                 fetchSigninTasks={fetchSigninTasks}
+                refreshing={refreshingSigninTasks}
                 openBackgroundTask={(tid) =>
                   openBackgroundTask(tid, {
                     setResultType,
