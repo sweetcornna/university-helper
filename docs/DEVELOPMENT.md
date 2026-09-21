@@ -37,8 +37,8 @@ ruff check app/
 ruff format app/
 
 # Database migrations — ALWAYS branch-qualified, and run from `backend/`.
-# There are TWO branches (main_db and tenant_db), so a bare
-# `alembic upgrade head` is ambiguous.
+# There are TWO branches (main_db and tenant_db), so targeting the bare head
+# is ambiguous. Spell the branch out, as below.
 alembic upgrade main_db@head           # main DB: users, rate_limit_counters,
                                        #          email_verification_codes
 python scripts/migrate_tenants.py      # every tenant_<username> DB (tenant_db@head)

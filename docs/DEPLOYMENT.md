@@ -209,8 +209,8 @@ docker-compose -p university-helper \
 on any server whose volume already has data, **new tables do not appear until you
 run the migration by hand.**
 
-This repo has **two** migration branches (`main_db` and `tenant_db`), so a plain
-`alembic upgrade head` is ambiguous. Always branch-qualify:
+This repo has **two** migration branches (`main_db` and `tenant_db`), so an
+unqualified head target is ambiguous. Always branch-qualify:
 
 ```bash
 # Main database (users, rate_limit_counters, email_verification_codes)
@@ -646,8 +646,8 @@ docker-compose -p university-helper \
 各 compose 文件、部署流水线都**不会**运行 Alembic，所以只要数据卷里已经有数据，
 **新表就不会自动出现，必须手动跑迁移。**
 
-本仓库有 **两条** 迁移分支（`main_db` 与 `tenant_db`），因此裸写
-`alembic upgrade head` 是有歧义的，务必带上分支名：
+本仓库有 **两条** 迁移分支（`main_db` 与 `tenant_db`），因此不带分支的 head
+目标是有歧义的，务必带上分支名：
 
 ```bash
 # 主库（users、rate_limit_counters、email_verification_codes）
