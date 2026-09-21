@@ -56,6 +56,19 @@ directory, so run later commands from there.
 | `--no-tls` | with `--domain`, skip the nginx template |
 | `-y`, `--yes` | answer yes to every prompt |
 
+> **`--build` requires BuildKit.** The root `.dockerignore` excludes `frontend/` (the backend
+> image has no use for it), but `Dockerfile.web` copies `frontend/package.json`. CI resolves
+> that with a per-Dockerfile ignore file — `Dockerfile.web.dockerignore` — which **BuildKit**
+> picks up automatically for `-f Dockerfile.web` builds. The legacy builder only ever reads
+> `.dockerignore`, so the web image fails with
+> `COPY failed: ... frontend/package.json: file does not exist`. Install the buildx component
+> and enable BuildKit for the build:
+>
+> ```bash
+> sudo apt-get install -y docker-buildx      # Debian/Ubuntu; or docker-buildx-plugin from Docker's repo
+> DOCKER_BUILDKIT=1 bash scripts/deploy_server.sh --build --host <ip> -y
+> ```
+
 Without `--domain` or `--host`, the site is only reachable locally at `http://localhost:8080`.
 With `--host` and no `--allowed-hosts`, an empty `ALLOWED_HOSTS` is filled with the server's own
 IPv4 addresses (Linux only).
@@ -505,6 +518,18 @@ app、postgres 和 web，等 `/health` 通过，并确认数据库已经可以�
 | `--build` | 从源码构建镜像，不从 GHCR 拉取 |
 | `--no-tls` | 与 `--domain` 同用时，不生成 nginx 模板 |
 | `-y`, `--yes` | 所有提示都回答 yes |
+
+> **`--build` 需要 BuildKit。** 根目录的 `.dockerignore` 排除了 `frontend/`（后端镜像用不到），
+> 而 `Dockerfile.web` 要 `COPY frontend/package.json`。CI 靠的是 **BuildKit 会为
+> `-f Dockerfile.web` 自动选用同名忽略文件** `Dockerfile.web.dockerignore`；而 legacy builder
+> 只读 `.dockerignore`，于是 web 镜像会以
+> `COPY failed: ... frontend/package.json: file does not exist` 失败。装上 buildx 组件并
+> 显式启用 BuildKit 即可：
+>
+> ```bash
+> sudo apt-get install -y docker-buildx      # Debian/Ubuntu；或 Docker 源里的 docker-buildx-plugin
+> DOCKER_BUILDKIT=1 bash scripts/deploy_server.sh --build --host <ip> -y
+> ```
 
 不带 `--domain` 或 `--host` 时，站点只能在本机通过 `http://localhost:8080` 访问。
 带 `--host` 但没带 `--allowed-hosts` 时，如果 `ALLOWED_HOSTS` 为空，脚本会填入本机的
