@@ -121,6 +121,19 @@ def test_judgement_only_false_list_configured():
     assert t.true_list, "true_list should fall back to defaults when not configured"
 
 
+def test_judgement_defaults_accept_common_symbols_and_yes_no():
+    from app.services.course.chaoxing.answer_base import Tiku
+
+    t = Tiku()
+    t.config_set({"provider": "x"})
+    t.init_tiku()
+
+    for value in ("正确", "对", "是", "√", "T", "True", "true"):
+        assert value in t.true_list
+    for value in ("错误", "错", "否", "×", "F", "False", "false"):
+        assert value in t.false_list
+
+
 # ---------------------------------------------------------------------------
 # AI judgement answer validated/normalized before caching (F28)
 # ---------------------------------------------------------------------------
