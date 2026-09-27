@@ -1,8 +1,11 @@
 def check_single(answer):
-    _t = cut(answer)
-    if _t is not None and len(_t) == 1:
-        return True
-    return False
+    # A single-choice provider may return the full option text, and that text can
+    # legitimately contain commas/spaces. Delimiter-counting therefore cannot
+    # distinguish a single answer from multiple answers here; option matching is
+    # performed later against the question's actual choices.
+    if answer is None:
+        return False
+    return bool(str(answer).strip())
 
 
 def check_multiple(answer):

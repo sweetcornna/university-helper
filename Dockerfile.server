@@ -21,6 +21,39 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ] && echo "${PIP_INDEX_URL}" 
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
+
+# Chaoxing encrypted-font decoding needs a glyph-hash mapping table maintained
+# by Samueli924/chaoxing. Keep the GPL-3.0 data out of this MIT repository and
+# fetch a pinned upstream revision while building the server image instead.
+ARG CHAOXING_FONT_MAP_URL=https://raw.githubusercontent.com/Samueli924/chaoxing/556ccc1556823ff5c8dc1ac4ad26307217b25795/resource/font_map_table.json
+ARG CHAOXING_FONT_MAP_SHA256=792786beba0acc8bdfe4ff7e6f8624bf69e8d4d7d9a72cb6a9453c4ff6cd87e7
+RUN CHAOXING_FONT_MAP_URL="$CHAOXING_FONT_MAP_URL" CHAOXING_FONT_MAP_SHA256="$CHAOXING_FONT_MAP_SHA256" python - <<'PYFONT'
+import hashlib
+import json
+import os
+import urllib.request
+from pathlib import Path
+
+url = os.environ["CHAOXING_FONT_MAP_URL"]
+expected = os.environ["CHAOXING_FONT_MAP_SHA256"].lower()
+target = Path("/build/resource/font_map_table.json")
+target.parent.mkdir(parents=True, exist_ok=True)
+
+with urllib.request.urlopen(url, timeout=60) as response:
+    payload = response.read()
+
+actual = hashlib.sha256(payload).hexdigest()
+if actual != expected:
+    raise SystemExit(f"font_map_table.json SHA-256 mismatch: expected {expected}, got {actual}")
+
+parsed = json.loads(payload)
+if not isinstance(parsed, dict) or not parsed:
+    raise SystemExit("font_map_table.json is not a non-empty JSON object")
+
+target.write_bytes(payload)
+print(f"Downloaded Chaoxing font map: {len(parsed)} entries, sha256={actual}")
+PYFONT
+
 COPY backend/requirements.txt /build/requirements.txt
 RUN pip wheel --wheel-dir=/wheels --default-timeout=1000 \
         -r /build/requirements.txt email-validator
@@ -50,6 +83,7 @@ RUN pip install --no-cache-dir --find-links=/wheels --no-index $(ls /wheels/*.wh
     && rm -rf /wheels
 
 COPY --chown=app:app backend /srv/backend
+COPY --from=builder --chown=app:app /build/resource/font_map_table.json /srv/backend/resource/font_map_table.json
 # Schema files for app/db/bootstrap.py: lets the app rebuild the users table and
 # tenant_template when the Postgres init scripts never ran on this volume.
 COPY --chown=app:app database/00-schema.sql database/templates/tenant_template.sql /srv/backend/app/db/sql/

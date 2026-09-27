@@ -2,6 +2,7 @@ import random
 import re
 import threading
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -86,9 +87,123 @@ def clean_res(res):
     return cleaned_res
 
 
-def is_subsequence(a, o):
-    iter_o = iter(o)
-    return all(c in iter_o for c in a)
+def _normalize_choice_text(value: str) -> str:
+    """Normalize provider/option text without changing its semantic content."""
+    text = unicodedata.normalize("NFKC", str(value or "")).strip()
+    text = re.sub(r"^\s*[A-Ha-h]\s*[\.．、:：\)）-]?\s*", "", text)
+    text = re.sub(r"[\s\u3000]+", "", text)
+    text = re.sub(r"[，,。.!！?？;；:：、\"“”'‘’（）()【】\[\]]+", "", text)
+    return text.casefold()
+
+
+def _option_entries(options_list):
+    entries = []
+    for idx, raw in enumerate(options_list or []):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        match = re.match(r"^\s*([A-Ha-h])\s*[\.．、:：\)）-]?\s*(.*)$", text, re.S)
+        if match:
+            letter = match.group(1).upper()
+            body = match.group(2).strip()
+        else:
+            letter = chr(ord("A") + idx)
+            body = text
+        normalized = _normalize_choice_text(body)
+        if normalized:
+            entries.append((letter, normalized))
+    return entries
+
+
+def _parse_direct_letters(value, valid_letters):
+    text = unicodedata.normalize("NFKC", str(value or "")).strip().upper()
+    compact = re.sub(r"[\s,，、|/#;；]+", "", text)
+    if not compact or re.fullmatch(r"[A-H]+", compact) is None:
+        return ""
+    if any(ch not in valid_letters for ch in compact):
+        return ""
+    unique = []
+    for ch in compact:
+        if ch not in unique:
+            unique.append(ch)
+    return "".join(ch for ch in valid_letters if ch in unique)
+
+
+def _map_single_choice(value, options_list):
+    entries = _option_entries(options_list)
+    if not entries:
+        return ""
+    valid_letters = "".join(letter for letter, _ in entries)
+    direct = _parse_direct_letters(value, valid_letters)
+    if len(direct) == 1:
+        return direct
+
+    target = _normalize_choice_text(value)
+    if not target:
+        return ""
+
+    exact = [letter for letter, normalized in entries if normalized == target]
+    if len(exact) == 1:
+        return exact[0]
+
+    contained = [
+        letter
+        for letter, normalized in entries
+        if len(target) >= 2 and (target in normalized or normalized in target)
+    ]
+    return contained[0] if len(contained) == 1 else ""
+
+
+def _map_multiple_choice(value, options_list):
+    entries = _option_entries(options_list)
+    if not entries:
+        return ""
+    valid_letters = "".join(letter for letter, _ in entries)
+    direct = _parse_direct_letters(value, valid_letters)
+    if direct:
+        return direct
+
+    target = _normalize_choice_text(value)
+    if not target:
+        return ""
+
+    # Provider text may concatenate full option texts without a reliable
+    # delimiter. Match whole normalized option bodies, prefer longer matches,
+    # reject overlapping shorter matches, and emit each choice at most once.
+    candidates = []
+    for letter, normalized in entries:
+        start = 0
+        while normalized:
+            pos = target.find(normalized, start)
+            if pos < 0:
+                break
+            candidates.append((pos, pos + len(normalized), -len(normalized), letter))
+            start = pos + 1
+
+    selected_spans = []
+    selected_letters = []
+    for start, end, neg_len, letter in sorted(candidates, key=lambda item: (item[2], item[0], item[3])):
+        del neg_len
+        if any(not (end <= left or start >= right) for left, right in selected_spans):
+            continue
+        selected_spans.append((start, end))
+        if letter not in selected_letters:
+            selected_letters.append(letter)
+
+    if selected_letters:
+        return "".join(letter for letter in valid_letters if letter in selected_letters)
+
+    # Only split on unambiguous answer separators. Commas and spaces commonly
+    # belong to a single option's prose and must not be treated as boundaries.
+    chunks = [chunk.strip() for chunk in re.split(r"[\n\r|#;；]+", str(value or "")) if chunk.strip()]
+    mapped = []
+    for chunk in chunks:
+        letter = _map_single_choice(chunk, options_list)
+        if not letter:
+            return ""
+        if letter not in mapped:
+            mapped.append(letter)
+    return "".join(letter for letter in valid_letters if letter in mapped)
 
 
 def with_retry(max_retries=3, delay=1):
@@ -157,38 +272,11 @@ class QuizAnswerProcessor:
             if q["type"] == "multiple":
                 options_list = multi_cut(q["options"], origin_html_content)
                 if options_list is not None:
-                    opt_letters = "".join(o[:1] for o in options_list)
-                    letters_raw = "".join(ch for ch in str(res) if ch.isalpha()).upper()
-                    letters_filtered = "".join(ch for ch in letters_raw if ch in opt_letters)
-                    if letters_filtered:
-                        unique_letters = []
-                        for ch in letters_filtered:
-                            if ch not in unique_letters:
-                                unique_letters.append(ch)
-                        answer = "".join(sorted(unique_letters))
-                    else:
-                        res_list = multi_cut(res, origin_html_content)
-                        if res_list is not None:
-                            for _a in clean_res(res_list):
-                                for o in options_list:
-                                    if is_subsequence(_a, o):
-                                        answer += o[:1]
-                            answer = "".join(sorted(answer))
+                    answer = _map_multiple_choice(res, options_list)
             elif q["type"] == "single":
                 options_list = multi_cut(q["options"], origin_html_content)
                 if options_list is not None:
-                    opt_letters = "".join(o[:1] for o in options_list)
-                    letters_raw = "".join(ch for ch in str(res) if ch.isalpha()).upper()
-                    letters_filtered = "".join(ch for ch in letters_raw if ch in opt_letters)
-                    if len(letters_filtered) == 1:
-                        answer = letters_filtered
-                    else:
-                        t_res = clean_res(res)
-                        if t_res:
-                            for o in options_list:
-                                if is_subsequence(t_res[0], o):
-                                    answer = o[:1]
-                                    break
+                    answer = _map_single_choice(res, options_list)
             elif q["type"] == "judgement":
                 answer = "true" if self.tiku.judgement_select(res) else "false"
             elif q["type"] == "completion":
