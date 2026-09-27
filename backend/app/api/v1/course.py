@@ -3,11 +3,11 @@ import base64
 import logging
 import threading
 import time
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from app.dependencies import get_current_user
 from app.services.course.chaoxing.course_portal_service import chaoxing_course_portal_service
@@ -21,6 +21,7 @@ from app.services.course.chaoxing.task_admission import TaskAdmissionError
 from app.services.course.zhihuishu.adapter import (
     TASK_CONFLICT_DETAIL,
     ZhihuishuAdapter,
+    ZhihuishuChapterNotFoundError,
     ZhihuishuTaskConflictError,
 )
 from app.services.notification import NotificationFactory
@@ -45,11 +46,18 @@ THREAD_START_FAILURE_DETAIL = (
 )
 
 
+_ChapterLimitKey = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)]
+_ChapterLimitValue = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+
+
 class CourseStartRequest(BaseModel):
     platform: str
     username: str
     password: str
     course_ids: list[str] | None = None
+    # Course selector (same format as course_ids) -> id of the last chapter to
+    # study, inclusive. Courses without an entry are studied in full.
+    chapter_limits: Annotated[dict[_ChapterLimitKey, _ChapterLimitValue], Field(max_length=100)] | None = None
     speed: float = 1.0
     concurrency: int = 4
     unopened_strategy: str = "retry"
@@ -89,6 +97,8 @@ class ZhihuishuPasswordLoginRequest(BaseModel):
 
 class _ZhihuishuCourseIdRequest(BaseModel):
     course_id: str = Field(min_length=1, max_length=128)
+    # Last chapter to study (inclusive); None studies the whole course.
+    end_chapter_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("course_id")
     @classmethod
@@ -97,6 +107,15 @@ class _ZhihuishuCourseIdRequest(BaseModel):
         if not normalized:
             raise ValueError("course_id must not be blank")
         return normalized
+
+    @field_validator("end_chapter_id")
+    @classmethod
+    def normalize_end_chapter_id(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+    def chapter_limit_kwargs(self) -> dict[str, str]:
+        # Only forwarded when set, so adapters without the option keep working.
+        return {"end_chapter_id": self.end_chapter_id} if self.end_chapter_id else {}
 
 
 class ZhihuishuCourseRequest(_ZhihuishuCourseIdRequest):
@@ -188,6 +207,7 @@ async def start_course_learning(
                 "username": request.username,
                 "password": request.password,
                 "course_ids": request.course_ids or [],
+                "chapter_limits": request.chapter_limits or {},
                 "speed": request.speed,
                 "concurrency": request.concurrency,
                 "unopened_strategy": request.unopened_strategy,
@@ -718,6 +738,7 @@ async def zhihuishu_start_course(
                 speed=request.speed,
                 auto_answer=request.auto_answer,
                 task_type="course",
+                **request.chapter_limit_kwargs(),
             )
         else:
             result = await _run_blocking(
@@ -725,7 +746,10 @@ async def zhihuishu_start_course(
                 request.course_id,
                 speed=request.speed,
                 auto_answer=request.auto_answer,
+                **request.chapter_limit_kwargs(),
             )
+    except ZhihuishuChapterNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
     except ZhihuishuTaskConflictError as exc:
         raise HTTPException(status_code=409, detail=TASK_CONFLICT_DETAIL) from exc
     except Exception as exc:
@@ -771,6 +795,7 @@ async def zhihuishu_start_course_task(
                 speed=speed,
                 auto_answer=auto_answer,
                 task_type="course",
+                **request.chapter_limit_kwargs(),
             )
         else:
             result = await _run_blocking(
@@ -778,7 +803,10 @@ async def zhihuishu_start_course_task(
                 request.course_id,
                 speed=speed,
                 auto_answer=auto_answer,
+                **request.chapter_limit_kwargs(),
             )
+    except ZhihuishuChapterNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
     except ZhihuishuTaskConflictError as exc:
         raise HTTPException(status_code=409, detail=TASK_CONFLICT_DETAIL) from exc
     except Exception as exc:
@@ -807,14 +835,22 @@ async def zhihuishu_start_ai_course_task(
 
     try:
         if hasattr(adapter, "start_ai_course_task"):
-            result = await _run_blocking(adapter.start_ai_course_task, request.course_id, speed=speed)
+            result = await _run_blocking(
+                adapter.start_ai_course_task,
+                request.course_id,
+                speed=speed,
+                **request.chapter_limit_kwargs(),
+            )
         else:
             result = await _run_blocking(
                 adapter.start_course,
                 request.course_id,
                 speed=speed,
                 auto_answer=True,
+                **request.chapter_limit_kwargs(),
             )
+    except ZhihuishuChapterNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
     except ZhihuishuTaskConflictError as exc:
         raise HTTPException(status_code=409, detail=TASK_CONFLICT_DETAIL) from exc
     except Exception as exc:

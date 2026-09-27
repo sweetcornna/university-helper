@@ -14,6 +14,7 @@ from .learning import ZhihuishuLearning
 logger = logging.getLogger(__name__)
 UNEXPECTED_TASK_ERROR_PREFIX = "Unexpected task failure"
 TASK_CONFLICT_DETAIL = "An active task already exists for this user"
+CHAPTER_NOT_FOUND_DETAIL = "所选的最后一章已不在这门课里，请重新加载视频列表后再选。"
 ACTIVE_TASK_STATUSES = frozenset({"pending", "running", "paused", "cancelling", "stopping"})
 THREAD_START_FAILURE_MESSAGE = (
     "Server cannot start a new background thread. Stop existing tasks and retry, "
@@ -26,6 +27,16 @@ class ZhihuishuTaskConflictError(RuntimeError):
 
     status_code = 409
     detail = TASK_CONFLICT_DETAIL
+
+    def __init__(self) -> None:
+        super().__init__(self.detail)
+
+
+class ZhihuishuChapterNotFoundError(ValueError):
+    """Raised when the chosen last chapter is not in the course's current video list."""
+
+    status_code = 400
+    detail = CHAPTER_NOT_FOUND_DETAIL
 
     def __init__(self) -> None:
         super().__init__(self.detail)
@@ -88,6 +99,7 @@ class ZhihuishuAdapter:
             "cancelled": bool(task.get("cancelled")),
             "speed": task.get("speed", 1.0),
             "auto_answer": bool(task.get("auto_answer", True)),
+            "end_chapter_id": task.get("end_chapter_id"),
         }
         if include_videos:
             payload["videos"] = list(task.get("videos", []))
@@ -132,9 +144,17 @@ class ZhihuishuAdapter:
         if not self.learning:
             raise Exception("Not logged in")
 
+        # While a task runs, show its videos so their live status is visible.
+        # Afterwards fetch fresh: a finished task may have covered only part of
+        # the course, and its watch state is stale.
         with self._task_lock:
-            if self._task_state and self._task_state.get("course_id") == course_id:
-                return list(self._task_state.get("videos", []))
+            task = self._task_state
+            if (
+                task
+                and task.get("course_id") == course_id
+                and str(task.get("status") or "").strip().lower() in ACTIVE_TASK_STATUSES
+            ):
+                return list(task.get("videos", []))
 
         rac_id = self._resolve_rac_id(course_id)
         data = self.learning.get_video_list(rac_id)
@@ -162,8 +182,32 @@ class ZhihuishuAdapter:
             state = lv.get(str(v.get("small_lesson_id"))) or lesson.get(str(v.get("lesson_id"))) or {}
             v["study_total_time"] = state.get("studyTotalTime") or 0
             v["watch_state"] = state.get("watchState") or 0
+            try:
+                watched = int(v["watch_state"]) == 1
+            except (TypeError, ValueError):
+                watched = False
+            if watched:
+                v["status"] = "completed"
 
-    def start_course(self, course_id: str, speed: float = 1.0, auto_answer: bool = True) -> dict:
+    @staticmethod
+    def _videos_up_to_chapter(videos: list[dict], end_chapter_id: str) -> list[dict]:
+        """Videos from the start of the course through the last one in ``end_chapter_id``."""
+        target = str(end_chapter_id).strip()
+        last_index = None
+        for index, video in enumerate(videos):
+            if str(video.get("chapter_id") or "") == target:
+                last_index = index
+        if last_index is None:
+            raise ZhihuishuChapterNotFoundError()
+        return videos[: last_index + 1]
+
+    def start_course(
+        self,
+        course_id: str,
+        speed: float = 1.0,
+        auto_answer: bool = True,
+        end_chapter_id: str | None = None,
+    ) -> dict:
         if not self.learning:
             raise Exception("Not logged in")
 
@@ -176,6 +220,8 @@ class ZhihuishuAdapter:
                 raise ZhihuishuTaskConflictError()
 
         videos = self.get_videos(course_id)
+        if end_chapter_id:
+            videos = self._videos_up_to_chapter(videos, end_chapter_id)
         total = len(videos)
 
         with self._task_lock:
@@ -204,6 +250,7 @@ class ZhihuishuAdapter:
                 "speed": speed if speed > 0 else 1.0,
                 "auto_answer": bool(auto_answer),
                 "task_type": "course",
+                "end_chapter_id": end_chapter_id or None,
             }
             self._task_state = task_state
             self._tasks[task_id] = task_state
@@ -337,8 +384,9 @@ class ZhihuishuAdapter:
         speed: float = 1.0,
         auto_answer: bool = True,
         task_type: str = "course",
+        end_chapter_id: str | None = None,
     ) -> dict[str, Any]:
-        result = self.start_course(course_id, speed=speed, auto_answer=auto_answer)
+        result = self.start_course(course_id, speed=speed, auto_answer=auto_answer, end_chapter_id=end_chapter_id)
         task_id = str(result.get("task_id") or "")
         if task_id:
             with self._task_lock:
@@ -349,13 +397,28 @@ class ZhihuishuAdapter:
                     task["updated_at"] = time.time()
         return result
 
-    def start_ai_course_task(self, course_id: str, speed: float = 1.0) -> dict[str, Any]:
+    def start_ai_course_task(
+        self, course_id: str, speed: float = 1.0, end_chapter_id: str | None = None
+    ) -> dict[str, Any]:
         with self._task_lock:
+            previous_enabled = self.ai_config.get("enabled")
+            previous_answer_enabled = self.answer.ai_enabled if self.answer is not None else None
             self.ai_config["enabled"] = True
             self._config["ai_config"] = dict(self.ai_config)
             if self.answer is not None:
                 self.answer.ai_enabled = True
-        return self.start_course_task(course_id, speed=speed, auto_answer=True, task_type="ai-course")
+        try:
+            return self.start_course_task(
+                course_id, speed=speed, auto_answer=True, task_type="ai-course", end_chapter_id=end_chapter_id
+            )
+        except (ZhihuishuChapterNotFoundError, ZhihuishuTaskConflictError):
+            # No task was created, so do not leave AI answering switched on.
+            with self._task_lock:
+                self.ai_config["enabled"] = previous_enabled
+                self._config["ai_config"] = dict(self.ai_config)
+                if self.answer is not None:
+                    self.answer.ai_enabled = previous_answer_enabled
+            raise
 
     def get_status(self) -> dict[str, Any]:
         with self._task_lock:
@@ -460,6 +523,7 @@ class ZhihuishuAdapter:
         index = 1
         for chapter in chapters:
             chapter_id = chapter.get("id") or chapter.get("chapterId")
+            chapter_title = str(chapter.get("name") or chapter.get("chapterName") or chapter.get("title") or "")
             lessons = chapter.get("videoLessons") or chapter.get("videoLearningDtos") or chapter.get("videoDtos") or []
             for lesson in lessons:
                 lesson_id = lesson.get("id") or lesson.get("lessonId")
@@ -492,6 +556,7 @@ class ZhihuishuAdapter:
                             "recruit_id": recruit_id,
                             "course_id": course_id,
                             "chapter_id": chapter_id,
+                            "chapter_title": chapter_title,
                             "lesson_id": lesson_id,
                             "small_lesson_id": 0 if is_single else small.get("id"),
                             "video_id": video_id,

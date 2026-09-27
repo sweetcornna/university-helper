@@ -15,6 +15,7 @@ import { removeToken } from '../utils/auth'
 import {
   applyCourseProgressToTaskRecords,
   applyTaskActionToRecords,
+  groupVideosByChapter,
   TERMINAL_ZHIHUISHU_TASK_STATUSES,
 } from '../utils/zhihuishuTasks'
 
@@ -43,6 +44,14 @@ const FIELD_CLASS =
   'w-full min-h-[44px] rounded-xl border border-border/30 bg-surface/70 px-4 py-2 text-text transition-all duration-200 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20'
 const ACTION_BUTTON_CLASS =
   'min-h-[44px] min-w-[44px] rounded-xl px-4 py-2 font-medium text-white cursor-pointer transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60'
+
+// The speed <select> uses one-decimal values ("1.0"), but the config API
+// returns numbers, and JSON turns 1.0 into 1. Without this, "1" matches no
+// option and the select shows 0.5x while tasks run at 1x.
+const toSpeedOption = (value, fallback = '1.0') => {
+  const speed = Number(value)
+  return Number.isFinite(speed) && speed > 0 ? speed.toFixed(1) : fallback
+}
 
 const pickMessage = (payload) => {
   if (!payload) return ''
@@ -239,6 +248,8 @@ export default function Zhihuishu() {
   const courseViewGenerationRef = useRef(0)
   const courseDetailRequestRef = useRef(0)
   const videosRequestRef = useRef(0)
+  const chaptersRequestRef = useRef(0)
+  const endChapterByCourseRef = useRef({})
   const progressRequestRef = useRef(0)
   const taskRecordsRef = useRef([])
   const activeTaskIdRef = useRef('')
@@ -280,6 +291,12 @@ export default function Zhihuishu() {
 
   const [videos, setVideos] = useState([])
   const [videosLoading, setVideosLoading] = useState(false)
+  // Both keyed by course id, so a choice survives switching courses.
+  // chaptersByCourse comes from the video list; endChapterByCourse holds the
+  // last chapter to study (absent = whole course).
+  const [chaptersByCourse, setChaptersByCourse] = useState({})
+  const [endChapterByCourse, setEndChapterByCourse] = useState({})
+  const [chaptersLoading, setChaptersLoading] = useState(false)
 
   const [progress, setProgress] = useState(null)
   const [progressLoading, setProgressLoading] = useState(false)
@@ -316,6 +333,10 @@ export default function Zhihuishu() {
   useEffect(() => {
     taskRecordsRef.current = taskRecords
   }, [taskRecords])
+
+  useEffect(() => {
+    endChapterByCourseRef.current = endChapterByCourse
+  }, [endChapterByCourse])
 
   const [settings, setSettings] = useState({
     speed: '1.0',
@@ -438,7 +459,7 @@ export default function Zhihuishu() {
       const parsed = JSON.parse(raw)
       setSettings((prev) => ({
         ...prev,
-        speed: String(parsed.speed || prev.speed),
+        speed: toSpeedOption(parsed.speed, prev.speed),
         autoAnswer: typeof parsed.autoAnswer === 'boolean' ? parsed.autoAnswer : prev.autoAnswer,
         progressPollSeconds: clampPollSeconds(parsed.progressPollSeconds ?? prev.progressPollSeconds)
       }))
@@ -494,7 +515,7 @@ export default function Zhihuishu() {
         if (!canWrite()) return prev
         const merged = {
           ...prev,
-          speed: String(config?.speed ?? prev.speed),
+          speed: toSpeedOption(config?.speed, prev.speed),
           autoAnswer: typeof config?.auto_answer === 'boolean'
             ? config.auto_answer
             : (typeof config?.autoAnswer === 'boolean' ? config.autoAnswer : prev.autoAnswer)
@@ -609,6 +630,49 @@ export default function Zhihuishu() {
     }
   }, [requestZhihuishuApi, setNoticeMessage])
 
+  // Stores a course's chapters. A chosen end chapter that is no longer in the
+  // list is dropped, and the user is told, since the course would otherwise be
+  // studied in full without them noticing.
+  const storeChapters = useCallback((courseId, videoChapters) => {
+    setChaptersByCourse((prev) => ({ ...prev, [courseId]: videoChapters }))
+    const chosen = endChapterByCourseRef.current[courseId]
+    if (chosen && !videoChapters.some((chapter) => chapter.id === chosen)) {
+      setEndChapterByCourse((prev) => {
+        const next = { ...prev }
+        delete next[courseId]
+        return next
+      })
+      setNoticeMessage('info', '之前选的最后一章已不在这门课里，已改回「全部章节」，请重新选择。')
+    }
+  }, [setNoticeMessage])
+
+  // Chapters always come from the video list: its chapter ids are the ones the
+  // task start endpoint matches end_chapter_id against. They are stored per
+  // course, so a reply that lands after a course switch is still kept.
+  const loadChapters = useCallback(async (courseId) => {
+    if (!courseId) return
+    const requestGeneration = chaptersRequestRef.current + 1
+    chaptersRequestRef.current = requestGeneration
+    const isCurrent = () => mountedRef.current && chaptersRequestRef.current === requestGeneration
+
+    setChaptersLoading(true)
+    try {
+      const resp = await api(`${ZHIHUISHU_API_BASE}/videos/${courseId}`, { method: 'GET' })
+      if (!isCurrent()) return
+      const videoChapters = groupVideosByChapter(parseList(resp, 'data', 'videos'))
+      storeChapters(courseId, videoChapters)
+      if (videoChapters.length === 0) {
+        setNoticeMessage('info', '没有读到这门课的章节，只能学完整门课。')
+      }
+    } catch (err) {
+      if (isCurrent()) {
+        setNoticeMessage('error', err.message || '加载章节失败。')
+      }
+    } finally {
+      if (isCurrent()) setChaptersLoading(false)
+    }
+  }, [setNoticeMessage, storeChapters])
+
   const loadVideos = useCallback(async (courseId) => {
     if (!courseId) {
       setNoticeMessage('error', '请先选择课程。')
@@ -645,9 +709,14 @@ export default function Zhihuishu() {
       if (!isCurrent()) return null
       const legacyVideos = parseList(legacyResp, 'data', 'videos')
       setVideos((current) => (isCurrent() ? legacyVideos : current))
+      const videoChapters = groupVideosByChapter(legacyVideos)
+      if (isCurrent()) storeChapters(courseId, videoChapters)
       if (legacyVideos.length > 0) {
         setCourseStructure((current) => {
           if (!isCurrent() || current.length > 0) return current
+          if (videoChapters.length > 0) {
+            return videoChapters
+          }
           return [{
             id: `${courseId}-legacy`,
             title: '视频任务',
@@ -665,7 +734,7 @@ export default function Zhihuishu() {
     } finally {
       setVideosLoading((current) => (isCurrent() ? false : current))
     }
-  }, [loadCourseDetail, setNoticeMessage])
+  }, [loadCourseDetail, setNoticeMessage, storeChapters])
 
   const loadCourses = useCallback(async (silent = false, canWrite = () => true) => {
     if (!canWrite()) return []
@@ -934,6 +1003,31 @@ export default function Zhihuishu() {
     setNoticeMessage('success', '任务状态已刷新。')
   }, [fetchTaskList, loadCourseProgress, selectedCourseId, setNoticeMessage])
 
+  const chapterScope = useMemo(() => {
+    const chapters = chaptersByCourse[selectedCourseId] || []
+    const endChapterId = endChapterByCourse[selectedCourseId] || ''
+    const endIndex = endChapterId ? chapters.findIndex((chapter) => chapter.id === endChapterId) : -1
+    let hint = '默认学完整门课。想只学一部分，先加载章节再选。'
+    if (endIndex >= 0) {
+      const videoCount = chapters.slice(0, endIndex + 1).reduce((sum, chapter) => sum + chapter.videoCount, 0)
+      const skipped = chapters.length - endIndex - 1
+      hint = `只学到第 ${endIndex + 1} 章（含），共 ${videoCount} 个视频${skipped > 0 ? `；后面 ${skipped} 章不学` : ''}。`
+    } else if (chapters.length > 0) {
+      hint = '默认学完整门课；选一章后只学到这一章（含）。'
+    }
+    return { chapters, endChapterId: endIndex >= 0 ? endChapterId : '', hint }
+  }, [chaptersByCourse, endChapterByCourse, selectedCourseId])
+
+  const setEndChapter = useCallback((chapterId) => {
+    if (!selectedCourseId) return
+    setEndChapterByCourse((prev) => {
+      const next = { ...prev }
+      if (chapterId) next[selectedCourseId] = chapterId
+      else delete next[selectedCourseId]
+      return next
+    })
+  }, [selectedCourseId])
+
   const startCourseTask = useCallback(async (taskType = 'course') => {
     if (!selectedCourseId || startLoadingType) {
       if (!selectedCourseId) {
@@ -943,10 +1037,12 @@ export default function Zhihuishu() {
     }
 
     setStartLoadingType(taskType)
+    const endChapterId = chapterScope.endChapterId
     const payload = {
       course_id: selectedCourseId,
       speed: Number(settings.speed) || 1,
-      auto_answer: settings.autoAnswer
+      auto_answer: settings.autoAnswer,
+      ...(endChapterId ? { end_chapter_id: endChapterId } : {})
     }
 
     try {
@@ -995,7 +1091,7 @@ export default function Zhihuishu() {
     } finally {
       setStartLoadingType('')
     }
-  }, [courses, fetchTaskDetail, requestZhihuishuApi, selectActiveTask, selectedCourseId, setNoticeMessage, settings.autoAnswer, settings.speed, startLoadingType, upsertTaskRecord])
+  }, [chapterScope.endChapterId, courses, fetchTaskDetail, requestZhihuishuApi, selectActiveTask, selectedCourseId, setNoticeMessage, settings.autoAnswer, settings.speed, startLoadingType, upsertTaskRecord])
 
   const cancelTaskById = useCallback(async (taskId) => {
     if (!taskId || taskActionLoading || taskItemActionLoading) return
@@ -1679,6 +1775,40 @@ export default function Zhihuishu() {
                     onChange={(next) => setSettings((prev) => ({ ...prev, autoAnswer: next }))}
                   />
                 </div>
+              </div>
+
+              <div>
+                <label htmlFor="zhs-end-chapter" className="mb-2 block text-sm font-medium text-text">学到哪一章</label>
+                <div className="flex gap-2">
+                  <select
+                    id="zhs-end-chapter"
+                    className={`${FIELD_CLASS} min-w-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60`}
+                    value={chapterScope.endChapterId}
+                    disabled={!selectedCourseId || chapterScope.chapters.length === 0}
+                    aria-describedby="zhs-end-chapter-hint"
+                    onChange={(event) => setEndChapter(event.target.value)}
+                  >
+                    <option value="">全部章节</option>
+                    {chapterScope.chapters.map((chapter, index) => (
+                      <option key={chapter.id} value={chapter.id}>
+                        {index + 1}. {chapter.title}（{chapter.videoCount} 个视频）
+                      </option>
+                    ))}
+                  </select>
+                  {chapterScope.chapters.length === 0 && (
+                    <button
+                      type="button"
+                      className={`${ACTION_BUTTON_CLASS} shrink-0 bg-secondary/90 hover:bg-secondary`}
+                      onClick={() => {
+                        void loadChapters(selectedCourseId)
+                      }}
+                      disabled={!selectedCourseId || chaptersLoading}
+                    >
+                      {chaptersLoading ? '章节加载中...' : '加载章节'}
+                    </button>
+                  )}
+                </div>
+                <p id="zhs-end-chapter-hint" className="mt-1 text-xs text-text/60">{chapterScope.hint}</p>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

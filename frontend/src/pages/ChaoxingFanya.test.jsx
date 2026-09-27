@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
     setNotice: vi.fn(),
     loadCourses: vi.fn(),
   },
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }))
 
 vi.mock('../components', () => ({
@@ -76,11 +76,21 @@ vi.mock('./chaoxing-fanya/components/ConfigSection', () => ({ default: () => nul
 vi.mock('./chaoxing-fanya/components/TaskHistorySection', () => ({ default: () => null }))
 vi.mock('./chaoxing-fanya/components/LogSection', () => ({ default: () => null }))
 vi.mock('./chaoxing-fanya/components/CourseListSection', () => ({
-  default: ({ selectedCourses, setSelectedCourses }) => (
+  default: ({ courses, selectedCourses, setSelectedCourses, chapterLimits, setChapterLimit, toggleExpand }) => (
     <>
+      <button type="button" onClick={() => void toggleExpand(courses[0])}>
+        展开或收起章节
+      </button>
       <output data-testid="selected-courses">{selectedCourses.join(',')}</output>
+      <output data-testid="chapter-limits">{JSON.stringify(chapterLimits)}</output>
       <button type="button" onClick={() => setSelectedCourses(mocks.selection || ['course-1'])}>
         选择课程
+      </button>
+      <button type="button" onClick={() => setChapterLimit(...(mocks.limit || ['course-1', 'chapter-2']))}>
+        设置章节终点
+      </button>
+      <button type="button" onClick={() => setChapterLimit(mocks.limit?.[0] || 'course-1', '')}>
+        学全部章节
       </button>
       <button
         type="button"
@@ -110,6 +120,7 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.courses = [{ courseId: 'course-1', name: '测试课程' }]
     mocks.auth.loadCourses.mockReset()
     mocks.selection = undefined
+    mocks.limit = undefined
     mocks.nextCourses = undefined
     mocks.nextCoursesAfterEmpty = undefined
     mocks.auth.callApi.mockReset()
@@ -117,6 +128,7 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.setNotice.mockReset()
     mocks.toast.error.mockReset()
     mocks.toast.success.mockReset()
+    mocks.toast.info.mockReset()
   })
 
   afterEach(() => {
@@ -193,6 +205,106 @@ describe('ChaoxingFanya start task loading state', () => {
       await user.click(screen.getByRole('button', { name: '开始刷课' }))
       expect(mocks.auth.callApi).not.toHaveBeenCalledWith('/course/start', expect.anything())
     }
+  })
+
+  test('choosing a last chapter selects the course and is sent with the start request', async () => {
+    mocks.auth.callApi.mockResolvedValue({ task_id: 'task-limit', status: 'pending' })
+
+    const user = userEvent.setup()
+    render(<ChaoxingFanya />)
+    await user.click(screen.getByRole('button', { name: '设置章节终点' }))
+
+    expect(screen.getByTestId('selected-courses')).toHaveTextContent('course-1')
+
+    await user.click(screen.getByRole('button', { name: '开始刷课' }))
+
+    await waitFor(() => expect(mocks.auth.callApi).toHaveBeenCalledWith('/course/start', expect.anything()))
+    const startBody = JSON.parse(mocks.auth.callApi.mock.calls.at(-1)[1].body)
+    expect(startBody.course_ids).toEqual(['course-1'])
+    expect(startBody.chapter_limits).toEqual({ 'course-1': 'chapter-2' })
+  })
+
+  test('clearing the limit studies the whole course again', async () => {
+    mocks.auth.callApi.mockResolvedValue({ task_id: 'task-all', status: 'pending' })
+
+    const user = userEvent.setup()
+    render(<ChaoxingFanya />)
+    await user.click(screen.getByRole('button', { name: '设置章节终点' }))
+    await user.click(screen.getByRole('button', { name: '学全部章节' }))
+
+    expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{}')
+    expect(screen.getByTestId('selected-courses')).toHaveTextContent('course-1')
+
+    await user.click(screen.getByRole('button', { name: '开始刷课' }))
+
+    await waitFor(() => expect(mocks.auth.callApi).toHaveBeenCalledWith('/course/start', expect.anything()))
+    const startBody = JSON.parse(mocks.auth.callApi.mock.calls.at(-1)[1].body)
+    expect(startBody.chapter_limits).toEqual({})
+  })
+
+  test('limits for unselected or vanished courses are not sent', async () => {
+    mocks.auth.courses = [{ courseId: 'course-a' }, { courseId: 'course-b' }]
+    mocks.limit = ['course-a', 'chapter-9']
+    mocks.selection = ['course-b']
+    mocks.nextCourses = [{ courseId: 'course-b' }]
+    mocks.auth.callApi.mockResolvedValue({ task_id: 'task-stale', status: 'pending' })
+
+    const user = userEvent.setup()
+    render(<ChaoxingFanya />)
+    await user.click(screen.getByRole('button', { name: '设置章节终点' }))
+    expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{"course-a":"chapter-9"}')
+
+    await user.click(screen.getByRole('button', { name: '刷新课程' }))
+    await waitFor(() => expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{}'))
+
+    await user.click(screen.getByRole('button', { name: '选择课程' }))
+    await user.click(screen.getByRole('button', { name: '开始刷课' }))
+
+    await waitFor(() => expect(mocks.auth.callApi).toHaveBeenCalledWith('/course/start', expect.anything()))
+    const startBody = JSON.parse(mocks.auth.callApi.mock.calls.at(-1)[1].body)
+    expect(startBody.course_ids).toEqual(['course-b'])
+    expect(startBody.chapter_limits).toEqual({})
+  })
+
+  test('reopening the chapter list fetches it again, closing does not', async () => {
+    mocks.auth.callApi.mockResolvedValue({ chapters: [{ id: 'chapter-2', title: '1.2' }] })
+
+    const user = userEvent.setup()
+    render(<ChaoxingFanya />)
+    const toggle = screen.getByRole('button', { name: '展开或收起章节' })
+    await user.click(toggle)
+    await user.click(toggle)
+    await user.click(toggle)
+
+    await waitFor(() => expect(mocks.auth.callApi).toHaveBeenCalledTimes(2))
+    expect(mocks.auth.callApi).toHaveBeenCalledWith('/course/chapters/course-1')
+  })
+
+  test('a limit whose chapter vanished on reload is cleared and the user is told', async () => {
+    mocks.auth.callApi.mockResolvedValue({ chapters: [{ id: 'chapter-1', title: '1.1' }] })
+
+    const user = userEvent.setup()
+    render(<ChaoxingFanya />)
+    await user.click(screen.getByRole('button', { name: '设置章节终点' }))
+    expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{"course-1":"chapter-2"}')
+
+    await user.click(screen.getByRole('button', { name: '展开或收起章节' }))
+
+    await waitFor(() => expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{}'))
+    expect(mocks.toast.info).toHaveBeenCalledWith(expect.stringContaining('已改回「全部章节」'))
+  })
+
+  test('a limit whose chapter is still there survives a reload', async () => {
+    mocks.auth.callApi.mockResolvedValue({ chapters: [{ id: 'chapter-1' }, { id: 'chapter-2' }] })
+
+    const user = userEvent.setup()
+    render(<ChaoxingFanya />)
+    await user.click(screen.getByRole('button', { name: '设置章节终点' }))
+    await user.click(screen.getByRole('button', { name: '展开或收起章节' }))
+
+    await waitFor(() => expect(mocks.auth.callApi).toHaveBeenCalledWith('/course/chapters/course-1'))
+    expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{"course-1":"chapter-2"}')
+    expect(mocks.toast.info).not.toHaveBeenCalled()
   })
 
   test('a failed refresh leaves the current selection untouched', async () => {

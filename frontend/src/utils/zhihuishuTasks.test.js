@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 
-import { applyCourseProgressToTaskRecords, applyTaskActionToRecords } from './zhihuishuTasks'
+import { applyCourseProgressToTaskRecords, applyTaskActionToRecords, groupVideosByChapter } from './zhihuishuTasks'
 
 describe('applyCourseProgressToTaskRecords', () => {
   test('updates only the active task when multiple tasks share one course', () => {
@@ -105,5 +105,28 @@ describe('applyTaskActionToRecords', () => {
     const resumed = applyTaskActionToRecords(tasks, { action: 'resume' })
     expect(resumed.find((task) => task.taskId === 'paused').status).toBe('running')
     expect(resumed.find((task) => task.taskId === 'running').status).toBe('running')
+  })
+})
+
+describe('groupVideosByChapter', () => {
+  test('groups videos into chapters in course order with counts', () => {
+    const v1 = { id: 'v1', chapter_id: 'ch1', chapter_title: '第一章 绪论' }
+    const v2 = { id: 'v2', chapter_id: 'ch1', chapter_title: '第一章 绪论' }
+    const v3 = { id: 'v3', chapter_id: 'ch2', chapter_title: '' }
+    const v4 = { id: 'v4', chapter_id: 'ch3', chapter_title: '第三章 进阶' }
+
+    expect(groupVideosByChapter([v1, v2, v3, v4])).toEqual([
+      { id: 'ch1', title: '第一章 绪论', videoCount: 2, videos: [v1, v2] },
+      { id: 'ch2', title: '第 2 章', videoCount: 1, videos: [v3] },
+      { id: 'ch3', title: '第三章 进阶', videoCount: 1, videos: [v4] },
+    ])
+  })
+
+  test('skips videos without a chapter id and tolerates bad input', () => {
+    const numbered = { id: 'v2', chapter_id: 7 }
+    expect(groupVideosByChapter([{ id: 'v1' }, numbered])).toEqual([
+      { id: '7', title: '第 1 章', videoCount: 1, videos: [numbered] },
+    ])
+    expect(groupVideosByChapter(null)).toEqual([])
   })
 })

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useToast } from '../components'
 
-import { CARD, getCourseId, mergeTaskHistory } from './chaoxing-fanya/utils'
+import { CARD, getChapterId, getCourseId, mergeTaskHistory } from './chaoxing-fanya/utils'
 
 
 import useTaskConfig from './chaoxing-fanya/hooks/useTaskConfig'
@@ -23,6 +23,12 @@ export default function ChaoxingFanya() {
 
 
   const [selectedCourses, setSelectedCourses] = useState([])
+  // courseId -> id of the last chapter to study (inclusive). Absent = whole course.
+  const [chapterLimits, setChapterLimits] = useState({})
+  const chapterLimitsRef = useRef(chapterLimits)
+  useEffect(() => {
+    chapterLimitsRef.current = chapterLimits
+  }, [chapterLimits])
   const [chapters, setChapters] = useState({})
   const [expanded, setExpanded] = useState(new Set())
 
@@ -54,7 +60,25 @@ export default function ChaoxingFanya() {
       const next = prev.filter((courseId) => availableCourseIds.has(courseId))
       return next.length === prev.length ? prev : next
     })
+    setChapterLimits((prev) => {
+      const entries = Object.entries(prev)
+      const next = entries.filter(([courseId]) => availableCourseIds.has(courseId))
+      return next.length === entries.length ? prev : Object.fromEntries(next)
+    })
   }, [auth.courses])
+
+  // Choosing a last chapter implies the course should be studied, so select it.
+  const setChapterLimit = useCallback((courseId, chapterId) => {
+    setChapterLimits((prev) => {
+      const next = { ...prev }
+      if (chapterId) next[courseId] = chapterId
+      else delete next[courseId]
+      return next
+    })
+    if (chapterId) {
+      setSelectedCourses((prev) => (prev.includes(courseId) ? prev : [...prev, courseId]))
+    }
+  }, [])
 
   // Surface auth errors / notices through the shared toast and immediately
   // clear the source so the same message can be re-announced if it recurs.
@@ -90,6 +114,7 @@ export default function ChaoxingFanya() {
       if (!courseId) return
 
 
+      const opening = !expanded.has(courseId)
       setExpanded((prev) => {
         const next = new Set(prev)
         if (next.has(courseId)) next.delete(courseId)
@@ -98,18 +123,26 @@ export default function ChaoxingFanya() {
       })
 
 
-      if (chapters[courseId]) return
+      // Refetch on every open: 已完成 / 待解锁 change as tasks run, and this
+      // list is where the user decides how far to study.
+      if (!opening) return
 
 
       try {
         const resp = await auth.callApi(`/course/chapters/${courseId}`)
         if (!resp) return
-        setChapters((prev) => ({ ...prev, [courseId]: resp.chapters || [] }))
+        const nextChapters = resp.chapters || []
+        setChapters((prev) => ({ ...prev, [courseId]: nextChapters }))
+        const chosen = chapterLimitsRef.current[courseId]
+        if (chosen && !nextChapters.some((chapter) => getChapterId(chapter) === chosen)) {
+          setChapterLimit(courseId, '')
+          toast.info('之前选的最后一节已不在这门课里，已改回「全部章节」，请重新选择。')
+        }
       } catch (err) {
         auth.setError(err?.message || '获取章节失败。')
       }
     },
-    [auth, chapters]
+    [auth, expanded, setChapterLimit, toast]
   )
 
 
@@ -145,6 +178,11 @@ export default function ChaoxingFanya() {
           username: auth.username.trim(),
           password: auth.password,
           course_ids: validSelectedCourses,
+          chapter_limits: Object.fromEntries(
+            validSelectedCourses
+              .filter((courseId) => chapterLimits[courseId])
+              .map((courseId) => [courseId, chapterLimits[courseId]])
+          ),
           speed: taskConfig.speed,
           concurrency: taskConfig.concurrency,
           unopened_strategy: taskConfig.unopenedStrategy,
@@ -208,6 +246,7 @@ export default function ChaoxingFanya() {
     taskExec,
     taskConfig,
     selectedCourses,
+    chapterLimits,
   ])
 
 
@@ -242,6 +281,8 @@ export default function ChaoxingFanya() {
               expanded={expanded}
               toggleExpand={toggleExpand}
               loadCourses={auth.loadCourses}
+              chapterLimits={chapterLimits}
+              setChapterLimit={setChapterLimit}
             />
 
             <CoursePortalSection

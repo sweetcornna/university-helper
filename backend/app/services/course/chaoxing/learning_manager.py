@@ -107,6 +107,55 @@ def _parse_course_selector(raw: str) -> tuple[str, str | None, str | None]:
     return parts[0], None, None
 
 
+def _course_matches_selector(course: dict[str, Any], selector: tuple[str, str | None, str | None]) -> bool:
+    target_course, target_clazz, target_cpi = selector
+    if target_course and str(course.get("courseId") or "") != target_course:
+        return False
+    if target_clazz and str(course.get("clazzId") or "") != target_clazz:
+        return False
+    if target_cpi and str(course.get("cpi") or "") != target_cpi:
+        return False
+    return True
+
+
+def _normalize_chapter_limits(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    limits: dict[str, str] = {}
+    for selector, point_id in raw.items():
+        selector_text = str(selector or "").strip()
+        point_text = str(point_id or "").strip()
+        if selector_text and point_text:
+            limits[selector_text] = point_text
+    return limits
+
+
+def _chapter_limit_for(course: dict[str, Any], limits: dict[str, str]) -> str | None:
+    """Return the id of the last chapter to study for ``course``, if one was chosen.
+
+    When several selectors match (``100`` and ``100_200_300``), the most
+    specific one wins.
+    """
+    best_point_id: str | None = None
+    best_specificity = 0
+    for selector, point_id in limits.items():
+        parsed = _parse_course_selector(selector)
+        if not parsed[0] or not _course_matches_selector(course, parsed):
+            continue
+        specificity = sum(1 for part in parsed if part)
+        if specificity > best_specificity:
+            best_point_id, best_specificity = point_id, specificity
+    return best_point_id
+
+
+def _points_up_to(points: list[dict[str, Any]], end_point_id: str) -> list[dict[str, Any]] | None:
+    """Chapters from the start through ``end_point_id`` (inclusive), or None if it is absent."""
+    for index, point in enumerate(points):
+        if str(point.get("id") or "") == end_point_id:
+            return points[: index + 1]
+    return None
+
+
 def _course_label(course: dict[str, Any]) -> str:
     return (
         str(course.get("title") or "").strip()
@@ -365,6 +414,7 @@ class ChaoxingLearningManager:
         if common_config["notopen_action"] not in {"retry", "ask", "continue"}:
             common_config["notopen_action"] = "retry"
 
+        chapter_limits = _normalize_chapter_limits(payload.get("chapter_limits"))
         tiku_config = normalize_tiku_config(payload.get("tiku_config"))
         notify_config = payload.get("notify_config")
         if not isinstance(notify_config, dict):
@@ -465,6 +515,29 @@ class ChaoxingLearningManager:
                 self._append_task_log(task_id, f"Fetch chapters failed for {course_name}: {exc}", "error")
                 self._update_progress(task_id, failed=failed_courses, current=index)
                 continue
+
+            end_point_id = _chapter_limit_for(course, chapter_limits)
+            if end_point_id:
+                limited_points = _points_up_to(points, end_point_id)
+                if limited_points is None:
+                    # Studying the whole course would overshoot what the user
+                    # asked for, so skip it instead.
+                    failed_courses += 1
+                    self._append_task_log(
+                        task_id,
+                        f"Chosen last chapter no longer exists in {course_name}; course skipped. "
+                        "Refresh the chapter list and choose again.",
+                        "error",
+                    )
+                    self._update_progress(task_id, failed=failed_courses, current=index)
+                    continue
+                self._append_task_log(
+                    task_id,
+                    f"Studying {course_name} up to \"{limited_points[-1].get('title', '')}\" "
+                    f"({len(limited_points)}/{len(points)} chapters)",
+                    "info",
+                )
+                points = limited_points
 
             if points:
                 self._increase_progress(task_id, "total_chapters", len(points))
@@ -650,12 +723,8 @@ class ChaoxingLearningManager:
             course_id = str(course.get("courseId") or "")
             clazz_id = str(course.get("clazzId") or "")
             cpi = str(course.get("cpi") or "")
-            for target_course, target_clazz, target_cpi in parsed:
-                if target_course and course_id != target_course:
-                    continue
-                if target_clazz and clazz_id != target_clazz:
-                    continue
-                if target_cpi and cpi != target_cpi:
+            for selector in parsed:
+                if not _course_matches_selector(course, selector):
                     continue
                 identity = f"{course_id}_{clazz_id}_{cpi}"
                 if identity not in seen:
