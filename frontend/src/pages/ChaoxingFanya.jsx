@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useToast } from '../components'
 
-import { CARD, getCourseId, mergeTaskHistory } from './chaoxing-fanya/utils'
+import { CARD, getChapterId, getCourseId, mergeTaskHistory } from './chaoxing-fanya/utils'
 
 
 import useTaskConfig from './chaoxing-fanya/hooks/useTaskConfig'
@@ -25,6 +25,10 @@ export default function ChaoxingFanya() {
   const [selectedCourses, setSelectedCourses] = useState([])
   // courseId -> id of the last chapter to study (inclusive). Absent = whole course.
   const [chapterLimits, setChapterLimits] = useState({})
+  const chapterLimitsRef = useRef(chapterLimits)
+  useEffect(() => {
+    chapterLimitsRef.current = chapterLimits
+  }, [chapterLimits])
   const [chapters, setChapters] = useState({})
   const [expanded, setExpanded] = useState(new Set())
 
@@ -110,6 +114,7 @@ export default function ChaoxingFanya() {
       if (!courseId) return
 
 
+      const opening = !expanded.has(courseId)
       setExpanded((prev) => {
         const next = new Set(prev)
         if (next.has(courseId)) next.delete(courseId)
@@ -118,18 +123,26 @@ export default function ChaoxingFanya() {
       })
 
 
-      if (chapters[courseId]) return
+      // Refetch on every open: 已完成 / 待解锁 change as tasks run, and this
+      // list is where the user decides how far to study.
+      if (!opening) return
 
 
       try {
         const resp = await auth.callApi(`/course/chapters/${courseId}`)
         if (!resp) return
-        setChapters((prev) => ({ ...prev, [courseId]: resp.chapters || [] }))
+        const nextChapters = resp.chapters || []
+        setChapters((prev) => ({ ...prev, [courseId]: nextChapters }))
+        const chosen = chapterLimitsRef.current[courseId]
+        if (chosen && !nextChapters.some((chapter) => getChapterId(chapter) === chosen)) {
+          setChapterLimit(courseId, '')
+          toast.info('之前选的最后一节已不在这门课里，已改回「全部章节」，请重新选择。')
+        }
       } catch (err) {
         auth.setError(err?.message || '获取章节失败。')
       }
     },
-    [auth, chapters]
+    [auth, expanded, setChapterLimit, toast]
   )
 
 

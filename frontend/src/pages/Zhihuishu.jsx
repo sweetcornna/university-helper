@@ -248,6 +248,8 @@ export default function Zhihuishu() {
   const courseViewGenerationRef = useRef(0)
   const courseDetailRequestRef = useRef(0)
   const videosRequestRef = useRef(0)
+  const chaptersRequestRef = useRef(0)
+  const endChapterByCourseRef = useRef({})
   const progressRequestRef = useRef(0)
   const taskRecordsRef = useRef([])
   const activeTaskIdRef = useRef('')
@@ -294,6 +296,7 @@ export default function Zhihuishu() {
   // last chapter to study (absent = whole course).
   const [chaptersByCourse, setChaptersByCourse] = useState({})
   const [endChapterByCourse, setEndChapterByCourse] = useState({})
+  const [chaptersLoading, setChaptersLoading] = useState(false)
 
   const [progress, setProgress] = useState(null)
   const [progressLoading, setProgressLoading] = useState(false)
@@ -330,6 +333,10 @@ export default function Zhihuishu() {
   useEffect(() => {
     taskRecordsRef.current = taskRecords
   }, [taskRecords])
+
+  useEffect(() => {
+    endChapterByCourseRef.current = endChapterByCourse
+  }, [endChapterByCourse])
 
   const [settings, setSettings] = useState({
     speed: '1.0',
@@ -623,6 +630,49 @@ export default function Zhihuishu() {
     }
   }, [requestZhihuishuApi, setNoticeMessage])
 
+  // Stores a course's chapters. A chosen end chapter that is no longer in the
+  // list is dropped, and the user is told, since the course would otherwise be
+  // studied in full without them noticing.
+  const storeChapters = useCallback((courseId, videoChapters) => {
+    setChaptersByCourse((prev) => ({ ...prev, [courseId]: videoChapters }))
+    const chosen = endChapterByCourseRef.current[courseId]
+    if (chosen && !videoChapters.some((chapter) => chapter.id === chosen)) {
+      setEndChapterByCourse((prev) => {
+        const next = { ...prev }
+        delete next[courseId]
+        return next
+      })
+      setNoticeMessage('info', '之前选的最后一章已不在这门课里，已改回「全部章节」，请重新选择。')
+    }
+  }, [setNoticeMessage])
+
+  // Chapters always come from the video list: its chapter ids are the ones the
+  // task start endpoint matches end_chapter_id against. They are stored per
+  // course, so a reply that lands after a course switch is still kept.
+  const loadChapters = useCallback(async (courseId) => {
+    if (!courseId) return
+    const requestGeneration = chaptersRequestRef.current + 1
+    chaptersRequestRef.current = requestGeneration
+    const isCurrent = () => mountedRef.current && chaptersRequestRef.current === requestGeneration
+
+    setChaptersLoading(true)
+    try {
+      const resp = await api(`${ZHIHUISHU_API_BASE}/videos/${courseId}`, { method: 'GET' })
+      if (!isCurrent()) return
+      const videoChapters = groupVideosByChapter(parseList(resp, 'data', 'videos'))
+      storeChapters(courseId, videoChapters)
+      if (videoChapters.length === 0) {
+        setNoticeMessage('info', '没有读到这门课的章节，只能学完整门课。')
+      }
+    } catch (err) {
+      if (isCurrent()) {
+        setNoticeMessage('error', err.message || '加载章节失败。')
+      }
+    } finally {
+      if (isCurrent()) setChaptersLoading(false)
+    }
+  }, [setNoticeMessage, storeChapters])
+
   const loadVideos = useCallback(async (courseId) => {
     if (!courseId) {
       setNoticeMessage('error', '请先选择课程。')
@@ -660,27 +710,12 @@ export default function Zhihuishu() {
       const legacyVideos = parseList(legacyResp, 'data', 'videos')
       setVideos((current) => (isCurrent() ? legacyVideos : current))
       const videoChapters = groupVideosByChapter(legacyVideos)
-      if (isCurrent()) {
-        setChaptersByCourse((prev) => ({ ...prev, [courseId]: videoChapters }))
-        setEndChapterByCourse((prev) => {
-          const chosen = prev[courseId]
-          if (!chosen || videoChapters.some((chapter) => chapter.id === chosen)) return prev
-          const next = { ...prev }
-          delete next[courseId]
-          return next
-        })
-      }
+      if (isCurrent()) storeChapters(courseId, videoChapters)
       if (legacyVideos.length > 0) {
         setCourseStructure((current) => {
           if (!isCurrent() || current.length > 0) return current
           if (videoChapters.length > 0) {
-            return videoChapters.map((chapter) => ({
-              id: chapter.id,
-              title: chapter.title,
-              videos: legacyVideos.filter(
-                (video) => String(video?.chapter_id ?? video?.chapterId ?? '').trim() === chapter.id
-              )
-            }))
+            return videoChapters
           }
           return [{
             id: `${courseId}-legacy`,
@@ -699,7 +734,7 @@ export default function Zhihuishu() {
     } finally {
       setVideosLoading((current) => (isCurrent() ? false : current))
     }
-  }, [loadCourseDetail, setNoticeMessage])
+  }, [loadCourseDetail, setNoticeMessage, storeChapters])
 
   const loadCourses = useCallback(async (silent = false, canWrite = () => true) => {
     if (!canWrite()) return []
@@ -968,6 +1003,31 @@ export default function Zhihuishu() {
     setNoticeMessage('success', '任务状态已刷新。')
   }, [fetchTaskList, loadCourseProgress, selectedCourseId, setNoticeMessage])
 
+  const chapterScope = useMemo(() => {
+    const chapters = chaptersByCourse[selectedCourseId] || []
+    const endChapterId = endChapterByCourse[selectedCourseId] || ''
+    const endIndex = endChapterId ? chapters.findIndex((chapter) => chapter.id === endChapterId) : -1
+    let hint = '默认学完整门课。想只学一部分，先加载章节再选。'
+    if (endIndex >= 0) {
+      const videoCount = chapters.slice(0, endIndex + 1).reduce((sum, chapter) => sum + chapter.videoCount, 0)
+      const skipped = chapters.length - endIndex - 1
+      hint = `只学到第 ${endIndex + 1} 章（含），共 ${videoCount} 个视频${skipped > 0 ? `；后面 ${skipped} 章不学` : ''}。`
+    } else if (chapters.length > 0) {
+      hint = '默认学完整门课；选一章后只学到这一章（含）。'
+    }
+    return { chapters, endChapterId: endIndex >= 0 ? endChapterId : '', hint }
+  }, [chaptersByCourse, endChapterByCourse, selectedCourseId])
+
+  const setEndChapter = useCallback((chapterId) => {
+    if (!selectedCourseId) return
+    setEndChapterByCourse((prev) => {
+      const next = { ...prev }
+      if (chapterId) next[selectedCourseId] = chapterId
+      else delete next[selectedCourseId]
+      return next
+    })
+  }, [selectedCourseId])
+
   const startCourseTask = useCallback(async (taskType = 'course') => {
     if (!selectedCourseId || startLoadingType) {
       if (!selectedCourseId) {
@@ -977,7 +1037,7 @@ export default function Zhihuishu() {
     }
 
     setStartLoadingType(taskType)
-    const endChapterId = endChapterByCourse[selectedCourseId] || ''
+    const endChapterId = chapterScope.endChapterId
     const payload = {
       course_id: selectedCourseId,
       speed: Number(settings.speed) || 1,
@@ -1031,7 +1091,7 @@ export default function Zhihuishu() {
     } finally {
       setStartLoadingType('')
     }
-  }, [courses, endChapterByCourse, fetchTaskDetail, requestZhihuishuApi, selectActiveTask, selectedCourseId, setNoticeMessage, settings.autoAnswer, settings.speed, startLoadingType, upsertTaskRecord])
+  }, [chapterScope.endChapterId, courses, fetchTaskDetail, requestZhihuishuApi, selectActiveTask, selectedCourseId, setNoticeMessage, settings.autoAnswer, settings.speed, startLoadingType, upsertTaskRecord])
 
   const cancelTaskById = useCallback(async (taskId) => {
     if (!taskId || taskActionLoading || taskItemActionLoading) return
@@ -1489,31 +1549,6 @@ export default function Zhihuishu() {
     })
   }, [taskRecords])
 
-  const chapterScope = useMemo(() => {
-    const chapters = chaptersByCourse[selectedCourseId] || []
-    const endChapterId = endChapterByCourse[selectedCourseId] || ''
-    const endIndex = endChapterId ? chapters.findIndex((chapter) => chapter.id === endChapterId) : -1
-    let hint = '默认学完整门课。想只学一部分，先加载章节再选。'
-    if (endIndex >= 0) {
-      const videoCount = chapters.slice(0, endIndex + 1).reduce((sum, chapter) => sum + chapter.videoCount, 0)
-      const skipped = chapters.length - endIndex - 1
-      hint = `只学到第 ${endIndex + 1} 章（含），共 ${videoCount} 个视频${skipped > 0 ? `；后面 ${skipped} 章不学` : ''}。`
-    } else if (chapters.length > 0) {
-      hint = '默认学完整门课；选一章后只学到这一章（含）。'
-    }
-    return { chapters, endChapterId: endIndex >= 0 ? endChapterId : '', hint }
-  }, [chaptersByCourse, endChapterByCourse, selectedCourseId])
-
-  const setEndChapter = useCallback((chapterId) => {
-    if (!selectedCourseId) return
-    setEndChapterByCourse((prev) => {
-      const next = { ...prev }
-      if (chapterId) next[selectedCourseId] = chapterId
-      else delete next[selectedCourseId]
-      return next
-    })
-  }, [selectedCourseId])
-
   const selectedCourseProgress = useMemo(() => {
     const payload = parseObject(progress, '')
     return {
@@ -1765,11 +1800,11 @@ export default function Zhihuishu() {
                       type="button"
                       className={`${ACTION_BUTTON_CLASS} shrink-0 bg-secondary/90 hover:bg-secondary`}
                       onClick={() => {
-                        void loadVideos(selectedCourseId)
+                        void loadChapters(selectedCourseId)
                       }}
-                      disabled={!selectedCourseId || videosLoading}
+                      disabled={!selectedCourseId || chaptersLoading}
                     >
-                      {videosLoading ? '章节加载中...' : '加载章节'}
+                      {chaptersLoading ? '章节加载中...' : '加载章节'}
                     </button>
                   )}
                 </div>

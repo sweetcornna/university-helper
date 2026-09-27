@@ -182,7 +182,11 @@ class ZhihuishuAdapter:
             state = lv.get(str(v.get("small_lesson_id"))) or lesson.get(str(v.get("lesson_id"))) or {}
             v["study_total_time"] = state.get("studyTotalTime") or 0
             v["watch_state"] = state.get("watchState") or 0
-            if int(v["watch_state"] or 0) == 1:
+            try:
+                watched = int(v["watch_state"]) == 1
+            except (TypeError, ValueError):
+                watched = False
+            if watched:
                 v["status"] = "completed"
 
     @staticmethod
@@ -397,13 +401,24 @@ class ZhihuishuAdapter:
         self, course_id: str, speed: float = 1.0, end_chapter_id: str | None = None
     ) -> dict[str, Any]:
         with self._task_lock:
+            previous_enabled = self.ai_config.get("enabled")
+            previous_answer_enabled = self.answer.ai_enabled if self.answer is not None else None
             self.ai_config["enabled"] = True
             self._config["ai_config"] = dict(self.ai_config)
             if self.answer is not None:
                 self.answer.ai_enabled = True
-        return self.start_course_task(
-            course_id, speed=speed, auto_answer=True, task_type="ai-course", end_chapter_id=end_chapter_id
-        )
+        try:
+            return self.start_course_task(
+                course_id, speed=speed, auto_answer=True, task_type="ai-course", end_chapter_id=end_chapter_id
+            )
+        except (ZhihuishuChapterNotFoundError, ZhihuishuTaskConflictError):
+            # No task was created, so do not leave AI answering switched on.
+            with self._task_lock:
+                self.ai_config["enabled"] = previous_enabled
+                self._config["ai_config"] = dict(self.ai_config)
+                if self.answer is not None:
+                    self.answer.ai_enabled = previous_answer_enabled
+            raise
 
     def get_status(self) -> dict[str, Any]:
         with self._task_lock:

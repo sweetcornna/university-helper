@@ -139,3 +139,12 @@ def test_limit_keyed_by_course_id_only_applies_to_that_course(worker):
 )
 def test_normalize_chapter_limits_drops_unusable_entries(raw, expected):
     assert lm._normalize_chapter_limits(raw) == expected
+
+
+def test_most_specific_limit_wins_when_selectors_overlap(worker):
+    _, processed = worker(
+        course_ids=["100_200_300"],
+        chapter_limits={"100": "p1", "100_200_300": "p3"},
+    )
+
+    assert processed == {"100": ["p1", "p2", "p3"]}

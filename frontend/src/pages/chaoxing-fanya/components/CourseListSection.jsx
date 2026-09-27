@@ -7,8 +7,7 @@ const BADGE = 'shrink-0 rounded-full px-2 py-0.5 text-xs'
 
 // Radio list for "study this course up to which chapter". The chosen chapter is
 // inclusive; everything after it is left alone.
-function ChapterLimitPicker({ courseId, courseName, chapterList, limitId, onChange }) {
-  const limitIndex = limitId ? chapterList.findIndex((chapter) => getChapterId(chapter) === limitId) : -1
+function ChapterLimitPicker({ courseId, courseName, chapterList, limitId, limitIndex, onChange }) {
   const radioName = `chapter-limit-${courseId}`
 
   return (
@@ -61,9 +60,8 @@ function ChapterLimitPicker({ courseId, courseName, chapterList, limitId, onChan
 }
 
 
-function ChapterLimitSummary({ chapterList, limitId }) {
+function ChapterLimitSummary({ chapterList, limitId, limitIndex }) {
   if (!limitId) return null
-  const limitIndex = chapterList.findIndex((chapter) => getChapterId(chapter) === limitId)
   const text = limitIndex >= 0
     ? `学到 ${limitIndex + 1}/${chapterList.length} 节：${getChapterTitle(chapterList[limitIndex])}`
     : '学到所选章节'
@@ -202,6 +200,7 @@ export default function CourseListSection({
           const isExpanded = expanded.has(courseId)
           const chapterList = chapters[courseId] || []
           const limitId = chapterLimits[courseId] || ''
+          const limitIndex = limitId ? chapterList.findIndex((chapter) => getChapterId(chapter) === limitId) : -1
 
 
           return (
@@ -252,7 +251,7 @@ export default function CourseListSection({
                   <p className="text-xs text-text-muted">{courseId || '--'}</p>
 
 
-                  <ChapterLimitSummary chapterList={chapterList} limitId={limitId} />
+                  <ChapterLimitSummary chapterList={chapterList} limitId={limitId} limitIndex={limitIndex} />
 
 
                 </div>
@@ -295,6 +294,7 @@ export default function CourseListSection({
                   courseName={getCourseName(course)}
                   chapterList={chapterList}
                   limitId={limitId}
+                  limitIndex={limitIndex}
                   onChange={setChapterLimit}
                 />
               ) : (

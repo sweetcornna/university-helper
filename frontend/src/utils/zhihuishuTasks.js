@@ -79,8 +79,8 @@ export const applyCourseProgressToTaskRecords = (
 }
 
 // Groups a flat video list from /course/zhihuishu/videos into its chapters, in
-// course order. Videos without a chapter id cannot be used as an end point, so
-// they are left out.
+// course order, each with its videos. Videos without a chapter id cannot be
+// used as an end point, so they are left out.
 export const groupVideosByChapter = (videos) => {
   const chapters = []
   const byId = new Map()
@@ -89,11 +89,15 @@ export const groupVideosByChapter = (videos) => {
     if (!id) return
     let chapter = byId.get(id)
     if (!chapter) {
-      chapter = { id, title: String(video?.chapter_title ?? video?.chapterTitle ?? '').trim(), videoCount: 0 }
+      chapter = { id, title: String(video?.chapter_title ?? video?.chapterTitle ?? '').trim(), videos: [] }
       byId.set(id, chapter)
       chapters.push(chapter)
     }
-    chapter.videoCount += 1
+    chapter.videos.push(video)
   })
-  return chapters.map((chapter, index) => ({ ...chapter, title: chapter.title || `第 ${index + 1} 章` }))
+  return chapters.map((chapter, index) => ({
+    ...chapter,
+    title: chapter.title || `第 ${index + 1} 章`,
+    videoCount: chapter.videos.length,
+  }))
 }

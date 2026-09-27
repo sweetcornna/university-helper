@@ -10,8 +10,10 @@ vi.mock('../utils/api', () => ({
   api: vi.fn(),
 }))
 
+const notify = vi.hoisted(() => vi.fn())
+
 vi.mock('../components', () => {
-  const toast = { notify: () => {} }
+  const toast = { notify }
   return {
     Input: ({ label, ...props }) => (
       <label>
@@ -71,7 +73,7 @@ const renderPage = () => render(
   </ToastProvider>,
 )
 
-const configureApi = (videoLists) => {
+const configureApi = (videoLists, { courseDetail = course } = {}) => {
   const queue = [...videoLists]
   api.mockImplementation((path, options = {}) => {
     if (path === '/course/zhihuishu/status') return Promise.resolve({ data: { logged_in: false } })
@@ -79,7 +81,7 @@ const configureApi = (videoLists) => {
     if (path === '/course/zhihuishu/courses/grouped') {
       return Promise.resolve({ data: [{ group: '本学期', courses: [course] }] })
     }
-    if (path === '/course/zhihuishu/courses/course-1') return Promise.resolve({ data: course })
+    if (path === '/course/zhihuishu/courses/course-1') return Promise.resolve({ data: courseDetail })
     if (path === VIDEOS_PATH) {
       const list = queue.length > 1 ? queue.shift() : queue[0]
       return Promise.resolve({ status: 'success', data: list })
@@ -122,6 +124,7 @@ describe('Zhihuishu 学到哪一章', () => {
   beforeEach(() => {
     localStorage.clear()
     api.mockReset()
+    notify.mockReset()
   })
 
   afterEach(() => {
@@ -164,6 +167,21 @@ describe('Zhihuishu 学到哪一章', () => {
     expect(startBody()).not.toHaveProperty('end_chapter_id')
   })
 
+  test('loads chapters from the video list even when the course detail has its own structure', async () => {
+    configureApi([FULL_COURSE], {
+      courseDetail: { ...course, chapters: [{ chapterId: 'detail-1', chapterName: '详情章节', videos: [{ videoId: 'x' }] }] },
+    })
+    renderPage()
+    await openCourse()
+
+    const select = await loadChapters()
+
+    expect(api.mock.calls.some(([path]) => path === VIDEOS_PATH)).toBe(true)
+    fireEvent.change(select, { target: { value: 'ch1' } })
+    await clickStart()
+    expect(startBody()).toMatchObject({ end_chapter_id: 'ch1' })
+  })
+
   test('drops a choice whose chapter is gone after reloading', async () => {
     configureApi([FULL_COURSE, FULL_COURSE.filter((item) => item.chapter_id !== 'ch3')])
     renderPage()
@@ -175,6 +193,7 @@ describe('Zhihuishu 学到哪一章', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '查看视频列表/结构' }))
     await waitFor(() => expect(select).toHaveValue(''))
+    expect(notify).toHaveBeenCalledWith('info', expect.stringContaining('已改回「全部章节」'))
 
     await clickStart()
     expect(startBody()).not.toHaveProperty('end_chapter_id')

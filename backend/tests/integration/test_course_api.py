@@ -241,6 +241,29 @@ async def test_zhihuishu_task_start_reports_a_missing_end_chapter_as_400():
     assert exc_info.value.detail == CHAPTER_NOT_FOUND_DETAIL
 
 
+@pytest.mark.asyncio
+async def test_zhihuishu_legacy_start_forwards_end_chapter_and_maps_missing_to_400():
+    adapter = _RecordingZhihuishuAdapter()
+    with patch("app.api.v1.course._get_zhihuishu_adapter", return_value=adapter):
+        await course_api.zhihuishu_start_course(
+            course_api.ZhihuishuCourseRequest(course_id="c1", end_chapter_id="ch2"),
+            current_user={"user_id": 1},
+        )
+    assert adapter.calls[0][2]["end_chapter_id"] == "ch2"
+
+    failing = _RecordingZhihuishuAdapter(error=ZhihuishuChapterNotFoundError())
+    with (
+        patch("app.api.v1.course._get_zhihuishu_adapter", return_value=failing),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await course_api.zhihuishu_start_course(
+            course_api.ZhihuishuCourseRequest(course_id="c1", end_chapter_id="gone"),
+            current_user={"user_id": 1},
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == CHAPTER_NOT_FOUND_DETAIL
+
+
 def test_zhihuishu_end_chapter_id_is_bounded():
     with pytest.raises(ValidationError):
         course_api.ZhihuishuTaskStartRequest(course_id="c1", end_chapter_id="x" * 129)

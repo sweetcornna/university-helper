@@ -164,3 +164,29 @@ def test_watched_videos_are_listed_as_completed():
 
     assert statuses["v1"] == "completed"
     assert statuses["v2"] == "pending"
+
+
+def test_unreadable_watch_state_does_not_break_the_video_list():
+    adapter = _adapter()
+
+    def query_study_info(lesson_ids, video_ids, recruit_id):
+        del lesson_ids, video_ids, recruit_id
+        return {"lesson": {"Lv1": {"watchState": "done"}}}
+
+    adapter.learning.query_study_info = query_study_info
+
+    videos = adapter.get_videos("c-1")
+
+    assert len(videos) == 5
+    assert videos[0]["status"] == "pending"
+
+
+def test_rejected_ai_start_leaves_ai_answering_as_it_was():
+    adapter = _adapter()
+    assert adapter.ai_config.get("enabled") is False
+
+    with pytest.raises(ZhihuishuChapterNotFoundError):
+        adapter.start_ai_course_task("c-1", end_chapter_id="gone")
+
+    assert adapter.ai_config["enabled"] is False
+    assert adapter.get_config()["ai_config"]["enabled"] is False

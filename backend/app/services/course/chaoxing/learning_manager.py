@@ -131,12 +131,21 @@ def _normalize_chapter_limits(raw: Any) -> dict[str, str]:
 
 
 def _chapter_limit_for(course: dict[str, Any], limits: dict[str, str]) -> str | None:
-    """Return the id of the last chapter to study for ``course``, if one was chosen."""
+    """Return the id of the last chapter to study for ``course``, if one was chosen.
+
+    When several selectors match (``100`` and ``100_200_300``), the most
+    specific one wins.
+    """
+    best_point_id: str | None = None
+    best_specificity = 0
     for selector, point_id in limits.items():
         parsed = _parse_course_selector(selector)
-        if parsed[0] and _course_matches_selector(course, parsed):
-            return point_id
-    return None
+        if not parsed[0] or not _course_matches_selector(course, parsed):
+            continue
+        specificity = sum(1 for part in parsed if part)
+        if specificity > best_specificity:
+            best_point_id, best_specificity = point_id, specificity
+    return best_point_id
 
 
 def _points_up_to(points: list[dict[str, Any]], end_point_id: str) -> list[dict[str, Any]] | None:

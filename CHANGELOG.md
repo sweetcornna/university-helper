@@ -10,13 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 学习通刷课 can now study part of a course. Open a course's 「选章节」 list and
   pick the last section to study; the task stops after that section and skips
   the rest. Each selected course can have its own end point, and courses with
-  no choice are studied in full. If the chosen section is no longer in the
-  course when the task runs, that course is skipped and logged instead of
-  being studied in full.
+  no choice are studied in full. The list is reloaded every time it is
+  opened, so 已完成 and 待解锁 are current. If a reload no longer contains the
+  chosen section, the choice goes back to 「全部章节」 and a message says so.
+  If the section has gone by the time the task runs, that course is skipped
+  and logged instead of being studied in full.
 - 智慧树 (知到) can do the same per course. Press 「加载章节」 on the 课程 tab,
   choose a chapter under 「学到哪一章」, and the task stops after that
-  chapter's last video. If the chapter is gone when the task starts, the start
-  is refused with a message asking you to reload the list. The 课程结构 panel
+  chapter's last video. If a reload no longer contains the chosen chapter, the
+  choice goes back to 「全部章节」 and a message says so. If the chapter is gone
+  when the task starts, the start is refused with a message asking you to
+  reload the list. The 课程结构 panel
   now lists the real chapters instead of one 「视频任务」 group.
 
 ### Fixed
