@@ -742,7 +742,7 @@ wheels = [
 
 [[package]]
 name = "university-helper-backend"
-version = "1.4.7"
+version = "1.5.0"
 source = { editable = "." }
 
 [package.optional-dependencies]

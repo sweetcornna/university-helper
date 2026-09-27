@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-27
+
 ### Added
 - 学习通刷课 can now study part of a course. Open a course's 「选章节」 list and
   pick the last section to study; the task stops after that section and skips
