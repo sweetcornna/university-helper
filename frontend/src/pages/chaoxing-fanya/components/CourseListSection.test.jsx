@@ -66,3 +66,70 @@ describe('CourseListSection selection state', () => {
     expect(refreshButton).toHaveTextContent('刷新课程')
   })
 })
+
+describe('CourseListSection chapter limit picker', () => {
+  const chapterList = [
+    { id: 'p1', title: '1.1 绪论', has_finished: true },
+    { id: 'p2', title: '1.2 基础' },
+    { id: 'p3', title: '2.1 进阶', need_unlock: true },
+  ]
+
+  const renderPicker = (chapterLimits = {}, setChapterLimit = vi.fn()) => {
+    render(
+      <CourseListSection
+        courses={[{ courseId: 'course-a', name: '高等数学' }]}
+        selectedCourses={[]}
+        setSelectedCourses={() => {}}
+        chapters={{ 'course-a': chapterList }}
+        expanded={new Set(['course-a'])}
+        toggleExpand={() => {}}
+        loadCourses={() => Promise.resolve()}
+        chapterLimits={chapterLimits}
+        setChapterLimit={setChapterLimit}
+      />,
+    )
+    return setChapterLimit
+  }
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  test('defaults to studying every chapter', () => {
+    renderPicker()
+
+    expect(screen.getByRole('group', { name: '高等数学 学到哪一节' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: '全部章节' })).toBeChecked()
+    expect(screen.queryByText('不学')).not.toBeInTheDocument()
+    expect(screen.getByText('已完成')).toBeInTheDocument()
+    expect(screen.getByText('待解锁')).toBeInTheDocument()
+  })
+
+  test('choosing a chapter reports it as the last one to study', async () => {
+    const setChapterLimit = renderPicker()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('radio', { name: /1\.2 基础/ }))
+
+    expect(setChapterLimit).toHaveBeenCalledWith('course-a', 'p2')
+  })
+
+  test('marks chapters after the limit as skipped and summarises the choice', () => {
+    renderPicker({ 'course-a': 'p2' })
+
+    expect(screen.getByRole('radio', { name: /1\.2 基础/ })).toBeChecked()
+    expect(screen.getByRole('radio', { name: '全部章节' })).not.toBeChecked()
+    expect(screen.getAllByText('不学')).toHaveLength(1)
+    expect(screen.getByRole('radio', { name: /2\.1 进阶/ })).toHaveAccessibleName(/不学/)
+    expect(screen.getByText('学到 2/3 节：1.2 基础')).toBeInTheDocument()
+  })
+
+  test('picking 全部章节 clears the limit', async () => {
+    const setChapterLimit = renderPicker({ 'course-a': 'p2' })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('radio', { name: '全部章节' }))
+
+    expect(setChapterLimit).toHaveBeenCalledWith('course-a', '')
+  })
+})

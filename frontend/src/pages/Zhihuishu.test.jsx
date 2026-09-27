@@ -183,3 +183,24 @@ describe('Zhihuishu task polling', () => {
     expect(countRequests('/course/zhihuishu/tasks/task-1/cancel')).toBe(0)
   })
 })
+
+describe('Zhihuishu speed setting', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    api.mockReset()
+  })
+
+  test('shows a whole-number speed from the config API as its option', async () => {
+    // The config API answers speed: 1 (JSON drops the ".0"); the select's
+    // options are "0.5", "1.0", ... so "1" used to fall back to showing 0.5x.
+    createApiMock()
+    renderPage()
+    await flushPromises()
+
+    fireEvent.click(screen.getByRole('tab', { name: '课程' }))
+
+    const speed = screen.getByRole('combobox', { name: '学习倍速' })
+    expect(speed).toHaveValue('1.0')
+    expect(speed.selectedOptions[0]).toHaveTextContent('1.0x')
+  })
+})

@@ -10,6 +10,7 @@ from starlette.datastructures import FormData, Headers, UploadFile
 
 import app.api.v1.chaoxing as chaoxing_api
 import app.api.v1.course as course_api
+from app.services.course.zhihuishu.adapter import CHAPTER_NOT_FOUND_DETAIL, ZhihuishuChapterNotFoundError
 
 
 class FakeZhihuishuAdapter:
@@ -146,6 +147,103 @@ async def test_start_course_success():
 
     assert response.status == "started"
     assert response.task_id
+
+
+@pytest.mark.asyncio
+async def test_start_course_forwards_chapter_limits():
+    request = course_api.CourseStartRequest(
+        platform="chaoxing",
+        username="testuser",
+        password="testpass",
+        course_ids=["100_200_300"],
+        chapter_limits={" 100_200_300 ": " 555 "},
+    )
+    with patch("app.api.v1.course._get_learning_manager") as get_learning_manager:
+        get_learning_manager.return_value.start_task.return_value = "learning-task-1"
+        await course_api.start_course_learning(request, current_user={"user_id": 1})
+
+    payload = get_learning_manager.return_value.start_task.call_args.kwargs["payload"]
+    assert payload["chapter_limits"] == {"100_200_300": "555"}
+
+
+@pytest.mark.parametrize(
+    "chapter_limits",
+    [
+        {str(index): "1" for index in range(101)},
+        {"100_200_300": ""},
+        {"100_200_300": "x" * 65},
+    ],
+)
+def test_start_course_rejects_bad_chapter_limits(chapter_limits):
+    with pytest.raises(ValidationError):
+        course_api.CourseStartRequest(
+            platform="chaoxing",
+            username="u",
+            password="p",
+            chapter_limits=chapter_limits,
+        )
+
+
+class _RecordingZhihuishuAdapter:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def get_config(self):
+        return {"speed": 1.0, "auto_answer": True}
+
+    def start_course_task(self, course_id, **kwargs):
+        self.calls.append(("course", course_id, kwargs))
+        if self.error:
+            raise self.error
+        return {"task_id": "z-1", "status": "running", "progress": {}}
+
+    def start_ai_course_task(self, course_id, **kwargs):
+        self.calls.append(("ai-course", course_id, kwargs))
+        return {"task_id": "z-2", "status": "running", "progress": {}}
+
+
+@pytest.mark.asyncio
+async def test_zhihuishu_task_start_forwards_end_chapter():
+    adapter = _RecordingZhihuishuAdapter()
+    with patch("app.api.v1.course._get_zhihuishu_adapter", return_value=adapter):
+        await course_api.zhihuishu_start_course_task(
+            course_api.ZhihuishuTaskStartRequest(course_id="c1", end_chapter_id=" ch2 "),
+            current_user={"user_id": 1},
+        )
+        await course_api.zhihuishu_start_ai_course_task(
+            course_api.ZhihuishuTaskStartRequest(course_id="c1", end_chapter_id="ch3"),
+            current_user={"user_id": 1},
+        )
+        await course_api.zhihuishu_start_course_task(
+            course_api.ZhihuishuTaskStartRequest(course_id="c1", end_chapter_id="  "),
+            current_user={"user_id": 1},
+        )
+
+    assert adapter.calls[0][2]["end_chapter_id"] == "ch2"
+    assert adapter.calls[1][2]["end_chapter_id"] == "ch3"
+    assert "end_chapter_id" not in adapter.calls[2][2]
+
+
+@pytest.mark.asyncio
+async def test_zhihuishu_task_start_reports_a_missing_end_chapter_as_400():
+    adapter = _RecordingZhihuishuAdapter(error=ZhihuishuChapterNotFoundError())
+    with (
+        patch("app.api.v1.course._get_zhihuishu_adapter", return_value=adapter),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await course_api.zhihuishu_start_course_task(
+            course_api.ZhihuishuTaskStartRequest(course_id="c1", end_chapter_id="gone"),
+            current_user={"user_id": 1},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == CHAPTER_NOT_FOUND_DETAIL
+
+
+def test_zhihuishu_end_chapter_id_is_bounded():
+    with pytest.raises(ValidationError):
+        course_api.ZhihuishuTaskStartRequest(course_id="c1", end_chapter_id="x" * 129)
 
 
 @pytest.mark.asyncio

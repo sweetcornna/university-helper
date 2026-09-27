@@ -98,6 +98,13 @@ export const getCourseName = (course) => {
 }
 
 
+export const getChapterId = (chapter) => normalizeCourseText(chapter?.id)
+
+
+export const getChapterTitle = (chapter) =>
+  normalizeCourseText(chapter?.title) || normalizeCourseText(chapter?.name) || '未命名章节'
+
+
 export const normalizeTaskItem = (task) => {
 
 

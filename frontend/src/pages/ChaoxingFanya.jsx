@@ -23,6 +23,8 @@ export default function ChaoxingFanya() {
 
 
   const [selectedCourses, setSelectedCourses] = useState([])
+  // courseId -> id of the last chapter to study (inclusive). Absent = whole course.
+  const [chapterLimits, setChapterLimits] = useState({})
   const [chapters, setChapters] = useState({})
   const [expanded, setExpanded] = useState(new Set())
 
@@ -54,7 +56,25 @@ export default function ChaoxingFanya() {
       const next = prev.filter((courseId) => availableCourseIds.has(courseId))
       return next.length === prev.length ? prev : next
     })
+    setChapterLimits((prev) => {
+      const entries = Object.entries(prev)
+      const next = entries.filter(([courseId]) => availableCourseIds.has(courseId))
+      return next.length === entries.length ? prev : Object.fromEntries(next)
+    })
   }, [auth.courses])
+
+  // Choosing a last chapter implies the course should be studied, so select it.
+  const setChapterLimit = useCallback((courseId, chapterId) => {
+    setChapterLimits((prev) => {
+      const next = { ...prev }
+      if (chapterId) next[courseId] = chapterId
+      else delete next[courseId]
+      return next
+    })
+    if (chapterId) {
+      setSelectedCourses((prev) => (prev.includes(courseId) ? prev : [...prev, courseId]))
+    }
+  }, [])
 
   // Surface auth errors / notices through the shared toast and immediately
   // clear the source so the same message can be re-announced if it recurs.
@@ -145,6 +165,11 @@ export default function ChaoxingFanya() {
           username: auth.username.trim(),
           password: auth.password,
           course_ids: validSelectedCourses,
+          chapter_limits: Object.fromEntries(
+            validSelectedCourses
+              .filter((courseId) => chapterLimits[courseId])
+              .map((courseId) => [courseId, chapterLimits[courseId]])
+          ),
           speed: taskConfig.speed,
           concurrency: taskConfig.concurrency,
           unopened_strategy: taskConfig.unopenedStrategy,
@@ -208,6 +233,7 @@ export default function ChaoxingFanya() {
     taskExec,
     taskConfig,
     selectedCourses,
+    chapterLimits,
   ])
 
 
@@ -242,6 +268,8 @@ export default function ChaoxingFanya() {
               expanded={expanded}
               toggleExpand={toggleExpand}
               loadCourses={auth.loadCourses}
+              chapterLimits={chapterLimits}
+              setChapterLimit={setChapterLimit}
             />
 
             <CoursePortalSection
