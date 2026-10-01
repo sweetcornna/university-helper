@@ -31,6 +31,36 @@ DB_REPORT_INTERVAL = 30  # 真实秒：每 30 秒上报一次进度（与官方�
 COURSE_STATUSES = (0, 1)
 
 
+class ZhihuishuVerificationRequired(RuntimeError):
+    """The platform requires human verification before accepting progress."""
+
+
+def _response_payload(resp, stage: str, *, require_code: bool = False, allow_conflict: bool = False) -> dict:
+    """Keep the platform's diagnostic message instead of reducing errors to False.
+
+    Never include response bodies, request forms or cookies in errors/logs.
+    """
+    status = getattr(resp, "status_code", 200)
+    if not 200 <= status < 300:
+        raise RuntimeError(f"{stage}：HTTP {status}，请检查网络或重新登录")
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"{stage}：平台返回了非 JSON 内容，请检查登录状态或网络") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{stage}：平台响应格式异常")
+    code = payload.get("code")
+    accepted = (0, 200, -8) if allow_conflict else (0, 200)
+    if (code is not None and code not in accepted) or (require_code and code is None):
+        message = payload.get("message") or payload.get("msg") or "平台未提供错误说明"
+        message = " ".join(str(message).split())[:240]
+        error = f"{stage}：平台返回 code={code!r}，{message}"
+        if code == -12:
+            raise ZhihuishuVerificationRequired(error)
+        raise RuntimeError(error)
+    return payload
+
+
 def _extract(payload: dict) -> dict:
     """读取智慧树网关响应里的数据体。
 
@@ -87,7 +117,7 @@ class ZhihuishuLearning:
                     key=HOME_KEY,
                     site=ONLINEWEB,
                 )
-                result = _extract(resp.json())
+                result = _extract(_response_payload(resp, "获取课程列表"))
                 total = int(result.get("totalCount") or 0)
                 batch = list(result.get("courseOpenDtos") or [])
                 for page in range(2, math.ceil(total / PAGE_SIZE) + 1):
@@ -97,7 +127,7 @@ class ZhihuishuLearning:
                         key=HOME_KEY,
                         site=ONLINEWEB,
                     )
-                    batch.extend(_extract(resp.json()).get("courseOpenDtos") or [])
+                    batch.extend(_extract(_response_payload(resp, "获取课程列表")).get("courseOpenDtos") or [])
                 for course in batch:
                     if not isinstance(course, dict):
                         continue
@@ -126,7 +156,7 @@ class ZhihuishuLearning:
     def query_course(self, rac_id: str) -> dict:
         """查询课程信息（含 recruitId、courseInfo.courseId）。"""
         resp = self._signed_post(QUERY_COURSE_URL, {"recruitAndCourseId": rac_id}, key=VIDEO_KEY, site=STUDYH5)
-        return _extract(resp.json())
+        return _extract(_response_payload(resp, "查询课程信息"))
 
     def get_video_list(self, rac_id: str) -> dict:
         """获取章节/视频树（studyservice videolist）。
@@ -138,7 +168,7 @@ class ZhihuishuLearning:
         try:
             self.gologin(rac_id)
             resp = self._signed_post(VIDEO_LIST_URL, {"recruitAndCourseId": rac_id}, key=VIDEO_KEY, site=STUDYH5)
-            return _extract(resp.json())
+            return _extract(_response_payload(resp, "获取视频列表"))
         except Exception as e:
             raise Exception(f"Failed to get video list: {e}")
 
@@ -151,7 +181,7 @@ class ZhihuishuLearning:
         """
         payload = {"lessonIds": lesson_ids, "lessonVideoIds": video_ids, "recruitId": recruit_id}
         resp = self._signed_post(QUERY_STUDY_INFO_URL, payload, key=VIDEO_KEY, site=STUDYH5)
-        return _extract(resp.json())
+        return _extract(_response_payload(resp, "查询学习进度"))
 
     def _learning_token_id(self, video: dict) -> str | None:
         """从 prelearningNote 取 learningTokenId（``studiedLessonDto.id`` 的 base64）。"""
@@ -165,10 +195,10 @@ class ZhihuishuLearning:
             "videoId": video.get("video_id"),
         }
         resp = self._signed_post(PRELEARNING_NOTE_URL, payload, key=VIDEO_KEY, site=STUDYH5)
-        note = _extract(resp.json())
+        note = _extract(_response_payload(resp, "初始化小节学习"))
         token = (note.get("studiedLessonDto") or {}).get("id")
         if token is None:
-            return None
+            raise RuntimeError("初始化小节学习：平台未返回学习凭证，请重新登录并检查该小节是否可播放")
         return b64encode(str(token).encode()).decode()
 
     def _save_progress(self, video: dict, played: float, last_submit: float, watch_point: str, token_id):
@@ -198,7 +228,7 @@ class ZhihuishuLearning:
             "courseId": video.get("course_id"),
         }
         resp = self._signed_post(SAVE_DB_V2_URL, data, key=VIDEO_KEY, site=STUDYH5)
-        return resp.json().get("code")
+        return _response_payload(resp, "提交学习进度", require_code=True, allow_conflict=True).get("code")
 
     def watch_video(self, video: dict, speed: float = 1.0, is_cancelled=None, is_paused=None) -> bool:
         """真实上报某个视频的学习进度。
@@ -265,16 +295,32 @@ class ZhihuishuLearning:
                     watch_point.add(int(played))
                     code = self._save_progress(video, played, last_submit, watch_point.get(), token_id)
                     if code == -8:
-                        # 服务器已记录 >= 本次上报：该节已学满/被其他端推进，视为完成。
-                        return True
+                        # A higher recorded time does not prove completion. Recheck
+                        # the platform's watchState before counting this video done.
+                        small_id = video.get("small_lesson_id")
+                        info = self.query_study_info(
+                            [video.get("lesson_id")], [small_id] if small_id else [], video.get("recruit_id")
+                        )
+                        state = (
+                            (info.get("lv") or {}).get(str(small_id))
+                            or (info.get("lesson") or {}).get(str(video.get("lesson_id")))
+                            or {}
+                        )
+                        if str(state.get("watchState")) == "1":
+                            return True
+                        raise RuntimeError(
+                            "提交学习进度：平台返回 code=-8（学习总时长下降），但尚未确认完成；请刷新进度后重试"
+                        )
                     if code not in (0, 200, None):
                         return False
                     last_submit = played
                     watch_point.reset(int(played))
 
             return True
+        except ZhihuishuVerificationRequired:
+            raise
         except Exception as e:
-            raise Exception(f"Failed to watch video: {e}")
+            raise RuntimeError(f"Failed to watch video: {e}") from e
 
     def complete_course(self, rac_id: str) -> dict:
         """完成整个课程（遍历章节→小节→视频逐个上报）。

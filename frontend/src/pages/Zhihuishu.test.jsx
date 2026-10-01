@@ -34,7 +34,7 @@ const taskPayload = (status = 'running') => ({
   percentage: status === 'completed' ? 100 : 50,
 })
 
-const createApiMock = ({ taskDetail } = {}) => {
+const createApiMock = ({ taskDetail, verificationRefresh } = {}) => {
   api.mockImplementation((path) => {
     if (path === '/course/zhihuishu/config') {
       return Promise.resolve({ data: { speed: 1, auto_answer: true } })
@@ -55,6 +55,9 @@ const createApiMock = ({ taskDetail } = {}) => {
     }
     if (path === '/course/zhihuishu/tasks/task-1/cancel') {
       return Promise.resolve({ message: '任务已取消。' })
+    }
+    if (path === '/course/zhihuishu/tasks/task-1/refresh-verification') {
+      return verificationRefresh()
     }
     if (path === '/course/zhihuishu/courses/course-1') {
       return Promise.resolve({ data: { courseId: 'course-1', name: '高等数学' } })
@@ -90,7 +93,7 @@ describe('Zhihuishu task polling', () => {
   })
 
   afterEach(() => {
-    vi.runOnlyPendingTimers()
+    act(() => { vi.runOnlyPendingTimers() })
     vi.useRealTimers()
     vi.unstubAllGlobals()
   })
@@ -169,6 +172,21 @@ describe('Zhihuishu task polling', () => {
     expect(countRequests('/course/zhihuishu/tasks/task-1')).toBe(2)
   })
 
+  test('announces outstanding human verification without claiming that learning is complete', async () => {
+    let requests = 0
+    createApiMock({ taskDetail: () => {
+      requests += 1
+      return Promise.resolve({ data: requests === 1 ? taskPayload() : {
+        ...taskPayload('completed'), completed: 1, percentage: 50, verification_required: 1,
+      } })
+    } })
+    renderPage()
+    await flushPromises()
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(screen.getByText(/自动处理结束，待人工验证 1 节/)).toBeInTheDocument()
+    expect(screen.queryByText(/学习完成。/)).not.toBeInTheDocument()
+  })
+
   test('does not cancel an individual task when confirmation is rejected', async () => {
     window.confirm.mockReturnValue(false)
     createApiMock()
@@ -188,6 +206,49 @@ describe('Zhihuishu speed setting', () => {
   beforeEach(() => {
     localStorage.clear()
     api.mockReset()
+  })
+
+  test('lists skipped verification lessons and removes them after a platform completion refresh', async () => {
+    let manuallyCompleted = false
+    const detail = () => ({
+      ...taskPayload('completed'),
+      completed: manuallyCompleted ? 2 : 1,
+      percentage: manuallyCompleted ? 100 : 50,
+      verification_required: manuallyCompleted ? 0 : 1,
+      videos: [{ id: 'v1', title: '需人工处理的小节', status: manuallyCompleted ? 'completed' : 'needs_verification', error: '需要弹出滑块验证' }],
+    })
+    createApiMock({
+      taskDetail: () => Promise.resolve({ data: detail() }),
+      verificationRefresh: () => {
+        manuallyCompleted = true
+        return Promise.resolve({ data: detail() })
+      },
+    })
+    renderPage()
+    await flushPromises()
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+    expect(screen.getByText('待人工验证：1 节')).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: '待人工验证小节' })).toHaveTextContent('需人工处理的小节')
+    expect(screen.getByText('状态：自动处理结束，待人工处理')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '刷新人工处理结果' }))
+    await flushPromises()
+    expect(countRequests('/course/zhihuishu/tasks/task-1/refresh-verification')).toBe(1)
+    expect(screen.queryByRole('list', { name: '待人工验证小节' })).not.toBeInTheDocument()
+    expect(screen.getByText(/进度：2\/2/)).toBeInTheDocument()
+  })
+
+  test('preserves and displays the failed lesson reason from task details', async () => {
+    createApiMock({ taskDetail: () => Promise.resolve({ data: {
+      ...taskPayload('completed'),
+      failed: 1,
+      videos: [{ id: 'v1', title: '失败小节', status: 'failed', error: '提交学习进度：平台返回 code=-12，需要弹出滑块验证' }],
+    } }) })
+    renderPage()
+    await flushPromises()
+    fireEvent.click(screen.getByRole('tab', { name: '课程' }))
+    expect(screen.getByText(/失败原因：提交学习进度：平台返回 code=-12，需要弹出滑块验证/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+    expect(screen.getByText(/请在智慧树官方播放器完成人工验证/)).toBeInTheDocument()
   })
 
   test('shows a whole-number speed from the config API as its option', async () => {

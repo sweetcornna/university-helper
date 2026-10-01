@@ -131,8 +131,21 @@ map picker can call them without a JWT.
 | POST | `/course/zhihuishu/qr-login` | Begin Zhihuishu QR login; returns a session id and a QR PNG. |
 | POST | `/course/zhihuishu/password-login` | Zhihuishu phone + password login. |
 | POST | `/course/zhihuishu/tasks/course` | Enqueue a Zhihuishu course-learning task. |
+| GET | `/course/zhihuishu/tasks/{task_id}` | Read a task and its per-lesson results, including lessons awaiting human verification. |
+| POST | `/course/zhihuishu/tasks/{task_id}/refresh-verification` | Query platform completion for deferred lessons without submitting learning progress. Returns the updated task; unknown tasks return 404. |
+| POST | `/course/zhihuishu/resume` | Recheck deferred lessons and resume the current paused Zhihuishu task. |
 
-Tasks store JSONB payloads in the user's tenant DB (`course_task_store`).
+Chaoxing tasks store JSONB payloads in the user's tenant DB (`course_task_store`).
+Zhihuishu tasks and their deferred-lesson lists are held in the current user's
+adapter memory and reset when the service restarts. The task/progress field
+`verification_required` counts lessons with `status: "needs_verification"`.
+These lessons are excluded from both `completed` and `failed`; a completed task
+can mean its automatic pass ended with manual work outstanding. Two consecutive
+platform verification requests pause the task when unfinished lessons remain.
+Only platform `watchState=1` moves a deferred lesson to `completed`; refreshing
+again does not increment its count twice. Verification is completed in the
+official player by the user, and refresh/resume never solves a CAPTCHA.
+
 Polling clients should call `status` and `logs` with backoff. See
 `frontend/src/pages/ChaoxingFanya.jsx` and `Zhihuishu.jsx` for the reference
 client.
