@@ -278,6 +278,14 @@ wrong, read `desktop.log` in `~/Library/Logs/xyz.cornna.shuake/` (macOS),
 - React 18 + Vite 5 + Tailwind SPA with route-level code splitting, lazy-loaded heavy widgets, a global error boundary and authenticated routes.
 - Hardened docker-compose: non-root runtime, multi-stage build, security headers, nginx rate limiting and encrypted backups.
 
+When Zhihuishu requires human verification, the lesson is listed under
+「待人工验证」 and the task tries the next lesson. Two consecutive verification
+requests pause the task and leave the remaining lessons pending. Pause the local
+task before handling the listed lessons in the official player, then use
+「刷新人工处理结果」 to check completion or 「恢复」 to continue a paused task.
+Deferred lessons count as neither failures nor completed lessons; verification
+is performed by the user.
+
 ## Repository layout
 
 ```text

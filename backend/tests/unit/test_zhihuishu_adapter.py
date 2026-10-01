@@ -23,7 +23,7 @@ import pytest
 import app.services.course.zhihuishu.adapter as adapter_module
 from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
 from app.services.course.zhihuishu.crypto import HOME_KEY, VIDEO_KEY, Cipher
-from app.services.course.zhihuishu.learning import ZhihuishuLearning
+from app.services.course.zhihuishu.learning import ZhihuishuLearning, ZhihuishuVerificationRequired
 
 
 def _chapters(*videos, course_id="cc-1", recruit_id="r-1"):
@@ -254,7 +254,7 @@ def test_zero_duration_video_not_faked_complete():
     data = _chapters(("v0", "NoDur", 0))
     adapter = ZhihuishuAdapter(ai_config={"enabled": False})
     real_learning = ZhihuishuLearning(cookies={}, proxies={})
-    real_learning.get_course_list = lambda: []  # avoid network in _resolve_rac_id
+    real_learning.get_course_list = list  # avoid network in _resolve_rac_id
     real_learning.get_video_list = lambda rac_id: data
     real_learning.query_study_info = lambda *a, **k: {}  # avoid network in _annotate_watch_state
     adapter.learning = real_learning
@@ -349,8 +349,15 @@ def test_watch_video_skips_completed_video_without_network():
     learning.session.post = boom
     learning.session.get = boom
     video = {
-        "video_id": "v", "video_sec": 100, "watch_state": 1, "study_total_time": 100,
-        "small_lesson_id": 0, "lesson_id": "L", "chapter_id": "C", "recruit_id": "R", "course_id": "CC",
+        "video_id": "v",
+        "video_sec": 100,
+        "watch_state": 1,
+        "study_total_time": 100,
+        "small_lesson_id": 0,
+        "lesson_id": "L",
+        "chapter_id": "C",
+        "recruit_id": "R",
+        "course_id": "CC",
     }
     assert learning.watch_video(video) is True
 
@@ -371,8 +378,15 @@ def test_watch_video_resumes_from_study_total_time(monkeypatch):
 
     learning._save_progress = fake_save
     video = {
-        "video_id": "v", "video_sec": 10, "study_total_time": 4, "watch_state": 0,
-        "small_lesson_id": 0, "lesson_id": "L", "chapter_id": "C", "recruit_id": "R", "course_id": "CC",
+        "video_id": "v",
+        "video_sec": 10,
+        "study_total_time": 4,
+        "watch_state": 0,
+        "small_lesson_id": 0,
+        "lesson_id": "L",
+        "chapter_id": "C",
+        "recruit_id": "R",
+        "course_id": "CC",
     }
     assert learning.watch_video(video, speed=2.0) is True
     assert reports, "should have reported at least once"
@@ -380,19 +394,32 @@ def test_watch_video_resumes_from_study_total_time(monkeypatch):
     assert all(r["token"] == "tok" for r in reports)
 
 
-def test_watch_video_treats_code_minus8_as_already_complete(monkeypatch):
-    """A -8 ('学习总时长下降了') means the server is already ahead → treat as done, not failed."""
+@pytest.mark.parametrize("watch_state", [0, 1])
+def test_watch_video_verifies_completion_after_code_minus8(monkeypatch, watch_state):
+    """A progress conflict is only a success when the platform confirms watchState=1."""
     import app.services.course.zhihuishu.learning as learning_mod
 
     monkeypatch.setattr(learning_mod.time, "sleep", lambda *_: None)
     learning = ZhihuishuLearning(cookies={}, proxies={}, uuid="u")
     learning._learning_token_id = lambda video: "tok"
     learning._save_progress = lambda *a, **k: -8
+    learning.query_study_info = lambda *a, **k: {"lesson": {"L": {"watchState": watch_state}}}
     video = {
-        "video_id": "v", "video_sec": 10, "study_total_time": 0, "watch_state": 0,
-        "small_lesson_id": 0, "lesson_id": "L", "chapter_id": "C", "recruit_id": "R", "course_id": "CC",
+        "video_id": "v",
+        "video_sec": 10,
+        "study_total_time": 0,
+        "watch_state": 0,
+        "small_lesson_id": 0,
+        "lesson_id": "L",
+        "chapter_id": "C",
+        "recruit_id": "R",
+        "course_id": "CC",
     }
-    assert learning.watch_video(video, speed=2.0) is True
+    if watch_state == 1:
+        assert learning.watch_video(video, speed=2.0) is True
+    else:
+        with pytest.raises(RuntimeError, match="code=-8"):
+            learning.watch_video(video, speed=2.0)
 
 
 def test_annotate_watch_state_maps_study_info():
@@ -484,6 +511,163 @@ def test_flatten_videos_single_video_lesson_gets_zero_small_lesson_id():
     assert videos[0]["small_lesson_id"] == 0
     assert videos[0]["lesson_id"] == "Lv1"
     assert videos[0]["video_id"] == "v1"
+
+
+def test_platform_rejection_reaches_task_detail(monkeypatch):
+    import app.services.course.zhihuishu.learning as learning_mod
+
+    monkeypatch.setattr(learning_mod.time, "sleep", lambda *_: None)
+    adapter = ZhihuishuAdapter(ai_config={"enabled": False})
+    learning = ZhihuishuLearning(cookies={})
+    learning.get_video_list = lambda *_: _chapters(("v1", "Rejected lesson", 1))
+    learning.query_study_info = lambda *a, **k: {}
+    learning._learning_token_id = lambda *_: "test-token"
+    learning._signed_post = lambda *a, **k: _Resp({"code": -12, "message": "需要弹出滑块验证"})
+    adapter.learning = learning
+
+    started = adapter.start_course("c-rejected", auto_answer=False)
+    progress = _wait_for_terminal(adapter, "c-rejected")
+    detail = adapter.get_task(started["task_id"])
+
+    assert progress["completed"] == 0 and progress["failed"] == 0
+    assert progress["verification_required"] == 1
+    assert detail["videos"][0]["status"] == "needs_verification"
+    assert "提交学习进度" in detail["videos"][0]["error"]
+    assert "code=-12" in detail["videos"][0]["error"]
+    assert "需要弹出滑块验证" in detail["videos"][0]["error"]
+
+
+def _verification_adapter(*videos, verification_ids):
+    adapter = _make_adapter(_chapters(*videos), ai_enabled=False)
+    learning = adapter.learning
+    real_watch = learning.watch_video
+    learning.query_study_info = lambda *a, **k: {}
+
+    def watch(video, **kwargs):
+        result = real_watch(video, **kwargs)
+        if video["video_id"] in verification_ids:
+            raise ZhihuishuVerificationRequired("提交学习进度：平台返回 code=-12，需要弹出滑块验证")
+        return result
+
+    learning.watch_video = watch
+    return adapter
+
+
+def test_verification_is_deferred_while_next_lesson_can_complete():
+    adapter = _verification_adapter(("v1", "Manual", 1), ("v2", "Next", 1), verification_ids={"v1"})
+    started = adapter.start_course("course-deferred", auto_answer=False)
+    progress = _wait_for_terminal(adapter, "course-deferred")
+    detail = adapter.get_task(started["task_id"])
+
+    assert [v["status"] for v in detail["videos"]] == ["needs_verification", "completed"]
+    assert [c["video_id"] for c in adapter.learning.watch_calls] == ["v1", "v2"]
+    assert progress["completed"] == 1 and progress["failed"] == 0
+    assert progress["percentage"] == 50 and progress["verification_required"] == 1
+    assert "待人工验证 1 节" in progress["message"]
+
+
+def test_successful_submission_resets_consecutive_verification_pause():
+    adapter = _verification_adapter(
+        ("v1", "Manual A", 1),
+        ("v2", "Next A", 1),
+        ("v3", "Manual B", 1),
+        ("v4", "Next B", 1),
+        verification_ids={"v1", "v3"},
+    )
+    started = adapter.start_course("course-separated", auto_answer=False)
+    try:
+        progress = _wait_for_terminal(adapter, "course-separated")
+        assert progress["completed"] == 2 and progress["verification_required"] == 2
+        assert progress["failed"] == 0
+        detail = adapter.get_task(started["task_id"])
+        assert [v["status"] for v in detail["videos"]] == [
+            "needs_verification",
+            "completed",
+            "needs_verification",
+            "completed",
+        ]
+    finally:
+        adapter.cancel_task()
+
+
+def test_consecutive_verification_pauses_and_resume_rechecks_manual_completion():
+    adapter = _verification_adapter(
+        ("v1", "Manual A", 1), ("v2", "Manual B", 1), ("v3", "Remaining", 1), verification_ids={"v1", "v2"}
+    )
+    started = adapter.start_course("course-paused", auto_answer=False)
+    try:
+        assert _wait_until(lambda: adapter.get_progress("course-paused")["status"] == "paused")
+        detail = adapter.get_task(started["task_id"])
+        assert [v["status"] for v in detail["videos"]] == ["needs_verification", "needs_verification", "pending"]
+        assert detail["verification_required"] == 2 and detail["failed"] == 0
+        assert len(adapter.learning.watch_calls) == 2
+        adapter.learning.query_study_info = lambda *a, **k: {
+            "lesson": {"Lv1": {"watchState": 1, "studyTotalTime": 1}, "Lv2": {"watchState": 1, "studyTotalTime": 1}}
+        }
+        adapter.resume_task()
+        progress = _wait_for_terminal(adapter, "course-paused")
+        assert progress["completed"] == 3 and progress["verification_required"] == 0
+        assert progress["failed"] == 0 and progress["percentage"] == 100
+        assert [c["video_id"] for c in adapter.learning.watch_calls] == ["v1", "v2", "v3"]
+    finally:
+        adapter.cancel_task()
+
+
+def test_manual_refresh_only_counts_platform_completed_lessons_once():
+    adapter = _verification_adapter(("v1", "Manual", 1), ("v2", "Next", 1), verification_ids={"v1"})
+    started = adapter.start_course("course-recheck", auto_answer=False)
+    _wait_for_terminal(adapter, "course-recheck")
+    adapter.learning.query_study_info = lambda *a, **k: {"lesson": {"Lv1": {"watchState": 2, "studyTotalTime": 1}}}
+    unfinished = adapter.refresh_verification(started["task_id"])
+    assert unfinished["verification_required"] == 1 and unfinished["completed"] == 1
+    adapter.learning.query_study_info = lambda *a, **k: {"lesson": {"Lv1": {"watchState": "1", "studyTotalTime": 1}}}
+    for _ in range(2):
+        detail = adapter.refresh_verification(started["task_id"])
+        assert detail["verification_required"] == 0 and detail["completed"] == 2
+        assert detail["percentage"] == 100
+        assert "error" not in detail["videos"][0]
+    assert len(adapter.learning.watch_calls) == 2
+
+
+def test_cancelling_verification_pause_leaves_remaining_lessons_unattempted():
+    adapter = _verification_adapter(
+        ("v1", "Manual A", 1), ("v2", "Manual B", 1), ("v3", "Remaining", 1), verification_ids={"v1", "v2"}
+    )
+    started = adapter.start_course("course-cancel", auto_answer=False)
+    try:
+        assert _wait_until(lambda: adapter.get_progress("course-cancel")["status"] == "paused")
+    finally:
+        adapter.cancel_task()
+    detail = adapter.get_task(started["task_id"])
+    assert detail["status"] == "cancelled"
+    assert detail["videos"][2]["status"] == "pending"
+    assert len(adapter.learning.watch_calls) == 2
+
+
+@pytest.mark.parametrize("payload", [{}, {"code": None}, {"code": -1, "msg": "登录失效"}])
+def test_save_progress_does_not_accept_missing_or_rejected_code(payload):
+    learning = ZhihuishuLearning(cookies={})
+    learning._signed_post = lambda *a, **k: _Resp(payload)
+    with pytest.raises(RuntimeError, match="提交学习进度"):
+        learning._save_progress({"video_sec": 1}, 1, 0, "point", "test-token")
+
+
+def test_prelearning_missing_token_is_reported():
+    learning = ZhihuishuLearning(cookies={})
+    learning._signed_post = lambda *a, **k: _Resp({"code": 0, "data": {}})
+    with pytest.raises(RuntimeError, match="未返回学习凭证"):
+        learning._learning_token_id({})
+
+
+@pytest.mark.parametrize("status", [401, 403, 429, 502])
+def test_http_failure_is_reported_without_response_body(status):
+    learning = ZhihuishuLearning(cookies={})
+    response = _Resp({"sensitive_body": "do-not-log"})
+    response.status_code = status
+    learning._signed_post = lambda *a, **k: response
+    with pytest.raises(RuntimeError, match=f"HTTP {status}") as exc:
+        learning.query_study_info([], [], "r")
+    assert "do-not-log" not in str(exc.value)
 
 
 if __name__ == "__main__":

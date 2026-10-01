@@ -914,6 +914,18 @@ async def zhihuishu_get_task(task_id: str, current_user: dict = Depends(get_curr
     return {"status": "success", "message": "Task loaded", "data": task}
 
 
+@router.post("/zhihuishu/tasks/{task_id}/refresh-verification")
+async def zhihuishu_refresh_verification(task_id: str, current_user: dict = Depends(get_current_user)):
+    adapter = _get_zhihuishu_adapter(_current_user_id(current_user))
+    try:
+        task = await _run_blocking(adapter.refresh_verification, task_id)
+    except Exception as exc:
+        raise _internal_error("Failed to refresh human verification results", exc) from exc
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"status": "success", "message": "已重新核对人工处理结果", "data": task}
+
+
 @router.post("/zhihuishu/tasks/{task_id}/cancel")
 async def zhihuishu_cancel_task(task_id: str, current_user: dict = Depends(get_current_user)):
     user_id = _current_user_id(current_user)

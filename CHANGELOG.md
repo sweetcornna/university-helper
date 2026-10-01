@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Zhihuishu lessons that require human verification are deferred to a manual
+  list while the task attempts subsequent lessons. Two consecutive verification
+  requests pause the task. Users can recheck manual completion from the task
+  page and resume remaining lessons after handling verification in the official
+  player.
+
+### Fixed
+- Zhihuishu progress errors now retain the platform code and message in task
+  details. Missing progress response codes or learning credentials are reported
+  as errors, and a `-8` progress conflict is only treated as completion when the
+  platform confirms `watchState=1`.
+- Deferred or failed lessons no longer produce a misleading “learning complete”
+  notification, and cancellation is no longer logged as a platform rejection.
+
 ## [1.5.0] - 2026-09-27
 
 ### Added
