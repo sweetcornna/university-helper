@@ -27,10 +27,10 @@ export default function useTaskConfig() {
   const [coverageThreshold, setCoverageThreshold] = useState(0.9)
 
 
-  const [correctOptions, setCorrectOptions] = useState('对,正确,是')
+  const [correctOptions, setCorrectOptions] = useState('对,正确,是,√,T,True,true')
 
 
-  const [wrongOptions, setWrongOptions] = useState('错,错误,否')
+  const [wrongOptions, setWrongOptions] = useState('错,错误,否,×,F,False,false')
 
 
   const [submitMode, setSubmitMode] = useState('submit')

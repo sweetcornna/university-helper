@@ -359,6 +359,7 @@ cd frontend && npm run lint
 
 **题库、字体解密、验证码（直接使用）**
 - [SocialSisterYi/xuexiaoyi-to-xuexitong-tampermonkey-proxy](https://github.com/SocialSisterYi/xuexiaoyi-to-xuexitong-tampermonkey-proxy)：超星加密字体反混淆与题库代理（见 `backend/app/services/course/chaoxing/cxsecret_font.py`、`answer_cache.py`）。
+- 服务端镜像构建时会从 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing) 的固定提交下载 `resource/font_map_table.json` 并校验 SHA-256；该数据文件不存入本仓库，其上游仓库采用 GPL-3.0 许可证。
 - [DokiDoki1103/tikuAdapter](https://github.com/DokiDoki1103/tikuAdapter)：可插拔题库适配器（见 `answer_providers/adapter.py`）。
 - [sml2h3/ddddocr](https://github.com/sml2h3/ddddocr)：验证码 OCR 识别（见 `captcha.py`）。
 
