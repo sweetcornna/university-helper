@@ -218,6 +218,18 @@ class _ConflictAdapter:
 
 
 @pytest.mark.asyncio
+async def test_verification_refresh_uses_only_the_current_users_adapter(monkeypatch):
+    adapters = {"user-1": SimpleNamespace(refresh_verification=lambda task_id: {"task_id": task_id})}
+    monkeypatch.setattr(course_api, "_get_zhihuishu_adapter", lambda user_id: adapters[user_id])
+    result = await course_api.zhihuishu_refresh_verification("own-task", current_user={"user_id": "user-1"})
+    assert result["data"]["task_id"] == "own-task"
+    adapters["user-1"].refresh_verification = lambda task_id: None
+    with pytest.raises(HTTPException) as exc_info:
+        await course_api.zhihuishu_refresh_verification("other-task", current_user={"user_id": "user-1"})
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("endpoint", "payload"),
     (

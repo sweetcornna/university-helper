@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from .answer import ZhihuishuAnswer
 from .auth import ZhihuishuAuth
-from .learning import ZhihuishuLearning
+from .learning import ZhihuishuLearning, ZhihuishuVerificationRequired
 
 logger = logging.getLogger(__name__)
 UNEXPECTED_TASK_ERROR_PREFIX = "Unexpected task failure"
@@ -20,6 +20,7 @@ THREAD_START_FAILURE_MESSAGE = (
     "Server cannot start a new background thread. Stop existing tasks and retry, "
     "or restart the service if the problem persists."
 )
+VERIFICATION_PAUSE_THRESHOLD = 2
 
 
 class ZhihuishuTaskConflictError(RuntimeError):
@@ -93,6 +94,7 @@ class ZhihuishuAdapter:
             "total": task.get("total", 0),
             "completed": task.get("completed", 0),
             "failed": task.get("failed", 0),
+            "verification_required": ZhihuishuAdapter._verification_count(task),
             "percentage": task.get("percentage", 0.0),
             "current_video": task.get("current_video"),
             "paused": bool(task.get("paused")),
@@ -174,7 +176,8 @@ class ZhihuishuAdapter:
         video_ids = sorted({v["small_lesson_id"] for v in videos if v.get("small_lesson_id")}, key=str)
         try:
             info = self.learning.query_study_info(lesson_ids, video_ids, recruit_id)
-        except Exception:  # noqa: BLE001 - 状态拉取失败不致命
+        except Exception as exc:  # noqa: BLE001 - 状态拉取失败不致命
+            logger.warning("Zhihuishu study-state lookup failed: %s", exc)
             return
         lv = info.get("lv") or {}
         lesson = info.get("lesson") or {}
@@ -249,6 +252,8 @@ class ZhihuishuAdapter:
                 "cancelled": False,
                 "speed": speed if speed > 0 else 1.0,
                 "auto_answer": bool(auto_answer),
+                "consecutive_verifications": 0,
+                "pause_reason": None,
                 "task_type": "course",
                 "end_chapter_id": end_chapter_id or None,
             }
@@ -302,6 +307,7 @@ class ZhihuishuAdapter:
             "total": total,
             "completed": completed,
             "failed": int(task.get("failed") or 0),
+            "verification_required": self._verification_count(task),
             "percentage": float(task.get("percentage") or 0.0),
             "current_video": task.get("current_video"),
             "estimated_time": f"{eta_seconds}s" if task.get("status") == "running" else None,
@@ -328,7 +334,19 @@ class ZhihuishuAdapter:
                 return {"status": "cancelled", "message": "Task already cancelled"}
             if self._task_state.get("status") == "completed":
                 return {"status": "completed", "message": "Task already completed"}
+            if self._task_state.get("status") != "paused":
+                return {"status": self._task_state.get("status"), "message": "Task is not paused"}
+            task_id = self._task_state["task_id"]
+        # Only read platform state here; verification is performed by the user.
+        self.refresh_verification(task_id)
+        with self._task_lock:
+            if not self._task_state or self._task_state.get("task_id") != task_id:
+                return {"status": "idle", "message": "Task changed"}
+            if self._task_state.get("cancelled"):
+                return {"status": "cancelled", "message": "Task already cancelled"}
             self._task_state["paused"] = False
+            self._task_state["pause_reason"] = None
+            self._task_state["consecutive_verifications"] = 0
             self._task_state["status"] = "running"
             self._task_state["message"] = "Task resumed"
             self._task_state["updated_at"] = time.time()
@@ -361,6 +379,62 @@ class ZhihuishuAdapter:
             task = self._tasks.get(task_id)
             if not task:
                 return None
+            return self._task_payload(task, include_videos=True)
+
+    @staticmethod
+    def _verification_count(task: dict[str, Any]) -> int:
+        return sum(v.get("status") == "needs_verification" for v in task.get("videos", []))
+
+    @staticmethod
+    def _finished_message(task: dict[str, Any]) -> str:
+        pending = ZhihuishuAdapter._verification_count(task)
+        if pending or task.get("failed"):
+            return (
+                f"自动处理结束：已完成 {task.get('completed', 0)} 节，"
+                f"待人工验证 {pending} 节，失败 {task.get('failed', 0)} 节。"
+            )
+        return "Task completed"
+
+    def refresh_verification(self, task_id: str) -> dict[str, Any] | None:
+        """Recheck deferred lessons without submitting progress or solving a captcha."""
+        with self._task_lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return None
+            deferred = [dict(v) for v in task.get("videos", []) if v.get("status") == "needs_verification"]
+            if not deferred:
+                return self._task_payload(task, include_videos=True)
+        if self.learning is None:
+            raise RuntimeError("Not logged in")
+        info = self.learning.query_study_info(
+            sorted({v["lesson_id"] for v in deferred if v.get("lesson_id")}, key=str),
+            sorted({v["small_lesson_id"] for v in deferred if v.get("small_lesson_id")}, key=str),
+            deferred[0].get("recruit_id"),
+        )
+        deferred_ids = {v.get("id") for v in deferred}
+        with self._task_lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return None
+            for video in task.get("videos", []):
+                if video.get("status") != "needs_verification" or video.get("id") not in deferred_ids:
+                    continue
+                state = (
+                    (info.get("lv") or {}).get(str(video.get("small_lesson_id")))
+                    or (info.get("lesson") or {}).get(str(video.get("lesson_id")))
+                    or {}
+                )
+                video["study_total_time"] = state.get("studyTotalTime", video.get("study_total_time", 0))
+                video["watch_state"] = state.get("watchState", video.get("watch_state", 0))
+                if str(video["watch_state"]) == "1":
+                    video["status"] = "completed"
+                    video["progress"] = 100
+                    video.pop("error", None)
+                    task["completed"] = int(task.get("completed") or 0) + 1
+            self._recompute_percentage(task)
+            if task.get("status") == "completed":
+                task["message"] = self._finished_message(task)
+            task["updated_at"] = time.time()
             return self._task_payload(task, include_videos=True)
 
     def cancel_task_by_id(self, task_id: str) -> dict[str, Any]:
@@ -635,7 +709,9 @@ class ZhihuishuAdapter:
 
                 if current_index >= len(videos):
                     task["status"] = "completed"
-                    task["message"] = "Task completed"
+                    task["paused"] = False
+                    task["pause_reason"] = None
+                    task["message"] = self._finished_message(task)
                     task["current_video"] = None
                     self._recompute_percentage(task)
                     task["updated_at"] = time.time()
@@ -664,6 +740,8 @@ class ZhihuishuAdapter:
             # --- Phase 2: blocking platform call OUTSIDE the lock ---
             watch_ok = False
             watch_error: str | None = None
+            needs_verification = False
+            already_completed = str(current_video.get("watch_state")) == "1"
             try:
                 if self.learning is None:
                     raise Exception("Not logged in")
@@ -677,6 +755,12 @@ class ZhihuishuAdapter:
                         is_cancelled=lambda: self._is_task_cancelled(task_id),
                         is_paused=lambda: self._is_task_paused(task_id),
                     )
+                )
+            except ZhihuishuVerificationRequired as exc:
+                needs_verification = True
+                watch_error = str(exc)
+                logger.info(
+                    "Zhihuishu lesson deferred for human verification: task_id=%s video_id=%s", task_id, video_id
                 )
             except Exception as exc:  # noqa: BLE001 - surface as failed video, keep going
                 logger.warning(
@@ -697,6 +781,10 @@ class ZhihuishuAdapter:
                     task["message"] = "Task cancelled"
                     task["updated_at"] = time.time()
                     return
+
+            if not watch_ok and not watch_error:
+                watch_error = "平台未接受该小节的学习进度，请刷新进度并检查登录状态。"
+                logger.warning("Zhihuishu watch_video returned False: task_id=%s video_id=%s", task_id, video_id)
 
             # --- Phase 3: answer embedded questions (outside lock; real HTTP) ---
             if watch_ok and auto_answer and questions and self.answer is not None:
@@ -741,6 +829,9 @@ class ZhihuishuAdapter:
                     if watch_ok:
                         task_videos[current_index]["status"] = "completed"
                         task_videos[current_index]["progress"] = 100
+                    elif needs_verification:
+                        task_videos[current_index]["status"] = "needs_verification"
+                        task_videos[current_index]["error"] = watch_error
                     else:
                         task_videos[current_index]["status"] = "failed"
                         if watch_error:
@@ -748,8 +839,25 @@ class ZhihuishuAdapter:
 
                 if watch_ok:
                     task["completed"] = int(task.get("completed") or 0) + 1
+                    if not already_completed:
+                        task["consecutive_verifications"] = 0
+                elif needs_verification:
+                    task["consecutive_verifications"] = int(task.get("consecutive_verifications") or 0) + 1
+                    remaining = task_videos[current_index + 1 :]
+                    if task["consecutive_verifications"] >= VERIFICATION_PAUSE_THRESHOLD and any(
+                        str(v.get("watch_state")) != "1" for v in remaining
+                    ):
+                        task["paused"] = True
+                        task["pause_reason"] = "verification"
+                        task["status"] = "paused"
+                        task["current_video"] = None
+                        task["message"] = (
+                            "连续两节要求验证，任务已暂停，其余小节保留待处理。"
+                            "请在智慧树官方播放器人工处理，再点击恢复；恢复时会重新核对待人工小节的完成状态。"
+                        )
                 else:
                     task["failed"] = int(task.get("failed") or 0) + 1
+                    task["consecutive_verifications"] = 0
                 self._recompute_percentage(task)
                 task["updated_at"] = time.time()
 

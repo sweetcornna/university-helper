@@ -191,6 +191,7 @@ const normalizeTaskRecord = (payload, fallback = {}) => {
   const total = Number(payload?.total ?? nestedProgress?.total ?? fallback.total ?? fallbackProgress?.total ?? 0)
   const completed = Number(payload?.completed ?? nestedProgress?.completed ?? fallback.completed ?? fallbackProgress?.completed ?? 0)
   const failed = Number(payload?.failed ?? nestedProgress?.failed ?? fallback.failed ?? fallbackProgress?.failed ?? 0)
+  const verificationRequired = Number(payload?.verification_required ?? nestedProgress?.verification_required ?? fallback.verificationRequired ?? 0)
   const percentage = Number(payload?.percentage ?? nestedProgress?.percentage ?? fallback.percentage ?? fallbackProgress?.percentage ?? 0)
   const status = String(payload?.status || nestedProgress?.status || fallback.status || fallbackProgress?.status || 'unknown')
   const message = payload?.message || nestedProgress?.message || fallback.message || fallbackProgress?.message || ''
@@ -215,6 +216,7 @@ const normalizeTaskRecord = (payload, fallback = {}) => {
     total: Number.isFinite(total) ? total : 0,
     completed: Number.isFinite(completed) ? completed : 0,
     failed: Number.isFinite(failed) ? failed : 0,
+    verificationRequired: Number.isFinite(verificationRequired) ? verificationRequired : 0,
     percentage: Number.isFinite(percentage) ? percentage : 0,
     videos: Array.isArray(payload?.videos) ? payload.videos : (Array.isArray(fallback.videos) ? fallback.videos : []),
     progress: {
@@ -226,6 +228,7 @@ const normalizeTaskRecord = (payload, fallback = {}) => {
       total: Number.isFinite(total) ? total : 0,
       completed: Number.isFinite(completed) ? completed : 0,
       failed: Number.isFinite(failed) ? failed : 0,
+      verification_required: Number.isFinite(verificationRequired) ? verificationRequired : 0,
       percentage: Number.isFinite(percentage) ? percentage : 0
     },
     startedAt: toIso(payload?.created_at || fallback.startedAt || Date.now()),
@@ -877,7 +880,11 @@ export default function Zhihuishu() {
       ) {
         const courseLabel = normalized.courseName || '智慧树任务'
         if (normalized.status === 'completed') {
-          setNoticeMessage('success', `「${courseLabel}」学习完成。`)
+          if (normalized.verificationRequired || normalized.failed) {
+            setNoticeMessage('info', `「${courseLabel}」自动处理结束，待人工验证 ${normalized.verificationRequired} 节，失败 ${normalized.failed} 节。请查看任务详情。`)
+          } else {
+            setNoticeMessage('success', `「${courseLabel}」学习完成。`)
+          }
         } else if (normalized.status === 'cancelled') {
           setNoticeMessage('info', `「${courseLabel}」任务已取消。`)
         } else {
@@ -901,6 +908,7 @@ export default function Zhihuishu() {
           total: normalized.total,
           completed: normalized.completed,
           failed: normalized.failed,
+          verification_required: normalized.verificationRequired,
           percentage: normalized.percentage
         } : current))
       }
@@ -911,6 +919,7 @@ export default function Zhihuishu() {
         canWriteTaskView()
       ) {
         const taskVideos = normalized.videos.map((video, index) => ({
+          ...video,
           id: parseCourseId(video?.id || video?.videoId || index + 1),
           title: video?.title || video?.name || video?.videoName || `视频 ${index + 1}`,
           status: video?.status || 'pending'
@@ -1135,6 +1144,21 @@ export default function Zhihuishu() {
       setNoticeMessage('error', err.message || '暂停任务失败。')
     } finally {
       setTaskActionLoading('')
+    }
+  }
+
+  const refreshVerification = async (taskId) => {
+    if (taskItemActionLoading) return
+    setTaskItemActionLoading(taskId)
+    try {
+      const resp = await requestZhihuishuApi(`/tasks/${taskId}/refresh-verification`, { method: 'POST' })
+      await fetchTaskDetail(taskId, true)
+      const remaining = Number(resp?.data?.verification_required || 0)
+      setNoticeMessage('info', `已核对人工处理结果，仍有 ${remaining} 节待人工验证。`)
+    } catch (err) {
+      setNoticeMessage('error', err.message || '核对人工处理结果失败。')
+    } finally {
+      setTaskItemActionLoading('')
     }
   }
 
@@ -1934,7 +1958,8 @@ export default function Zhihuishu() {
                           return (
                             <li key={`${title}-${index}`} className="rounded-lg border border-border/30 bg-surface/70 px-3 py-2">
                               <p className="font-medium text-text">{title}</p>
-                              <p className="text-xs text-text/70">状态：{status}</p>
+                              <p className="text-xs text-text/70">状态：{status === 'needs_verification' ? '待人工验证' : status}</p>
+                              {video.error && <p className="mt-1 break-words text-xs text-danger">{status === 'needs_verification' ? '需人工处理' : '失败原因'}：{video.error}</p>}
                               {video.sectionTitle && <p className="text-xs text-text/70">章节：{video.sectionTitle}</p>}
                             </li>
                           )
@@ -1960,6 +1985,7 @@ export default function Zhihuishu() {
                   <button type="button" className={`${ACTION_BUTTON_CLASS} bg-danger hover:bg-danger/90`} onClick={cancelTask} disabled={taskActionLoading !== ''}><span className="inline-flex items-center gap-2"><X className="h-4 w-4" />{taskActionLoading === 'cancel' ? '取消中...' : '取消'}</span></button>
                 </div>
               </div>
+              <p className="mt-3 text-sm text-text/70">遇到验证会先留到待人工列表，再尝试下一节；连续两节要求验证时会暂停。请暂停本地任务后在智慧树官方播放器处理，处理完再核对结果；任务暂停时可点击恢复继续剩余小节。</p>
             </div>
 
             <div className={GLASS_CARD_CLASS}>
@@ -1977,7 +2003,7 @@ export default function Zhihuishu() {
                         </div>
                         <div className="text-sm text-text/80">
                           <p>类型：{task.taskType || 'course'}</p>
-                          <p>状态：{task.status || 'unknown'}</p>
+                          <p>状态：{task.status === 'completed' && task.verificationRequired ? '自动处理结束，待人工处理' : (task.status || 'unknown')}</p>
                           <p className="mt-1">更新时间：{new Date(task.updatedAt || task.startedAt).toLocaleString()}</p>
                         </div>
                       </div>
@@ -1986,6 +2012,33 @@ export default function Zhihuishu() {
                       <p className="mt-1 text-sm text-text/80">
                         进度：{task.completed || 0}/{task.total || 0}（{Math.round(Number(task.percentage || 0))}%）
                       </p>
+                      {task.verificationRequired > 0 && (
+                        <div className="mt-3 rounded-lg border border-primary/30 p-3 text-sm text-text/80">
+                          <p className="font-medium text-text">待人工验证：{task.verificationRequired} 节</p>
+                          <p className="mt-1">这些小节已跳过，不计入普通失败或已完成。请在智慧树官方播放器完成人工验证并学完，再点击下方按钮核对。</p>
+                          <ul aria-label="待人工验证小节" className="mt-2 space-y-2">
+                            {(task.videos || []).filter((video) => video.status === 'needs_verification').map((video) => (
+                              <li key={video.id}>
+                                <p className="font-medium text-text">{video.title || video.name}</p>
+                                <p className="text-xs">{video.chapter_title || video.sectionTitle || ''}</p>
+                                <p className="break-words text-xs">{video.error}</p>
+                              </li>
+                            ))}
+                          </ul>
+                          <button type="button" className={`${ACTION_BUTTON_CLASS} mt-3 bg-secondary/90 hover:bg-secondary`} onClick={() => { void refreshVerification(task.taskId) }} disabled={taskItemActionLoading !== '' || taskActionLoading !== ''}>
+                            {taskItemActionLoading === task.taskId ? '核对中...' : '刷新人工处理结果'}
+                          </button>
+                        </div>
+                      )}
+                      {(task.videos || []).filter((video) => video.status === 'failed').map((video) => (
+                        <div key={video.id} className="mt-2 rounded-lg border border-danger/30 p-3 text-sm">
+                          <p className="font-medium text-text">{video.title || video.name}</p>
+                          <p className="mt-1 break-words text-danger">失败原因：{video.error || '平台未提供错误说明'}</p>
+                          {String(video.error || '').includes('code=-12') && (
+                            <p className="mt-1 text-text/80">请在智慧树官方播放器完成人工验证；必要时在官方播放器学完此节，再刷新进度。</p>
+                          )}
+                        </div>
+                      ))}
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button
                           type="button"
