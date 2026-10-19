@@ -10,9 +10,10 @@ vi.mock('../utils/api', () => ({
   api: vi.fn(),
 }))
 
-vi.mock('../components', () => {
+vi.mock('../components', async (importOriginal) => {
   const toast = { notify: () => {} }
   return {
+    ...(await importOriginal()),
     Input: ({ label, ...props }) => (
       <label>
         {label}
@@ -104,7 +105,7 @@ const configureApi = ({ startBehavior, legacyResponse = taskResponse('legacy-tas
 }
 
 const openCoursesAndSelectCourse = async () => {
-  const coursesButton = await screen.findByText('课程', { selector: 'button' })
+  const coursesButton = await screen.findByRole('tab', { name: '课程' })
   fireEvent.click(coursesButton)
   fireEvent.click(await screen.findByRole('button', { name: '刷新课程' }))
   const selector = await screen.findByRole('combobox', { name: '分组课程' })
@@ -115,6 +116,7 @@ const openCoursesAndSelectCourse = async () => {
 const clickStart = async (taskType = 'course') => {
   await openCoursesAndSelectCourse()
   const name = taskType === 'ai-course' ? /启动 AI 任务/ : /启动课程任务/
+  fireEvent.click(screen.getByRole('tab', { name: '学习配置' }))
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name }))
     await Promise.resolve()
@@ -147,7 +149,7 @@ describe('Zhihuishu course-task startup fallback', () => {
       LEGACY_TASK_PATH,
     ]))
     if (taskType === 'course') {
-      expect(await screen.findByText('任务 ID：legacy-task')).toBeInTheDocument()
+      expect((await screen.findAllByText('任务 ID：legacy-task')).length).toBeGreaterThan(0)
     }
   })
 

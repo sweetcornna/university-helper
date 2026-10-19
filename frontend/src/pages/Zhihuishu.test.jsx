@@ -63,10 +63,10 @@ const createApiMock = ({ taskDetail } = {}) => {
   })
 }
 
-const renderPage = () => render(
+const renderPage = (entry = '/zhihuishu-panel') => render(
   <RuntimeProfileContext.Provider value={runtimeProfile}>
     <ToastProvider>
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter initialEntries={[entry]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Zhihuishu />
       </MemoryRouter>
     </ToastProvider>
@@ -197,10 +197,58 @@ describe('Zhihuishu speed setting', () => {
     renderPage()
     await flushPromises()
 
-    fireEvent.click(screen.getByRole('tab', { name: '课程' }))
+    fireEvent.click(screen.getByRole('tab', { name: '学习配置' }))
 
     const speed = screen.getByRole('combobox', { name: '学习倍速' })
     expect(speed).toHaveValue('1.0')
     expect(speed.selectedOptions[0]).toHaveTextContent('1.0x')
+  })
+})
+
+describe('Zhihuishu workspace tabs', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    api.mockReset()
+  })
+
+  const mockLoggedOut = () => {
+    api.mockImplementation((path) => {
+      if (path === '/course/zhihuishu/status') return Promise.resolve({ data: { logged_in: false } })
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+  }
+
+  test('opens on the login card when logged out', async () => {
+    mockLoggedOut()
+    renderPage()
+    await flushPromises()
+
+    expect(screen.getByRole('tab', { name: '账号' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('radiogroup', { name: '登录方式' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '生成二维码' })).toBeEnabled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  test('opens on the courses tab when logged in', async () => {
+    createApiMock()
+    renderPage()
+    await flushPromises()
+
+    expect(screen.getByRole('tab', { name: '课程' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  test.each([
+    ['login', '账号'],
+    ['status', '账号'],
+    ['settings', '学习配置'],
+  ])('keeps the old ?tab=%s link working', async (oldTab, label) => {
+    mockLoggedOut()
+    renderPage(`/zhihuishu-panel?tab=${oldTab}`)
+    await flushPromises()
+
+    expect(screen.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true')
+    if (oldTab === 'settings') {
+      expect(screen.getByText('默认设置').closest('details')).toHaveAttribute('open')
+    }
   })
 })

@@ -6,6 +6,7 @@ import time
 from typing import Annotated, Any
 from uuid import uuid4
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
@@ -16,7 +17,7 @@ from app.services.course.chaoxing.endpoint_security import (
     UnsafeEndpointError,
     validate_tiku_config,
 )
-from app.services.course.chaoxing.signin import signin_manager
+from app.services.course.chaoxing.signin import SigninSessionExpiredError, signin_manager
 from app.services.course.chaoxing.task_admission import TaskAdmissionError
 from app.services.course.zhihuishu.adapter import (
     TASK_CONFLICT_DETAIL,
@@ -154,7 +155,13 @@ def _thread_start_unavailable(message: str, exc: Exception) -> HTTPException:
 
 
 async def _run_blocking(func, *args, **kwargs):
-    return await asyncio.to_thread(func, *args, **kwargs)
+    try:
+        return await asyncio.to_thread(func, *args, **kwargs)
+    except SigninSessionExpiredError as exc:
+        raise HTTPException(status_code=401, detail="学习通登录已失效，请在平台账号中重新登录学习通。") from exc
+    except requests.RequestException as exc:
+        logger.warning("Course platform request failed", exc_info=True)
+        raise HTTPException(status_code=502, detail="课程平台请求失败，请稍后重试。") from exc
 
 
 def _cancel_qr_sessions(session_ids: list[str]) -> None:
@@ -264,23 +271,25 @@ async def get_course_status(task_id: str, current_user: dict = Depends(get_curre
 
     # Keep /course/status compatible with Zhihuishu polling by syncing progress on every query.
     if task.get("platform") == "zhihuishu":
-        with _qr_sessions_lock:
-            entry = _user_adapters.get(user_id)
-            adapter = entry["adapter"] if entry else None
+        adapter = _get_zhihuishu_adapter(user_id, required=False)
         if adapter is not None:
-            progress = await _run_blocking(adapter.get_progress, str(task.get("course_id") or ""))
-            task_status = progress.get("status", task.get("status", "running"))
-            task_message = progress.get("message", task.get("message", "Task is running"))
-            task = (
-                _update_course_task(
-                    task_id,
-                    status=task_status,
-                    message=task_message,
-                    progress=progress,
-                    current_task=progress.get("current_video"),
+            if hasattr(adapter, "get_task"):
+                progress = await _run_blocking(adapter.get_task, task_id)
+            else:
+                progress = await _run_blocking(adapter.get_progress, str(task.get("course_id") or ""))
+            # A course can have several historical tasks. Never copy the newest
+            # task's progress onto an older record for the same course.
+            if progress and str(progress.get("task_id") or task_id) == task_id:
+                task = (
+                    _update_course_task(
+                        task_id,
+                        status=progress.get("status", task.get("status", "running")),
+                        message=progress.get("message", task.get("message", "Task is running")),
+                        progress=progress,
+                        current_task=progress.get("current_video"),
+                    )
+                    or task
                 )
-                or task
-            )
 
     return CourseStatusResponse(
         status=str(task.get("status", "running")),
@@ -359,12 +368,35 @@ def cleanup_expired_entries() -> None:
     _cancel_qr_sessions(expired)
     with _qr_sessions_lock:
         expired_adapters = [
-            user_id
+            (user_id, entry)
             for user_id, entry in _user_adapters.items()
             if now - entry.get("last_access", now) > _USER_ADAPTER_TTL_SECONDS
         ]
-        for user_id in expired_adapters:
-            _user_adapters.pop(user_id, None)
+    for user_id, entry in expired_adapters:
+        adapter = entry["adapter"]
+        try:
+            if hasattr(adapter, "get_status"):
+                state = adapter.get_status()
+                current_task = state.get("current_task") or {}
+                if state.get("has_task") and current_task.get("status") not in _TERMINAL_TASK_STATUSES:
+                    continue
+            else:
+                with _course_tasks_lock:
+                    if any(
+                        str(task.get("user_id")) == user_id
+                        and task.get("platform") == "zhihuishu"
+                        and task.get("status") not in _TERMINAL_TASK_STATUSES
+                        for task in _course_tasks.values()
+                    ):
+                        continue
+        except Exception:
+            logger.exception("Failed to inspect Zhihuishu session during cleanup")
+            continue
+        with _qr_sessions_lock:
+            # A request or a new login may have refreshed this entry while its
+            # task state was being inspected outside the registry lock.
+            if _user_adapters.get(user_id) is entry and now - entry.get("last_access", now) > _USER_ADAPTER_TTL_SECONDS:
+                _user_adapters.pop(user_id, None)
     with _course_tasks_lock:
         expired_tasks = [
             task_id
@@ -610,6 +642,7 @@ async def zhihuishu_password_login(
     except Exception as exc:
         raise HTTPException(status_code=401, detail="Zhihuishu login failed") from exc
 
+    _cancel_qr_sessions_for_user(user_id)
     with _qr_sessions_lock:
         _user_adapters[user_id] = {"adapter": adapter, "last_access": time.time()}
 
@@ -1102,9 +1135,7 @@ async def course_login(
 
     user_id = _current_user_id(current_user)
     try:
-        import asyncio
-
-        login_result = await asyncio.to_thread(
+        login_result = await _run_blocking(
             signin_manager.login,
             user_id,
             request.username,
@@ -1113,7 +1144,7 @@ async def course_login(
         if not login_result.get("status"):
             raise HTTPException(status_code=401, detail=login_result.get("message", "Login failed"))
 
-        courses = await asyncio.to_thread(signin_manager.get_courses, user_id)
+        courses = await _run_blocking(signin_manager.get_courses, user_id)
 
         return {
             "status": "success",

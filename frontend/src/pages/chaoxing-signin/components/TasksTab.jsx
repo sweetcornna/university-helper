@@ -1,12 +1,10 @@
- 
-import { Camera, MapPin, QrCode, CheckSquare, Clock, ExternalLink } from 'lucide-react'
-import { RefreshCw } from 'lucide-react'
+import { Camera, MapPin, QrCode, CheckSquare, Clock, ExternalLink, RefreshCw } from 'lucide-react'
 
 import { Button } from '../../../components'
 
 import { safeHref } from '../../../utils/safeUrl'
 
-import { GLASS_PANEL_CLASS } from '../utils'
+import { GLASS_CARD_CLASS, GLASS_PANEL_CLASS } from '../utils'
 
 const getSignTypeIcon = (type) => {
   switch (type) {
@@ -17,23 +15,33 @@ const getSignTypeIcon = (type) => {
   }
 }
 
-export default function TasksTab({ signinTasks, fetchSigninTasks, openBackgroundTask, executeSignin, executeClassSignin }) {
+export default function TasksTab({ signinTasks, fetchSigninTasks, openBackgroundTask, executeSignin, executeClassSignin, onApplyTask, onOpenAccount, accountReady = true, refreshing = false, error = '' }) {
   return (
-    <div className="mt-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-bold text-text">签到任务列表</h3>
+    <div className={`${GLASS_CARD_CLASS} space-y-4`}>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-lg font-bold text-text">签到任务</h2>
         <Button
           type="button"
           variant="secondary"
+          size="icon"
           aria-label="刷新签到任务"
-          className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
+          title="刷新签到任务"
           onClick={fetchSigninTasks}
+          disabled={refreshing}
         >
-          <RefreshCw className="h-4 w-4" aria-hidden="true" />
+          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
         </Button>
       </div>
+      {error && <p role="alert" className="rounded-xl bg-danger-surface p-3 text-sm text-danger">{error}</p>}
       {signinTasks.length === 0 ? (
-        <p className="text-center text-text/70 py-8">暂无签到任务</p>
+        !error && (
+          <div role="status" className="flex flex-col items-center gap-3 py-6 text-center text-sm text-text-muted">
+            <p>{refreshing ? '正在检测签到...' : accountReady ? '暂无进行中的签到' : '验证学习通账号后即可检测签到'}</p>
+            {!refreshing && !accountReady && onOpenAccount && (
+              <Button type="button" variant="secondary" size="sm" onClick={onOpenAccount}>去验证账号</Button>
+            )}
+          </div>
+        )
       ) : (
         <div className="space-y-3">
           {signinTasks.map((task, idx) => {
@@ -69,11 +77,11 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
                 }
               }}
             >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-start gap-3 flex-1">
+              <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
+                <div className="flex min-w-0 items-start gap-3 flex-1">
                   <div className="mt-1">{getSignTypeIcon(taskType)}</div>
-                  <div className="flex-1">
-                    <h4 className="font-medium text-text">{title}</h4>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="break-words font-medium text-text">{title}</h3>
                     {isClassTask && task.courseName && task.courseName !== title && (
                       <p className="text-sm text-text/70 mt-1">所属课程：{task.courseName}</p>
                     )}
@@ -106,14 +114,19 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
                 </div>
                 <Button
                   type="button"
+                  variant="secondary"
                   disabled={isBackgroundTask && !backgroundTaskId}
-                  className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
+                  className="shrink-0"
                   onClick={(event) => {
                     event.stopPropagation()
                     if (isBackgroundTask) {
                       if (backgroundTaskId) {
                         void openBackgroundTask(backgroundTaskId)
                       }
+                      return
+                    }
+                    if (onApplyTask) {
+                      onApplyTask(task)
                       return
                     }
                     if (isClassTask && task.classId && executeClassSignin) {
@@ -129,7 +142,7 @@ export default function TasksTab({ signinTasks, fetchSigninTasks, openBackground
                     void executeSignin(task.courseId, taskType)
                   }}
                 >
-                  {isBackgroundTask ? '查看详情' : '执行签到'}
+                  {isBackgroundTask ? '查看详情' : onApplyTask ? '填写并签到' : '执行签到'}
                 </Button>
               </div>
             </div>

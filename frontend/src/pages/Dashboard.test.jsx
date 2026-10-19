@@ -14,7 +14,7 @@ const CASES = [
     name: '签到运行任务',
     status: 'running',
     statusLabel: '进行中',
-    serviceTitle: '学习通签到',
+    serviceTitle: '学习通 课堂签到',
     targetPath: '/chaoxing-signin',
     targetHeading: '签到页面',
     signinTasks: [{ status: 'running', course_name: '签到课程' }],
@@ -25,7 +25,7 @@ const CASES = [
     name: '智慧树运行任务',
     status: 'running',
     statusLabel: '进行中',
-    serviceTitle: '智慧树',
+    serviceTitle: '智慧树 课程学习',
     targetPath: '/zhihuishu-panel',
     targetHeading: '智慧树页面',
     signinTasks: [],
@@ -36,7 +36,7 @@ const CASES = [
     name: '泛雅运行任务',
     status: 'running',
     statusLabel: '进行中',
-    serviceTitle: '学习通泛雅',
+    serviceTitle: '学习通 课程学习',
     targetPath: '/chaoxing-fanya',
     targetHeading: '泛雅页面',
     signinTasks: [],
@@ -47,7 +47,7 @@ const CASES = [
     name: '签到失败任务',
     status: 'failed',
     statusLabel: '失败',
-    serviceTitle: '学习通签到',
+    serviceTitle: '学习通 课堂签到',
     targetPath: '/chaoxing-signin',
     targetHeading: '签到页面',
     signinTasks: [{ status: 'failed', course_name: '签到课程' }],
@@ -58,7 +58,7 @@ const CASES = [
     name: '智慧树失败任务',
     status: 'failed',
     statusLabel: '失败',
-    serviceTitle: '智慧树',
+    serviceTitle: '智慧树 课程学习',
     targetPath: '/zhihuishu-panel',
     targetHeading: '智慧树页面',
     signinTasks: [],
@@ -69,7 +69,7 @@ const CASES = [
     name: '泛雅失败任务',
     status: 'failed',
     statusLabel: '失败',
-    serviceTitle: '学习通泛雅',
+    serviceTitle: '学习通 课程学习',
     targetPath: '/chaoxing-fanya',
     targetHeading: '泛雅页面',
     signinTasks: [],
@@ -80,7 +80,7 @@ const CASES = [
 
 function RouteProbe() {
   const location = useLocation()
-  return <output aria-label="当前路径">{location.pathname}</output>
+  return <output aria-label="当前路径">{location.pathname}{location.search}</output>
 }
 
 const renderDashboard = () =>
@@ -156,7 +156,7 @@ describe('Dashboard task routing', () => {
       screen.getByRole('heading', { level: 1, name: testCase.targetHeading })
     ).toBeTruthy()
     expectTaskRequests()
-    expect(screen.getByLabelText('当前路径')).toHaveTextContent(testCase.targetPath)
+    expect(screen.getByLabelText('当前路径')).toHaveTextContent(`${testCase.targetPath}?tab=${testCase.targetPath === '/chaoxing-signin' ? 'history' : 'tasks'}`)
   })
 
   test('selects the newest failed task across services', async () => {
@@ -182,9 +182,9 @@ describe('Dashboard task routing', () => {
 
     const action = await screen.findByRole('button', { name: '前往恢复' })
     const nextAction = screen.getByRole('heading', { level: 2, name: '处理最近失败' }).closest('section')
-    expect(within(nextAction).getByText(/智慧树 · 最新失败/)).toBeTruthy()
-    expect(screen.getAllByText(/智慧树 · 最新失败/, { selector: 'p' })).toHaveLength(2)
-    expect(screen.queryByText(/学习通泛雅 · 较早失败/, { selector: 'p' })).toBeNull()
+    expect(within(nextAction).getByText(/智慧树 课程学习 · 最新失败/)).toBeTruthy()
+    expect(screen.getAllByText(/智慧树 课程学习 · 最新失败/, { selector: 'p' })).toHaveLength(2)
+    expect(screen.queryByText(/学习通 课程学习 · 较早失败/, { selector: 'p' })).toBeNull()
 
     await user.click(action)
     expect(screen.getByLabelText('当前路径')).toHaveTextContent('/zhihuishu-panel')
@@ -206,13 +206,8 @@ describe('Dashboard task routing', () => {
 
     expect(await screen.findByText('已同步任务')).toHaveAttribute('role', 'status')
     expect(screen.queryByRole('heading', { level: 2, name: /查看运行进度|处理最近失败|选择课程服务/ })).toBeNull()
-    expect(screen.queryByText('待进入')).toBeNull()
-    expect(screen.queryByText('打开服务')).toBeNull()
-    expect(screen.queryByText('开放')).toBeNull()
-    expect(screen.queryByText('暂无运行任务')).toBeNull()
-    expect(screen.queryByText('没有待处理失败')).toBeNull()
-    expect(screen.getByRole('button', { name: '学习通签到' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '学习通泛雅' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '智慧树' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '学习通 课堂签到' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '学习通 课程学习' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '智慧树 课程学习' })).toBeTruthy()
   })
 })

@@ -84,6 +84,13 @@ describe('ChaoxingSignin QR upload race handling', () => {
       )
     })
 
+    // The sign-in form only renders once the platform account is verified.
+    fireEvent.change(container.querySelector('#cx-username'), { target: { value: 'student' } })
+    fireEvent.change(container.querySelector('#cx-password'), { target: { value: 'password' } })
+    await act(async () => {
+      fireEvent.submit(container.querySelector('#cx-username').form)
+    })
+
     const signType = await waitFor(() => container.querySelector('#cx-signtype'))
 
     await act(async () => {

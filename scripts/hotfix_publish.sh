@@ -204,7 +204,7 @@ fi
 [[ "$WEB_CONTAINER" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || invalid_config "EASY_LEARNING_WEB_CONTAINER" "must be a container name"
 [[ "$HEALTH_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%/?=&+,:@-]*)?$ ]] || invalid_config "EASY_LEARNING_HEALTH_URL" "must be an absolute HTTP(S) URL without shell metacharacters"
 
-[[ -n "$COMPOSE_FILES" && "$COMPOSE_FILES" != *[$'\001'-$'\037'$'\177']* ]] || invalid_config "EASY_LEARNING_COMPOSE_FILES" "must be a non-empty, space-separated path list"
+[[ -n "$COMPOSE_FILES" && "$COMPOSE_FILES" != *[[:cntrl:]]* ]] || invalid_config "EASY_LEARNING_COMPOSE_FILES" "must be a non-empty, space-separated path list"
 read -r -a COMPOSE_FILE_LIST <<< "$COMPOSE_FILES"
 [[ "${#COMPOSE_FILE_LIST[@]}" -gt 0 ]] || invalid_config "EASY_LEARNING_COMPOSE_FILES" "must contain at least one path"
 for compose_file in "${COMPOSE_FILE_LIST[@]}"; do
@@ -335,7 +335,7 @@ for rel_path in "$@"; do
       echo "Invalid repository-relative path: $rel_path" >&2
       exit 1
       ;;
-    *[$'\001'-$'\037'$'\177']*)
+    *[[:cntrl:]]*)
       echo "Path contains control characters: $rel_path" >&2
       exit 1
       ;;
@@ -362,7 +362,7 @@ for rel_path in "$@"; do
     echo "File not found: $rel_path" >&2
     exit 1
   fi
-  if [[ "$canonical_path" == *[$'\001'-$'\037'$'\177']* ]]; then
+  if [[ "$canonical_path" == *[[:cntrl:]]* ]]; then
     echo "Resolved path contains control characters: $rel_path" >&2
     exit 1
   fi

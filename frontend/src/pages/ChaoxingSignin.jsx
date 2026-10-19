@@ -5,14 +5,24 @@ import { useNavigate } from 'react-router-dom'
 import { ChevronDown, Loader2, Camera, Map, MapPin, RefreshCw, Upload } from 'lucide-react'
 
 import { getToken, removeToken } from '../utils/auth'
+import { APP_JWT_401_PATTERN } from '../utils/api'
 
-import { Button, Input, MultiSelect, Select, useRuntimeProfile, useToast } from '../components'
+import { AccountChip, Button, Input, MultiSelect, PageHeader, Select, useRuntimeProfile, useToast } from '../components'
+import WorkspaceTabs from '../components/WorkspaceTabs'
+import useWorkspaceTab from '../components/useWorkspaceTab'
 
 const CHAOXING_TABS = [
-  { id: 'signin', label: '签到' },
-  { id: 'tasks', label: '任务' },
-  { id: 'history', label: '历史' },
-  { id: 'config', label: '设置' },
+  { id: 'signin', label: '手动签到' },
+  { id: 'tasks', label: '待处理签到' },
+  { id: 'monitor', label: '自动监控' },
+  { id: 'history', label: '签到记录' },
+  { id: 'account', label: '账号' },
+]
+
+const SIGNIN_SCOPES = [
+  { id: 'course', label: '课程' },
+  { id: 'class', label: '班级' },
+  { id: 'chat', label: '群聊' },
 ]
 
 // Lazy-load the map picker (pulls in ~150KB of leaflet) only when the user
@@ -21,9 +31,8 @@ const BaiduMapPickerModal = lazy(() => import('../components/BaiduMapPickerModal
 
 import {
   CHAOXING_API_BASE,
-  TOKEN_ERROR_PATTERN,
   GLASS_CARD_CLASS,
-  GLASS_PANEL_CLASS,
+  getSignTypeLabel,
   parsePayload,
   pickMessage,
   normalizeSignTypeForApi,
@@ -46,6 +55,8 @@ import {
 import useBackgroundTasks from './chaoxing-signin/hooks/useBackgroundTasks'
 import useAutoSignin from './chaoxing-signin/hooks/useAutoSignin'
 import useLocationServices from './chaoxing-signin/hooks/useLocationServices'
+import useChatSignin from './chaoxing-signin/hooks/useChatSignin'
+import ChatSigninSection from './chaoxing-signin/components/ChatSigninSection'
 import { fetchWithTimeout } from './chaoxing-signin/request'
 
 import StatsCards from './chaoxing-signin/components/StatsCards'
@@ -74,12 +85,16 @@ export default function ChaoxingSignin() {
   const toast = useToast()
 
   const [submitting, setSubmitting] = useState(false)
+  const [accountReady, setAccountReady] = useState(false)
+  const accountGenerationRef = useRef(0)
+  const coursesRequestRef = useRef(0)
+  const classesRequestRef = useRef(0)
 
   const [resultMessage, setResultMessage] = useState('')
 
   const [resultType, setResultType] = useState('info')
 
-  const [activeTab, setActiveTab] = useState('signin')
+  const [activeTab, setActiveTab] = useWorkspaceTab(CHAOXING_TABS, 'signin', { config: 'monitor' })
 
   // In 通用模式(all) the type-specific fields are optional (the backend
   // auto-matches the teacher's type), so they stay collapsed behind this
@@ -91,6 +106,10 @@ export default function ChaoxingSignin() {
   const [classSubjects, setClassSubjects] = useState([])
 
   const [signinTasks, setSigninTasks] = useState([])
+  const [signinTasksLoading, setSigninTasksLoading] = useState(false)
+  const [signinTasksError, setSigninTasksError] = useState('')
+  const signinTasksRequestRef = useRef(0)
+  const [signinTarget, setSigninTarget] = useState('course')
 
   const [signinHistory, setSigninHistory] = useState([])
 
@@ -205,14 +224,13 @@ export default function ChaoxingSignin() {
 
       const code = payload?.code || payload?.error_code
 
+      // A platform 401 (e.g. 学习通未登录) needs platform login and must not
+      // discard the app's own session. Share the app-auth message contract.
       const isAuthFailure =
-        response.status === 401 ||
-        response.status === 403 ||
         code === 'AUTH_TOKEN_EXPIRED' ||
         code === 'AUTH_INVALID_TOKEN' ||
-        (response.status === 200 &&
-          payload?.status === false &&
-          TOKEN_ERROR_PATTERN.test(message || ''))
+        ((response.status === 401 || (response.status === 200 && payload?.status === false)) &&
+          APP_JWT_401_PATTERN.test(String(message || '')))
 
       if (isAuthFailure && !isLocal) {
         redirectToLogin('登录已过期，请重新登录。')
@@ -223,7 +241,9 @@ export default function ChaoxingSignin() {
       }
 
       if (payload?.status === false) {
-        throw new Error(message || '请求失败')
+        const error = new Error(message || '请求失败')
+        error.payload = payload
+        throw error
       }
 
       return payload
@@ -292,38 +312,50 @@ export default function ChaoxingSignin() {
   // ── Callbacks that depend on requestChaoxingApi ────────────────────────────
 
   const fetchCourses = useCallback(async () => {
+    const generation = accountGenerationRef.current
+    const requestId = ++coursesRequestRef.current
     try {
       const resp = await requestChaoxingApi('/courses')
-
-      setCourses(resp?.data || [])
+      if (generation !== accountGenerationRef.current || requestId !== coursesRequestRef.current) return
+      setCourses(Array.isArray(resp?.data) ? resp.data : [])
     } catch (err) {
-      if (!redirectingRef.current) {
-        console.error('Failed to fetch courses:', err)
+      if (!redirectingRef.current && generation === accountGenerationRef.current) {
+        setResultType('error')
+        setResultMessage(err.message || '获取课程失败，请重试。')
       }
     }
   }, [requestChaoxingApi])
 
   const fetchClasses = useCallback(async () => {
+    const generation = accountGenerationRef.current
+    const requestId = ++classesRequestRef.current
     try {
       const resp = await requestChaoxingApi('/classes')
-
+      if (generation !== accountGenerationRef.current || requestId !== classesRequestRef.current) return
       setClassSubjects(resp?.data || resp?.classes || [])
     } catch (err) {
-      if (!redirectingRef.current) {
-        console.error('Failed to fetch class subjects:', err)
+      if (!redirectingRef.current && generation === accountGenerationRef.current) {
+        setResultType('error')
+        setResultMessage(err.message || '获取班级失败，请重试。')
       }
     }
   }, [requestChaoxingApi])
 
   const fetchSigninTasks = useCallback(async () => {
+    const generation = accountGenerationRef.current
+    const requestId = ++signinTasksRequestRef.current
+    setSigninTasksLoading(true)
+    setSigninTasksError('')
     try {
       const resp = await requestChaoxingApi('/tasks')
-
-      setSigninTasks(resp?.data || [])
+      if (generation !== accountGenerationRef.current || requestId !== signinTasksRequestRef.current) return
+      setSigninTasks(Array.isArray(resp?.data) ? resp.data : [])
     } catch (err) {
-      if (!redirectingRef.current) {
-        console.error('Failed to fetch signin tasks:', err)
+      if (!redirectingRef.current && generation === accountGenerationRef.current && requestId === signinTasksRequestRef.current) {
+        setSigninTasksError(err.message || '签到检测失败，请重试。')
       }
+    } finally {
+      if (requestId === signinTasksRequestRef.current) setSigninTasksLoading(false)
     }
   }, [requestChaoxingApi])
 
@@ -354,6 +386,15 @@ export default function ChaoxingSignin() {
       }
     }
   }, [requestChaoxingApi])
+
+  const chatSignin = useChatSignin({
+    requestChaoxingApi,
+    username: form.username,
+    password: form.password,
+    location: { latitude: form.latitude, longitude: form.longitude, address: form.address },
+    accountGenerationRef,
+    onSuccess: fetchSigninHistory,
+  })
 
   const fetchBackgroundTaskHistory = useCallback(async () => {
     try {
@@ -508,6 +549,7 @@ export default function ChaoxingSignin() {
     setResultMessage,
     setSigninTasks,
     redirectingRef,
+    paused: !accountReady,
   })
   const {
     autoSignin,
@@ -550,7 +592,11 @@ export default function ChaoxingSignin() {
   }, [])
 
   // ── Bootstrap effect ───────────────────────────────────────────────────────
-  // Route guarding lives in App.jsx (PrivateRoute).
+  // Route guarding lives in App.jsx (PrivateRoute). Only app-scoped data loads
+  // here: courses, classes and sign-in detection need a Chaoxing session, which
+  // the backend only holds after this page verifies the account (every sign
+  // call re-logs in with the password anyway), so they run from verifyAccount
+  // or an explicit refresh — never on load, where they would only fail.
 
   useEffect(() => {
     redirectingRef.current = false
@@ -568,21 +614,13 @@ export default function ChaoxingSignin() {
         return
       }
 
-      const results = await Promise.allSettled([
-        fetchCourses(),
-
-        fetchClasses(),
-
-        fetchSigninTasks(),
-
+      const [, backgroundTasksResult] = await Promise.allSettled([
         fetchSigninHistory(),
 
         fetchBackgroundTaskHistory(),
       ])
 
       if (cancelled) return
-
-      const backgroundTasksResult = results[4]
 
       if (backgroundTasksResult.status !== 'fulfilled') return
 
@@ -618,9 +656,6 @@ export default function ChaoxingSignin() {
     navigate,
     stopPolling,
     stopAutoCheck,
-    fetchCourses,
-    fetchClasses,
-    fetchSigninTasks,
     fetchSigninHistory,
     fetchBackgroundTaskHistory,
     openBackgroundTask,
@@ -879,6 +914,33 @@ export default function ChaoxingSignin() {
     submitting,
   ])
 
+  const executeSelectedCourseSignin = useCallback(async () => {
+    if (submitting) return
+    if (form.selectedCourseIds.length === 0) {
+      await executeSignin()
+      return
+    }
+    const selected = form.selectedCourseIds.map((id) => courseOptions.find((course) => course.id === id))
+    if (selected.some((course) => !course)) {
+      setResultType('error')
+      setResultMessage('选中的课程无效，请重新选择后再试。')
+      return
+    }
+    setSubmitting(true)
+    try {
+      const results = []
+      for (const course of selected) {
+        results.push(await executeSignin(course.id, form.signType, { silent: true }))
+      }
+      const failed = results.filter((result) => !result.status)
+      setResultType(failed.length === 0 ? 'success' : 'error')
+      setResultMessage(`课程签到完成，成功 ${results.length - failed.length} 门，失败 ${failed.length} 门。${failed[0]?.message || ''}`)
+      await fetchSigninTasks()
+    } finally {
+      setSubmitting(false)
+    }
+  }, [courseOptions, executeSignin, fetchSigninTasks, form.selectedCourseIds, form.signType, submitting])
+
   // Auto-detect: apply the detected task's sign-in type (and matching class
   // selection when available) into the form so the user only sees fields
   // relevant to the activity the teacher actually started.
@@ -890,10 +952,12 @@ export default function ChaoxingSignin() {
       const matchedClass = classKey
         ? classOptions.find((opt) => opt.classId === classKey || opt.id === classKey)
         : null
+      setSigninTarget(classKey ? 'class' : 'course')
       setForm((prev) => ({
         ...prev,
         signType: detectedType,
         ...(matchedClass ? { selectedClassIds: [matchedClass.id] } : {}),
+        ...(!classKey && task.courseId ? { selectedCourseIds: [String(task.courseId)] } : {}),
       }))
       setResultType('info')
       setResultMessage(
@@ -945,6 +1009,16 @@ export default function ChaoxingSignin() {
       return
     }
 
+    accountGenerationRef.current += 1
+    coursesRequestRef.current += 1
+    classesRequestRef.current += 1
+    signinTasksRequestRef.current += 1
+    setSigninTasksLoading(false)
+    setAccountReady(false)
+    chatSignin.reset()
+    setCourses([])
+    setClassSubjects([])
+    setSigninTasks([])
     setSubmitting(true)
 
     setResultMessage('')
@@ -961,10 +1035,13 @@ export default function ChaoxingSignin() {
       setResultType('success')
 
       setResultMessage(pickMessage(resp) || '账号验证成功。')
+      setAccountReady(true)
 
       void fetchCourses()
 
       void fetchClasses()
+      void fetchSigninTasks()
+      setActiveTab('signin')
     } catch (err) {
       setResultType('error')
 
@@ -1247,257 +1324,31 @@ export default function ChaoxingSignin() {
   const taskRunning =
     Boolean(taskId) && !['completed', 'error', 'failed', 'cancelled'].includes(taskStatus?.status)
 
-  const handleTabKeyDown = useCallback((event) => {
-    const focusedTab = event.target.closest?.('[role="tab"]')
-    const currentIndex = CHAOXING_TABS.findIndex(
-      (tab) => focusedTab?.id === `cx-tab-${tab.id}`
-    )
-    if (currentIndex < 0) return
+  const hasCredentials = Boolean(form.username.trim() && form.password)
 
-    let nextIndex = currentIndex
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % CHAOXING_TABS.length
-    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + CHAOXING_TABS.length) % CHAOXING_TABS.length
-    else if (event.key === 'Home') nextIndex = 0
-    else if (event.key === 'End') nextIndex = CHAOXING_TABS.length - 1
-    else return
+  const openAccountTab = () => setActiveTab('account')
 
-    event.preventDefault()
-    const nextTab = CHAOXING_TABS[nextIndex].id
-    setActiveTab(nextTab)
-    requestAnimationFrame(() => document.getElementById(`cx-tab-${nextTab}`)?.focus())
-  }, [])
-
-  // ── Render ─────────────────────────────────────────────────────────────────
-
-  return (
-    <div className="overflow-x-hidden">
-      <div className="space-y-6">
-        <div className={GLASS_CARD_CLASS}>
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-bold text-text">学习通签到</h1>
-
-            {taskRunning && (
-              <button
-                type="button"
-                onClick={() => setActiveTab('signin')}
-                className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
-                title="查看后台任务进度"
-              >
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-                </span>
-                后台任务进行中
-              </button>
-            )}
-          </div>
+  const accountCard = (
+    <div className={`${GLASS_CARD_CLASS} max-w-2xl space-y-4`}>
+      <div>
+        <h2 className="text-lg font-bold text-text">学习通账号</h2>
+        <p className="mt-1 text-sm text-text-muted">
+          {accountReady ? '账号已验证；修改后请重新验证。' : '验证后即可检测并提交签到，密码仅在当前页面使用。'}
+        </p>
+      </div>
+      <form className="grid gap-4 sm:grid-cols-2" onSubmit={verifyAccount}>
+        <Input id="cx-username" label="账号 / 手机号" type="text" disabled={submitting || chatSignin.submitting} name="cx-username" autoComplete="username" value={form.username} onChange={(event) => setForm((prev) => ({ ...prev, username: event.target.value }))} required />
+        <Input id="cx-password" label="密码" type="password" disabled={submitting || chatSignin.submitting} name="cx-password" autoComplete="current-password" value={form.password} onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))} required />
+        <div className="sm:col-span-2">
+          <Button type="submit" disabled={submitting || chatSignin.submitting}>{submitting ? '验证中...' : '验证账号并获取课程'}</Button>
         </div>
+      </form>
+    </div>
+  )
 
-        <StatsCards todayStats={todayStats} />
-
-        <div className={GLASS_CARD_CLASS}>
-          <div
-            role="tablist"
-            aria-label="学习通签到工作区"
-            tabIndex="-1"
-            className="grid grid-cols-4 gap-2 border-b border-border/40 pb-4"
-            onKeyDown={handleTabKeyDown}
-          >
-            {CHAOXING_TABS.map((tab) => (
-              <button
-                key={tab.id}
-                id={`cx-tab-${tab.id}`}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === tab.id}
-                aria-controls={`cx-panel-${tab.id}`}
-                tabIndex={activeTab === tab.id ? 0 : -1}
-                onClick={() => setActiveTab(tab.id)}
-                className={`min-h-[44px] cursor-pointer rounded-xl px-2 py-2 text-sm font-semibold sm:px-4 ${
-                  activeTab === tab.id
-                    ? 'bg-primary text-white'
-                    : 'bg-surface text-text hover:bg-surface-hover'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          {activeTab === 'signin' && (
-            <div id="cx-panel-signin" role="tabpanel" aria-labelledby="cx-tab-signin" tabIndex="0" className="mt-6 space-y-4">
-              <AutoSigninBanner
-                signinTasks={signinTasks}
-                form={form}
-                submitting={submitting}
-                onApplyTask={applyDetectedTask}
-                onApplyAndSubmit={applyAndSubmitDetectedTask}
-                onRefresh={fetchSigninTasks}
-              />
-
-              <form className="grid grid-cols-1 gap-4 md:grid-cols-2" onSubmit={verifyAccount}>
-                <Input
-                  id="cx-username"
-                  label="账号 / 手机号"
-                  type="text"
-                  name="cx-username"
-                  autoComplete="username"
-                  value={form.username}
-                  onChange={(event) =>
-                    setForm((prev) => ({ ...prev, username: event.target.value }))
-                  }
-                  required
-                />
-
-                <Input
-                  id="cx-password"
-                  label="密码"
-                  type="password"
-                  name="cx-password"
-                  autoComplete="current-password"
-                  value={form.password}
-                  onChange={(event) =>
-                    setForm((prev) => ({ ...prev, password: event.target.value }))
-                  }
-                  required
-                />
-
-                <div className="md:col-span-2">
-                  <Select
-                    id="cx-signtype"
-                    label="签到类型"
-                    value={form.signType}
-                    onChange={(event) =>
-                      setForm((prev) => ({ ...prev, signType: event.target.value }))
-                    }
-                  >
-                    <option value="all">通用模式（自动匹配老师发起的类型）</option>
-                    <option value="normal">普通签到</option>
-                    <option value="photo">拍照签到</option>
-                    <option value="location">位置签到</option>
-                    <option value="qrcode">二维码签到</option>
-                    <option value="gesture">手势签到</option>
-                    <option value="code">签到码签到</option>
-                  </Select>
-                </div>
-
-                <div className="md:col-span-2">
-                  <MultiSelect
-                    label="课程选择（可选，不选即全部课程）"
-                    options={courseOptions}
-                    selectedIds={form.selectedCourseIds}
-                    onChange={(ids) => setForm((prev) => ({ ...prev, selectedCourseIds: ids }))}
-                    emptyHint="暂无课程，请先验证账号后刷新课程"
-                    headerAction={
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        aria-label="刷新课程列表"
-                        title="刷新课程列表"
-                        className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
-                        onClick={fetchCourses}
-                      >
-                        <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                    }
-                  />
-                </div>
-
-                <div className="md:col-span-2">
-                  <MultiSelect
-                    label="班级选择（班级签到入口）"
-                    options={classOptions}
-                    selectedIds={form.selectedClassIds}
-                    onChange={(ids) => setForm((prev) => ({ ...prev, selectedClassIds: ids }))}
-                    emptyHint="暂无班级，请先验证账号后刷新班级"
-                    headerAction={
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        aria-label="刷新班级列表"
-                        title="刷新班级列表"
-                        className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
-                        onClick={fetchClasses}
-                      >
-                        <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                    }
-                  />
-                </div>
-
-                {form.signType === 'all' && (
-                  <div className="md:col-span-2">
-                    <button
-                      type="button"
-                      onClick={() => setAdvancedOpen((open) => !open)}
-                      aria-expanded={advancedOpen}
-                      className="flex min-h-[44px] w-full items-center justify-between rounded-xl border border-border/60 bg-surface/60 px-4 py-2 text-sm text-text/80 transition-colors hover:bg-surface-hover"
-                    >
-                      <span>补充签到参数（可选）</span>
-                      <ChevronDown
-                        className={`h-4 w-4 shrink-0 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
-                        aria-hidden="true"
-                      />
-                    </button>
-                  </div>
-                )}
-
-                {(form.signType === 'photo' || (form.signType === 'all' && advancedOpen)) && (
-                  <div className="md:col-span-2">
-                    <label htmlFor="cx-photo" className="mb-2 block text-sm font-medium text-text">
-                      签到照片（自拍/拍照）
-                    </label>
-
-                    <div className="flex items-center gap-3">
-                      <label
-                        htmlFor="cx-photo"
-                        className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border border-border/30 bg-surface/60 px-4 py-2 text-sm text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 hover:bg-surface/80"
-                      >
-                        <Camera className="h-4 w-4" />
-                        选择照片
-                      </label>
-
-                      <input
-                        id="cx-photo"
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp"
-                        className="hidden"
-                        onChange={(event) => {
-                          const file = event.target.files?.[0] || null
-                          try {
-                            validatePhotoFile(file)
-                            setForm((prev) => ({ ...prev, photoFile: file }))
-                          } catch (error) {
-                            event.target.value = ''
-                            toast.error(error.message)
-                          }
-                        }}
-                      />
-
-                      <p className="text-xs text-text/70">
-                        {form.photoFile
-                          ? `已选择：${form.photoFile.name}（${(form.photoFile.size / 1024).toFixed(0)} KB）`
-                          : '请上传自拍照片，支持 JPG、PNG、WebP，最大 5 MB。'}
-                      </p>
-                    </div>
-
-                    {photoPreviewUrl && (
-                      <div className="mt-3">
-                        <img
-                          src={photoPreviewUrl}
-                          alt="签到照片预览"
-                          className="h-32 w-32 rounded-xl border border-border/30 object-cover"
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {(form.signType === 'location' ||
-                  form.signType === 'qrcode' ||
-                  form.signType === 'gesture' ||
-                  (form.signType === 'all' && advancedOpen)) && (
-                  <div className="space-y-3 md:col-span-2">
+  // Shared by the course/class form and the group-chat location sign-in.
+  const locationFields = (
+                  <>
                     {/* Primary path: one tap to fill coordinates. */}
                     <div className="flex flex-wrap gap-3">
                       <Button
@@ -1632,6 +1483,219 @@ export default function ChaoxingSignin() {
                       </div>
                       <p className="mt-2 text-xs text-text-muted">坐标使用百度 BD-09 坐标系。</p>
                     </details>
+                  </>
+  )
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  return (
+    <div className="overflow-x-hidden">
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="学习通"
+          title="课堂签到"
+          actions={
+            <>
+              {taskRunning && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('monitor')}
+                  className="inline-flex min-h-[40px] items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 text-sm font-semibold text-primary hover:bg-primary/20"
+                  title="查看后台任务进度"
+                >
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+                  </span>
+                  后台任务进行中
+                </button>
+              )}
+              <AccountChip ready={accountReady} account={form.username} onClick={openAccountTab} />
+            </>
+          }
+        >
+          <WorkspaceTabs id="cx" label="课堂签到工作区" tabs={CHAOXING_TABS} activeTab={activeTab} onChange={setActiveTab} />
+        </PageHeader>
+
+        {activeTab === 'account' && (
+          <section id="cx-panel-account" role="tabpanel" aria-labelledby="cx-tab-account" tabIndex="0" className="space-y-4">
+            {accountCard}
+          </section>
+        )}
+
+        {activeTab === 'signin' && (
+          <section id="cx-panel-signin" role="tabpanel" aria-labelledby="cx-tab-signin" tabIndex="0" className="space-y-4">
+            {!accountReady ? accountCard : (
+            <>
+              {signinTarget !== 'chat' && <AutoSigninBanner
+                signinTasks={signinTasks}
+                form={form}
+                submitting={submitting}
+                onApplyTask={applyDetectedTask}
+                onApplyAndSubmit={applyAndSubmitDetectedTask}
+                onRefresh={fetchSigninTasks}
+                refreshing={signinTasksLoading}
+                error={signinTasksError}
+              />}
+
+              <div className={`${GLASS_CARD_CLASS} space-y-4`}>
+              <div className="inline-flex max-w-full rounded-full bg-surface-hover p-1" role="group" aria-label="签到范围">
+                {SIGNIN_SCOPES.map((scope) => (
+                  <button
+                    key={scope.id}
+                    type="button"
+                    aria-pressed={signinTarget === scope.id}
+                    onClick={() => setSigninTarget(scope.id)}
+                    className={`min-h-[40px] rounded-full px-4 text-sm font-medium transition-colors ${
+                      signinTarget === scope.id ? 'bg-surface text-text shadow-sm' : 'text-text-muted hover:text-text'
+                    }`}
+                  >
+                    {scope.label}
+                  </button>
+                ))}
+              </div>
+
+              {signinTarget === 'chat' ? (
+                <ChatSigninSection chat={chatSignin} hasCredentials={hasCredentials} busy={submitting} onOpenAccount={openAccountTab} locationFields={locationFields} />
+              ) : (
+              <form className="grid grid-cols-1 gap-4 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); void (signinTarget === 'class' ? executeSelectedClassSignin() : executeSelectedCourseSignin()) }}>
+                <div className="md:col-span-2">
+                  <Select
+                    id="cx-signtype"
+                    label="签到类型"
+                    value={form.signType}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, signType: event.target.value }))
+                    }
+                  >
+                    <option value="all">通用模式（自动匹配老师发起的类型）</option>
+                    <option value="normal">普通签到</option>
+                    <option value="photo">拍照签到</option>
+                    <option value="location">位置签到</option>
+                    <option value="qrcode">二维码签到</option>
+                    <option value="gesture">手势签到</option>
+                    <option value="code">签到码签到</option>
+                  </Select>
+                </div>
+
+                {signinTarget === 'course' && <div className="md:col-span-2">
+                  <MultiSelect
+                    label="课程选择（可选，不选即全部课程）"
+                    options={courseOptions}
+                    selectedIds={form.selectedCourseIds}
+                    onChange={(ids) => setForm((prev) => ({ ...prev, selectedCourseIds: ids }))}
+                    emptyHint="此账号暂无课程；可在学习通加入课程后刷新"
+                    headerAction={
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        aria-label="刷新课程列表"
+                        title="刷新课程列表"
+                        className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
+                        onClick={fetchCourses}
+                      >
+                        <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    }
+                  />
+                </div>}
+
+                {signinTarget === 'class' && <div className="md:col-span-2">
+                  <MultiSelect
+                    label="班级选择（班级签到入口）"
+                    options={classOptions}
+                    selectedIds={form.selectedClassIds}
+                    onChange={(ids) => setForm((prev) => ({ ...prev, selectedClassIds: ids }))}
+                    emptyHint="此账号暂无班级；可在学习通加入班级后刷新"
+                    headerAction={
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        aria-label="刷新班级列表"
+                        title="刷新班级列表"
+                        className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
+                        onClick={fetchClasses}
+                      >
+                        <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    }
+                  />
+                </div>}
+
+                {form.signType === 'all' && (
+                  <div className="md:col-span-2">
+                    <button
+                      type="button"
+                      onClick={() => setAdvancedOpen((open) => !open)}
+                      aria-expanded={advancedOpen}
+                      className="flex min-h-[44px] w-full items-center justify-between rounded-xl border border-border/60 bg-surface/60 px-4 py-2 text-sm text-text/80 transition-colors hover:bg-surface-hover"
+                    >
+                      <span>补充签到参数（可选）</span>
+                      <ChevronDown
+                        className={`h-4 w-4 shrink-0 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </div>
+                )}
+
+                {(form.signType === 'photo' || (form.signType === 'all' && advancedOpen)) && (
+                  <div className="md:col-span-2">
+                    <label htmlFor="cx-photo" className="mb-2 block text-sm font-medium text-text">
+                      签到照片（自拍/拍照）
+                    </label>
+
+                    <div className="flex items-center gap-3">
+                      <label
+                        htmlFor="cx-photo"
+                        className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border border-border/30 bg-surface/60 px-4 py-2 text-sm text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 hover:bg-surface/80"
+                      >
+                        <Camera className="h-4 w-4" />
+                        选择照片
+                      </label>
+
+                      <input
+                        id="cx-photo"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0] || null
+                          try {
+                            validatePhotoFile(file)
+                            setForm((prev) => ({ ...prev, photoFile: file }))
+                          } catch (error) {
+                            event.target.value = ''
+                            toast.error(error.message)
+                          }
+                        }}
+                      />
+
+                      <p className="text-xs text-text/70">
+                        {form.photoFile
+                          ? `已选择：${form.photoFile.name}（${(form.photoFile.size / 1024).toFixed(0)} KB）`
+                          : '请上传自拍照片，支持 JPG、PNG、WebP，最大 5 MB。'}
+                      </p>
+                    </div>
+
+                    {photoPreviewUrl && (
+                      <div className="mt-3">
+                        <img
+                          src={photoPreviewUrl}
+                          alt="签到照片预览"
+                          className="h-32 w-32 rounded-xl border border-border/30 object-cover"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(form.signType === 'location' ||
+                  form.signType === 'qrcode' ||
+                  form.signType === 'gesture' ||
+                  (form.signType === 'all' && advancedOpen)) && (
+                  <div className="space-y-3 md:col-span-2">
+                    {locationFields}
                   </div>
                 )}
 
@@ -1727,69 +1791,46 @@ export default function ChaoxingSignin() {
                   </div>
                 )}
 
-                <div className="md:col-span-2 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-                  <Button
-                    type="submit"
-                    variant="secondary"
-                    className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                    disabled={submitting}
-                  >
-                    {submitting ? '验证中...' : '验证账号'}
+                <div className="flex flex-wrap items-center gap-3 md:col-span-2">
+                  <Button type="submit" disabled={submitting || !hasCredentials || (signinTarget === 'class' && form.selectedClassIds.length === 0)}>
+                    {submitting ? '签到中...' : signinTarget === 'class' ? '班级签到' : '课程签到'}
                   </Button>
-
-                  <Button
-                    type="button"
-                    className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                    onClick={() => executeSignin()}
-                    disabled={submitting}
-                  >
-                    {submitting ? '签到中...' : '课程签到'}
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="cta"
-                    className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                    onClick={startSigninTask}
-                    disabled={submitting}
-                  >
-                    {submitting ? '处理中...' : '课程任务'}
-                  </Button>
-
-                  <Button
-                    type="button"
-                    className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                    onClick={executeSelectedClassSignin}
-                    disabled={submitting || classOptions.length === 0}
-                  >
-                    {submitting ? '签到中...' : '班级签到'}
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="cta"
-                    className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                    onClick={startClassSigninTask}
-                    disabled={submitting || classOptions.length === 0}
-                  >
-                    {submitting ? '处理中...' : '班级任务'}
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
-                    onClick={() => navigate('/chaoxing-fanya')}
-                  >
-                    打开泛雅页面
-                  </Button>
+                  {!hasCredentials && <p className="text-sm text-text-muted">请先在「账号」中填写密码。</p>}
                 </div>
               </form>
+              )}
+              </div>
+            </>
+            )}
+          </section>
+        )}
 
-              {(taskId || taskStatus || logs.length > 0) && (
-                <div className={GLASS_PANEL_CLASS}>
+        {activeTab === 'monitor' && (
+          <section id="cx-panel-monitor" role="tabpanel" aria-labelledby="cx-tab-monitor" tabIndex="0" className="space-y-4">
+            <ConfigTab autoSignin={autoSignin} setAutoSignin={setAutoSignin} autoSignFilter={autoSignFilter} setAutoSignFilter={setAutoSignFilter} checkInterval={checkInterval} setCheckInterval={setCheckInterval} nextCheckCountdown={nextCheckCountdown} paused={!accountReady} />
+            <div className={`${GLASS_CARD_CLASS} space-y-4`}>
+              <div>
+                <h2 className="text-lg font-bold text-text">后台签到任务</h2>
+                <p className="mt-1 text-sm text-text-muted">由服务端执行，沿用手动签到的设置：{getSignTypeLabel(form.signType)}，已选 {form.selectedCourseIds.length} 门课程、{form.selectedClassIds.length} 个班级。</p>
+              </div>
+              {hasCredentials ? (
+                <div className="flex flex-wrap gap-3">
+                  <Button type="button" onClick={startSigninTask} disabled={submitting}>{submitting ? '处理中...' : '创建课程任务'}</Button>
+                  <Button type="button" variant="secondary" onClick={startClassSigninTask} disabled={submitting || form.selectedClassIds.length === 0}>{submitting ? '处理中...' : '创建班级任务'}</Button>
+                  <Button type="button" variant="ghost" onClick={() => setActiveTab('signin')}>调整范围与参数</Button>
+                </div>
+              ) : (
+                <p className="text-sm text-text-muted">
+                  请先在
+                  <button type="button" className="mx-1 font-semibold text-primary hover:underline" onClick={openAccountTab}>账号</button>
+                  中验证学习通账号。
+                </p>
+              )}
+            </div>
+            {(taskId || taskStatus || logs.length > 0) && (
+                <div className={GLASS_CARD_CLASS}>
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                    <h3 className="text-base font-semibold text-text">任务状态</h3>
+                    <h2 className="text-lg font-bold text-text">任务状态</h2>
 
                     <Button
                       type="button"
@@ -1825,9 +1866,16 @@ export default function ChaoxingSignin() {
                   )}
 
                   {taskStatus && (
-                    <pre className="mb-3 max-h-48 overflow-auto rounded-xl border border-border/20 bg-slate-900/90 p-3 text-xs text-slate-100">
-                      {taskPretty}
-                    </pre>
+                    <div className="mb-4 space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-xl bg-surface-hover p-3"><p className="text-xs text-text-muted">运行状态</p><p className="mt-1 font-semibold text-text">{taskStatus.status || '等待更新'}</p></div>
+                        <div className="rounded-xl bg-surface-hover p-3"><p className="text-xs text-text-muted">最近消息</p><p className="mt-1 break-words text-sm text-text">{taskStatus.message || taskStatus.current_task || '暂无消息'}</p></div>
+                      </div>
+                      <details>
+                        <summary className="min-h-[44px] cursor-pointer py-3 text-sm text-text-muted">查看完整任务状态</summary>
+                        <pre className="max-h-48 overflow-auto rounded-xl bg-slate-900/90 p-3 text-xs text-slate-100">{taskPretty}</pre>
+                      </details>
+                    </div>
                   )}
 
                   <div>
@@ -1862,10 +1910,40 @@ export default function ChaoxingSignin() {
                   </div>
                 </div>
               )}
+          </section>
+        )}
 
-              <div className={GLASS_PANEL_CLASS}>
+        {activeTab === 'tasks' && (
+          <section id="cx-panel-tasks" role="tabpanel" aria-labelledby="cx-tab-tasks" tabIndex="0" className="space-y-4">
+            <TasksTab
+              signinTasks={signinTasks}
+              fetchSigninTasks={fetchSigninTasks}
+              refreshing={signinTasksLoading}
+              error={signinTasksError}
+              accountReady={accountReady}
+              onOpenAccount={openAccountTab}
+              openBackgroundTask={(tid) => {
+                setActiveTab('monitor')
+                return openBackgroundTask(tid, {
+                  setResultType,
+                  setResultMessage,
+                  setBackgroundTaskHistory,
+                })
+              }}
+              onApplyTask={(task) => { applyDetectedTask(task); setActiveTab('signin') }}
+              executeSignin={executeSignin}
+              executeClassSignin={executeClassSignin}
+            />
+          </section>
+        )}
+
+        {activeTab === 'history' && (
+          <section id="cx-panel-history" role="tabpanel" aria-labelledby="cx-tab-history" tabIndex="0" className="space-y-4">
+              <StatsCards todayStats={todayStats} />
+              <HistoryTab signinHistory={signinHistory} fetchSigninHistory={fetchSigninHistory} />
+              <div className={GLASS_CARD_CLASS}>
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                  <h3 className="text-base font-semibold text-text">后台任务历史</h3>
+                  <h2 className="text-lg font-bold text-text">后台任务历史</h2>
 
                   <Button
                     type="button"
@@ -1882,7 +1960,7 @@ export default function ChaoxingSignin() {
                 </div>
 
                 {backgroundTaskHistory.length === 0 ? (
-                  <p className="text-sm text-text/70">暂无后台任务历史</p>
+                  <p className="text-sm text-text-muted">暂无后台任务历史</p>
                 ) : (
                   <div className="max-h-64 space-y-2 overflow-y-auto">
                     {backgroundTaskHistory.map((task) => {
@@ -1901,6 +1979,7 @@ export default function ChaoxingSignin() {
                           type="button"
                           className={`w-full min-h-[44px] rounded-xl border px-3 py-3 text-left transition-all duration-200 cursor-pointer ${isActive ? 'border-primary/50 bg-primary/10' : 'border-border/30 bg-surface/70 hover:border-primary/40'}`}
                           onClick={() => {
+                            setActiveTab('monitor')
                             void openBackgroundTask(task.taskId, {
                               setResultType,
                               setResultMessage,
@@ -1940,47 +2019,8 @@ export default function ChaoxingSignin() {
                   </div>
                 )}
               </div>
-            </div>
-          )}
-
-          {activeTab === 'tasks' && (
-            <div id="cx-panel-tasks" role="tabpanel" aria-labelledby="cx-tab-tasks" tabIndex="0">
-              <TasksTab
-                signinTasks={signinTasks}
-                fetchSigninTasks={fetchSigninTasks}
-                openBackgroundTask={(tid) =>
-                  openBackgroundTask(tid, {
-                    setResultType,
-                    setResultMessage,
-                    setBackgroundTaskHistory,
-                  })
-                }
-                executeSignin={executeSignin}
-                executeClassSignin={executeClassSignin}
-              />
-            </div>
-          )}
-
-          {activeTab === 'history' && (
-            <div id="cx-panel-history" role="tabpanel" aria-labelledby="cx-tab-history" tabIndex="0">
-              <HistoryTab signinHistory={signinHistory} fetchSigninHistory={fetchSigninHistory} />
-            </div>
-          )}
-
-          {activeTab === 'config' && (
-            <div id="cx-panel-config" role="tabpanel" aria-labelledby="cx-tab-config" tabIndex="0">
-              <ConfigTab
-                autoSignin={autoSignin}
-                setAutoSignin={setAutoSignin}
-                autoSignFilter={autoSignFilter}
-                setAutoSignFilter={setAutoSignFilter}
-                checkInterval={checkInterval}
-                setCheckInterval={setCheckInterval}
-                nextCheckCountdown={nextCheckCountdown}
-              />
-            </div>
-          )}
-        </div>
+          </section>
+        )}
       </div>
 
       {isMapPickerOpen && (

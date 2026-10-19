@@ -4,7 +4,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 import requests
-
 from app.services.course.chaoxing.signin import ChaoxingSigninClient, build_remote_sign_endpoints
 
 
@@ -51,13 +50,16 @@ def test_chaoxing_signin_login_ignores_non_object_json(payload):
 
 
 @pytest.mark.parametrize("payload", [[], None, "unexpected", 42])
-def test_chaoxing_signin_get_ppt_active_info_ignores_non_object_json(payload):
+def test_chaoxing_signin_get_ppt_active_info_rejects_non_object_json(payload):
     client = ChaoxingSigninClient()
     mock_response = Mock()
     mock_response.json.return_value = payload
 
-    with patch.object(client.session, "get", return_value=mock_response):
-        assert client.get_ppt_active_info("active-1") == {}
+    with (
+        patch.object(client.session, "get", return_value=mock_response),
+        pytest.raises(requests.RequestException, match="invalid JSON object"),
+    ):
+        client.get_ppt_active_info("active-1")
 
 
 def test_chaoxing_signin_get_ppt_active_info_keeps_object_payload():
@@ -86,14 +88,17 @@ def test_chaoxing_signin_photo_token_ignores_non_object_json(payload):
 
 
 @pytest.mark.parametrize("payload", [[], None, "unexpected", 42])
-def test_chaoxing_signin_activity_list_ignores_non_object_json(payload):
+def test_chaoxing_signin_activity_list_rejects_non_object_json(payload):
     client = ChaoxingSigninClient()
     mock_response = Mock()
     mock_response.json.return_value = payload
     mock_response.raise_for_status.return_value = None
 
-    with patch.object(client.session, "get", return_value=mock_response):
-        assert client._get_course_activity_list("course-1", "class-1") == []
+    with (
+        patch.object(client.session, "get", return_value=mock_response),
+        pytest.raises(requests.RequestException, match="invalid JSON object"),
+    ):
+        client._get_course_activity_list("course-1", "class-1")
 
 
 def test_chaoxing_signin_activity_list_keeps_object_payload():
@@ -241,8 +246,7 @@ def test_chaoxing_signin_get_active_tasks_filters_by_class_and_active_id():
 
 
 def test_chaoxing_signin_explicit_active_id_honored_when_older_than_2h():
-    """An explicitly-requested active_id must be honored regardless of the >2h
-    age heuristic, which is only meant to bound auto-discovered activities."""
+    """An explicitly requested activity remains discoverable while it is open."""
     client = ChaoxingSigninClient()
     now_ms = int(time.time() * 1000)
     three_hours_ago = now_ms - 3 * 60 * 60 * 1000
@@ -264,9 +268,8 @@ def test_chaoxing_signin_explicit_active_id_honored_when_older_than_2h():
     assert tasks[0]["activeId"] == "11"
 
 
-def test_chaoxing_signin_age_filter_still_drops_auto_discovered_old_activity():
-    """Without an explicit active_id, the >2h heuristic still filters out stale
-    auto-discovered activities."""
+def test_chaoxing_signin_keeps_still_active_signin_older_than_two_hours():
+    """Upstream status, rather than activity age, determines whether sign-in is open."""
     client = ChaoxingSigninClient()
     now_ms = int(time.time() * 1000)
     three_hours_ago = now_ms - 3 * 60 * 60 * 1000
@@ -284,12 +287,12 @@ def test_chaoxing_signin_age_filter_still_drops_auto_discovered_old_activity():
     ):
         tasks = client.get_active_tasks(expected_type="location")
 
-    assert tasks == []
+    assert len(tasks) == 1
+    assert tasks[0]["activeId"] == "11"
 
 
-def test_chaoxing_signin_explicit_active_id_does_not_smuggle_other_old_activities():
-    """An explicit active_id honors only the requested activity; other stale
-    activities are still dropped by the age heuristic."""
+def test_chaoxing_signin_explicit_active_id_does_not_include_other_activities():
+    """An explicit active_id matches only that activity within the selected class."""
     client = ChaoxingSigninClient()
     now_ms = int(time.time() * 1000)
     three_hours_ago = now_ms - 3 * 60 * 60 * 1000

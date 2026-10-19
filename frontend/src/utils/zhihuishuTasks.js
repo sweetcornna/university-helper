@@ -1,3 +1,10 @@
+// A catalog course id can occur in several terms. The encrypted enrollment
+// selector is the identity accepted by detail, video and task endpoints.
+export const getZhihuishuCourseId = (course) => {
+  const value = course?.recruitAndCourseId || course?.secret || course?.courseId || course?.course_id || course?.id
+  return value === undefined || value === null ? '' : String(value)
+}
+
 export const TERMINAL_ZHIHUISHU_TASK_STATUSES = new Set([
   'completed',
   'failed',
@@ -49,7 +56,7 @@ export const applyCourseProgressToTaskRecords = (
   const percentage = Number(progress?.percentage ?? 0) || 0
 
   return taskRecords.map((task) => {
-    if (task.taskId !== activeTaskId || task.courseId !== courseId) {
+    if (task.taskId !== activeTaskId || getZhihuishuCourseId(task) !== String(courseId)) {
       return task
     }
 

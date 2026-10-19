@@ -22,6 +22,8 @@ export default function useAuthentication({ stopPolling }) {
 
 
   const [loginLoading, setLoginLoading] = useState(false)
+  // True once the platform accepted this account in the current page session.
+  const [loggedIn, setLoggedIn] = useState(false)
 
 
   const [courses, setCourses] = useState([])
@@ -228,6 +230,7 @@ export default function useAuthentication({ stopPolling }) {
 
         setUsername(loginUsername)
         setPassword(loginPassword)
+        setLoggedIn(true)
         await loadCourses()
 
 
@@ -259,6 +262,7 @@ export default function useAuthentication({ stopPolling }) {
     username, setUsername,
     password, setPassword,
     loginLoading,
+    loggedIn,
     coursesLoading,
     courses, setCourses,
     error, setError,

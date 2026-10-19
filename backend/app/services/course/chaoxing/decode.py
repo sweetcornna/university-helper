@@ -16,7 +16,7 @@ import unicodedata
 import warnings
 from contextlib import contextmanager
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 from bs4 import BeautifulSoup, NavigableString
@@ -823,16 +823,34 @@ def decode_course_list(html_text: str) -> list[dict[str, str]]:
         if course.select_one("a.not-open-tip") or course.select_one("div.not-open-tip"):
             continue
 
+        clazz_input = course.select_one("input.clazzId")
+        course_input = course.select_one("input.courseId")
+        if clazz_input is None or course_input is None:
+            continue
+
+        cpi = ""
+        for link in course.select("a[href]"):
+            query = parse_qs(urlsplit(link["href"]).query)
+            if query.get("cpi"):
+                cpi = query["cpi"][0]
+                break
+
+        def display_text(selector):
+            element = course.select_one(selector)
+            if element is None:
+                return ""
+            return element.get("title") or element.get_text(" ", strip=True)
+
         course_detail = {
-            "id": course.attrs["id"],
-            "info": course.attrs["info"],
-            "roleid": course.attrs["roleid"],
-            "clazzId": course.select_one("input.clazzId").attrs["value"],
-            "courseId": course.select_one("input.courseId").attrs["value"],
-            "cpi": re.findall(r"cpi=(.*?)&", course.select_one("a").attrs["href"])[0],
-            "title": course.select_one("span.course-name").attrs["title"],
-            "desc": course.select_one("p.margint10").attrs["title"] if course.select_one("p.margint10") else "",
-            "teacher": course.select_one("p.color3").attrs["title"],
+            "id": course.get("id", ""),
+            "info": course.get("info", ""),
+            "roleid": course.get("roleid", ""),
+            "clazzId": clazz_input.get("value", ""),
+            "courseId": course_input.get("value", ""),
+            "cpi": cpi,
+            "title": display_text("span.course-name"),
+            "desc": display_text("p.margint10"),
+            "teacher": display_text("p.color3"),
         }
         course_list.append(course_detail)
 
@@ -910,12 +928,15 @@ def _extract_points_from_chapter(chapter_unit) -> list[dict[str, Any]]:
     raw_points = chapter_unit.find_all("li")
 
     for raw_point in raw_points:
-        point = raw_point.div
-        if "id" not in point.attrs:
+        point = raw_point.find("div", id=re.compile(r"^cur\d{1,20}$"))
+        if point is None:
+            continue
+        title = point.select_one("a.clicktitle")
+        if title is None:
             continue
 
-        point_id = re.findall(r"^cur(\d{1,20})$", point.attrs["id"])[0]
-        point_title = point.select_one("a.clicktitle").text.replace("\n", "").strip()
+        point_id = point["id"][3:]
+        point_title = title.text.replace("\n", "").strip()
 
         # 提取任务数量
         job_count = 1  # 默认为1
@@ -958,13 +979,17 @@ def decode_course_card(html_text: str) -> tuple[list[dict[str, Any]], dict[str, 
     if "章节未开放" in html_text:
         return [], {"notOpen": True}
 
-    # 提取mArg参数
-    temp = re.findall(r"mArg=\{(.*?)\};", html_text.replace(" ", ""))
-    if not temp:
+    # Decode the JSON value directly: regex cannot delimit nested JSON or a
+    # string containing "};", and stripping spaces corrupts attachment names.
+    assignment = re.search(r"\bmArg\s*=\s*", html_text)
+    if assignment is None:
         return [], {}
-
-    # 解析JSON数据
-    cards_data = json.loads("{" + temp[0] + "}")
+    try:
+        cards_data, _ = json.JSONDecoder().raw_decode(html_text[assignment.end() :])
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid Chaoxing task card mArg JSON") from exc
+    if not isinstance(cards_data, dict):
+        raise ValueError("Invalid Chaoxing task card mArg object")
 
     if not cards_data:
         return [], {}

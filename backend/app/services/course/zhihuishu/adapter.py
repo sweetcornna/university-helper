@@ -124,21 +124,34 @@ class ZhihuishuAdapter:
     def get_course_detail(self, course_id: str) -> dict[str, Any]:
         target = str(course_id)
         for course in self.get_courses():
-            current_id = str(course.get("courseId") or course.get("id") or "")
-            if current_id == target:
+            identifiers = (
+                course.get("recruitAndCourseId"),
+                course.get("secret"),
+                course.get("courseId"),
+                course.get("id"),
+            )
+            if target in {str(value) for value in identifiers if value is not None}:
                 return course
         raise Exception("Course not found")
 
     def _resolve_rac_id(self, course_id: str) -> str:
         """把前端选中的 courseId 映射为视频接口所需的 recruitAndCourseId（= 课程 secret）。
 
-        映射失败（取不到列表/课程不在列表里）时回退用 course_id 本身，保证不致命。
+        未匹配的值仍兼容直接传入 secret；读取列表失败必须暴露，避免把原始
+        courseId 当成 secret 请求后续接口并把失败误当作空课程。
         """
-        try:
-            course = self.get_course_detail(course_id)
-        except Exception:
-            return str(course_id)
-        return str(course.get("recruitAndCourseId") or course.get("secret") or course_id)
+        courses = self.get_courses()
+        target = str(course_id)
+        for course in courses:
+            identifiers = (
+                course.get("recruitAndCourseId"),
+                course.get("secret"),
+                course.get("courseId"),
+                course.get("id"),
+            )
+            if target in {str(value) for value in identifiers if value is not None}:
+                return str(course.get("recruitAndCourseId") or course.get("secret") or course_id)
+        return target
 
     def get_videos(self, course_id: str) -> list[dict]:
         if not self.learning:
@@ -179,8 +192,13 @@ class ZhihuishuAdapter:
         lv = info.get("lv") or {}
         lesson = info.get("lesson") or {}
         for v in videos:
-            state = lv.get(str(v.get("small_lesson_id"))) or lesson.get(str(v.get("lesson_id"))) or {}
+            small_id = v.get("small_lesson_id")
+            if small_id not in (None, "", 0, "0"):
+                state = lv.get(str(small_id)) or {}
+            else:
+                state = lesson.get(str(v.get("lesson_id"))) or {}
             v["study_total_time"] = state.get("studyTotalTime") or 0
+            v["learn_time_sec"] = state.get("learnTimeSec") or 0
             v["watch_state"] = state.get("watchState") or 0
             try:
                 watched = int(v["watch_state"]) == 1
@@ -605,16 +623,10 @@ class ZhihuishuAdapter:
     def _run_task_loop(self, task_id: str) -> None:
         """Drive the real Zhihuishu study flow for a started course task.
 
-        For each video the loop calls ``self.learning.watch_video`` (which reports
-        watch points to the Zhihuishu study API) and, when auto-answer is enabled,
-        ``self.answer.answer_question`` for any quiz questions embedded in the
-        video DTO. Progress (completed/failed/percentage/current_video) is derived
-        from the real platform responses rather than a fabricated timer. Pause,
-        resume, cancel, admission, and error handling are preserved.
-
-        End-to-end verification requires live Zhihuishu credentials (unavailable
-        here); unit tests in tests/unit/test_zhihuishu_adapter.py mock the HTTP
-        layer and assert watch_video/answer_question are actually invoked.
+        ``watch_video`` fetches popup checkpoints, submits their answers while
+        playing when auto_answer is enabled, and reports study progress. A
+        rejected popup response fails that video and remains visible in task
+        details; a computed answer alone is never counted as a submission.
         """
         current_index = 0
 
@@ -634,8 +646,17 @@ class ZhihuishuAdapter:
                     return
 
                 if current_index >= len(videos):
-                    task["status"] = "completed"
-                    task["message"] = "Task completed"
+                    failed = int(task.get("failed") or 0)
+                    task["status"] = "error" if failed else "completed"
+                    if failed:
+                        error = next((video.get("error") for video in videos if video.get("error")), None)
+                        task["message"] = (
+                            f"Task finished with failed videos: {error}"
+                            if error
+                            else "Task finished with failed videos"
+                        )
+                    else:
+                        task["message"] = "Task completed"
                     task["current_video"] = None
                     self._recompute_percentage(task)
                     task["updated_at"] = time.time()
@@ -654,7 +675,6 @@ class ZhihuishuAdapter:
                     task["message"] = "Task is running"
                     auto_answer = bool(task.get("auto_answer", True))
                     video_id = current_video.get("id")
-                    questions = list(current_video.get("questions") or [])
                     speed = float(task.get("speed") or 1.0)
 
             if should_wait_for_resume:
@@ -676,6 +696,7 @@ class ZhihuishuAdapter:
                         speed=speed,
                         is_cancelled=lambda: self._is_task_cancelled(task_id),
                         is_paused=lambda: self._is_task_paused(task_id),
+                        auto_answer=auto_answer,
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - surface as failed video, keep going
@@ -698,34 +719,7 @@ class ZhihuishuAdapter:
                     task["updated_at"] = time.time()
                     return
 
-            # --- Phase 3: answer embedded questions (outside lock; real HTTP) ---
-            if watch_ok and auto_answer and questions and self.answer is not None:
-                for question in questions:
-                    with self._task_lock:
-                        if not self._task_state or self._task_state.get("task_id") != task_id:
-                            return
-                        if self._task_state.get("cancelled"):
-                            break
-                    try:
-                        computed = self.answer.answer_question(question)
-                        # NOTE (audit F-answer): answer_question only COMPUTES an
-                        # answer via AI; submitting it to Zhihuishu's QA/exam save
-                        # endpoint is NOT yet implemented (endpoint + signing must be
-                        # reverse-engineered live). Log the computed result so it is
-                        # not silently discarded and the limitation is observable.
-                        if computed:
-                            logger.info(
-                                "Zhihuishu answer computed but NOT submitted " "(submission unimplemented): task_id=%s",
-                                task_id,
-                            )
-                    except Exception as exc:  # noqa: BLE001 - log, do not abort the course
-                        logger.warning(
-                            "Zhihuishu answer_question failed: task_id=%s err=%s",
-                            task_id,
-                            exc,
-                        )
-
-            # --- Phase 4: record the real result for this video ---
+            # --- Phase 3: record the study/popup result for this video ---
             with self._task_lock:
                 if not self._task_state or self._task_state.get("task_id") != task_id:
                     return

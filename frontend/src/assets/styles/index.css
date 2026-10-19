@@ -121,6 +121,14 @@
   .text-balance {
     text-wrap: balance;
   }
+
+  /* Horizontal tab strips scroll by swipe; the bar itself is visual noise. */
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -11,7 +11,8 @@ vi.mock('../utils/api', () => ({
   api: vi.fn(),
 }))
 
-vi.mock('../components', () => ({
+vi.mock('../components', async (importOriginal) => ({
+  ...(await importOriginal()),
   Input: ({ label, ...props }) => (
     <label>
       {label}
@@ -122,10 +123,10 @@ const fail = async (request, error) => {
   await flushPromises()
 }
 
-const getWorkspaceTab = (name) => {
-  const accessibleName = name === 'status' ? /^状态(?:\/|与)退出$/ : name
-  return screen.queryByRole('tab', { name: accessibleName })
-    || screen.getByRole('button', { name: accessibleName })
+const getWorkspaceTab = (name) => screen.getByRole('tab', { name })
+
+const expectLoggedOut = () => {
+  expect(screen.getByRole('button', { name: '平台账号：未登录' })).toBeInTheDocument()
 }
 
 const getZhihuishuLogoutButton = () => screen.getByRole('button', {
@@ -176,7 +177,7 @@ const openTasksAndRefresh = async () => {
 }
 
 const changePollInterval = async (seconds) => {
-  fireEvent.click(getWorkspaceTab('设置'))
+  fireEvent.click(getWorkspaceTab('学习配置'))
   fireEvent.change(screen.getByLabelText('进度轮询间隔（秒）'), {
     target: { value: String(seconds) },
   })
@@ -447,14 +448,14 @@ describe('Zhihuishu request race guards', () => {
     await openTasksAndRefresh()
     await waitFor(() => expect(countRequests(`${API_BASE}/tasks/task-a`)).toBe(1))
 
-    fireEvent.click(getWorkspaceTab('status'))
+    fireEvent.click(getWorkspaceTab('账号'))
     fireEvent.click(screen.getByRole('button', { name: '清理智慧树会话状态' }))
     await flushPromises()
-    expect(screen.getByText('任务总数：0')).toBeInTheDocument()
+    expectLoggedOut()
     toast.notify.mockReset()
 
     await settle(taskRequest, { data: taskResponse('task-a', COURSE_A, 'completed') })
-    expect(screen.getByText('任务总数：0')).toBeInTheDocument()
+    expectLoggedOut()
     expect(toast.notify.mock.calls.some(([, message]) => String(message).includes('学习完成'))).toBe(false)
     fireEvent.click(getWorkspaceTab('任务'))
     expect(screen.queryByText('任务 ID：task-a')).not.toBeInTheDocument()
@@ -482,19 +483,20 @@ describe('Zhihuishu request race guards', () => {
     renderPage()
     await flushPromises()
     await waitFor(() => expect(taskCalls).toBe(1))
-    fireEvent.click(getWorkspaceTab('status'))
-    expect(screen.getByText('智慧树登录：已登录')).toBeInTheDocument()
-    expect(screen.getByText('活跃任务 ID：task-a')).toBeInTheDocument()
-    expect(screen.getByText('任务总数：1')).toBeInTheDocument()
+    fireEvent.click(getWorkspaceTab('账号'))
+    expect(screen.getByRole('heading', { name: '智慧树已登录' })).toBeInTheDocument()
+    expect(screen.getByText('当前任务：课程 A')).toBeInTheDocument()
+    expect(screen.getByText('任务记录：1 条')).toBeInTheDocument()
 
     fireEvent.click(getZhihuishuLogoutButton())
     await settle(oldTaskRequest, { data: taskResponse('task-a', COURSE_A, 'completed') })
     await fail(logoutRequest, new Error('退出保留失败'))
 
-    expect(screen.getByText('智慧树登录：已登录')).toBeInTheDocument()
-    expect(screen.getByText('活跃任务 ID：task-a')).toBeInTheDocument()
-    expect(screen.getByText('任务总数：1')).toBeInTheDocument()
-    expect(screen.getByText('状态：running')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '智慧树已登录' })).toBeInTheDocument()
+    expect(screen.getByText('当前任务：课程 A')).toBeInTheDocument()
+    expect(screen.getByText('任务记录：1 条')).toBeInTheDocument()
+    fireEvent.click(getWorkspaceTab('任务'))
+    expect(screen.getAllByText('状态：running').length).toBeGreaterThan(0)
     expect(toast.notify).toHaveBeenCalledWith('error', '退出保留失败')
     expect(toast.notify.mock.calls.some(([, message]) => String(message).includes('学习完成'))).toBe(false)
     fireEvent.click(getWorkspaceTab('课程'))
@@ -503,8 +505,8 @@ describe('Zhihuishu request race guards', () => {
     await changePollInterval(2)
     await waitFor(() => expect(taskCalls).toBe(2))
     await settle(newTaskRequest, { data: taskResponse('task-a', COURSE_A, 'completed') })
-    fireEvent.click(getWorkspaceTab('status'))
-    expect(screen.getByText('状态：completed')).toBeInTheDocument()
+    fireEvent.click(getWorkspaceTab('任务'))
+    expect(screen.getAllByText('状态：completed').length).toBeGreaterThan(0)
   })
 
   test('successful logout clears the session and blocks its old in-flight task response', async () => {
@@ -524,20 +526,19 @@ describe('Zhihuishu request race guards', () => {
     renderPage()
     await flushPromises()
     await waitFor(() => expect(countRequests(`${API_BASE}/tasks/task-a`)).toBe(1))
-    fireEvent.click(getWorkspaceTab('status'))
+    fireEvent.click(getWorkspaceTab('账号'))
     fireEvent.click(getZhihuishuLogoutButton())
     await flushPromises()
-    expect(screen.getByText('智慧树登录：已登录')).toBeInTheDocument()
-    expect(screen.getByText('任务总数：1')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '智慧树已登录' })).toBeInTheDocument()
+    expect(screen.getByText('任务记录：1 条')).toBeInTheDocument()
 
     await settle(logoutRequest, { message: '已退出' })
-    expect(screen.getByText('智慧树登录：未登录')).toBeInTheDocument()
-    expect(screen.getByText('活跃任务 ID：无')).toBeInTheDocument()
-    expect(screen.getByText('任务总数：0')).toBeInTheDocument()
+    expectLoggedOut()
+    expect(screen.getByRole('radiogroup', { name: '登录方式' })).toBeInTheDocument()
     toast.notify.mockReset()
 
     await settle(taskRequest, { data: taskResponse('task-a', COURSE_A, 'completed') })
-    expect(screen.getByText('任务总数：0')).toBeInTheDocument()
+    expectLoggedOut()
     expect(toast.notify.mock.calls.some(([, message]) => String(message).includes('学习完成'))).toBe(false)
     fireEvent.click(getWorkspaceTab('任务'))
     expect(screen.queryByText('任务 ID：task-a')).not.toBeInTheDocument()
@@ -571,7 +572,7 @@ describe('Zhihuishu request race guards', () => {
 
     await settle(newerRequest, { data: taskResponse('task-a', COURSE_A, 'completed') })
     await settle(olderRequest, { data: taskResponse('task-a', COURSE_A, 'running') })
-    expect(screen.getByText('状态：completed')).toBeInTheDocument()
+    expect(screen.getAllByText('状态：completed').length).toBeGreaterThan(0)
     expect(screen.queryByText('task-a 运行中')).not.toBeInTheDocument()
   })
 
@@ -626,10 +627,10 @@ describe('Zhihuishu request race guards', () => {
     ]) })
 
     fireEvent.click(getWorkspaceTab('任务'))
-    expect(screen.getByText('状态：completed')).toBeInTheDocument()
+    expect(screen.getAllByText('状态：completed').length).toBeGreaterThan(0)
     expect(toast.notify.mock.calls.some(([, message]) => String(message).includes('学习完成'))).toBe(true)
-    fireEvent.click(getWorkspaceTab('status'))
-    expect(screen.getByText('活跃任务 ID：task-b')).toBeInTheDocument()
+    fireEvent.click(getWorkspaceTab('账号'))
+    expect(screen.getByText('当前任务：课程 B')).toBeInTheDocument()
     fireEvent.click(getWorkspaceTab('课程'))
     expect(screen.getByText('B 任务视频')).toBeInTheDocument()
     expect(screen.queryByText('A 任务视频')).not.toBeInTheDocument()
@@ -681,13 +682,71 @@ describe('Zhihuishu request race guards', () => {
       { id: 'a-video', title: 'A 后台视频' },
     ]) })
     fireEvent.click(getWorkspaceTab('任务'))
-    expect(screen.getByText('状态：completed')).toBeInTheDocument()
+    expect(screen.getAllByText('状态：completed').length).toBeGreaterThan(0)
     expect(toast.notify.mock.calls.some(([, message]) => String(message).includes('学习完成'))).toBe(true)
 
     fireEvent.click(getWorkspaceTab('课程'))
     expect(screen.queryByText('消息：B 基准进度')).not.toBeInTheDocument()
     expect(screen.queryByText('B 基准视频')).not.toBeInTheDocument()
     expect(screen.queryByText('A 后台视频')).not.toBeInTheDocument()
+  })
+
+  test('keeps same-catalog courses from different terms distinct across selection, scope, startup and progress', async () => {
+    const terms = [
+      { courseId: 'shared-catalog', recruitAndCourseId: 'term-a', secret: 'a-fallback', name: '高数 上学期' },
+      { courseId: 'shared-catalog', secret: 'term-b', name: '高数 本学期' },
+    ]
+    api.mockImplementation((path) => {
+      if (path === `${API_BASE}/config`) return Promise.resolve({ data: {} })
+      if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
+      if (path === `${API_BASE}/courses/grouped`) return Promise.resolve({ data: [{ group: '全部学期', courses: terms }] })
+      if (path.startsWith(`${API_BASE}/courses/`)) {
+        const id = path.split('/').pop()
+        return Promise.resolve({ data: terms.find((course) => (course.recruitAndCourseId || course.secret) === id) })
+      }
+      if (path.startsWith(`${API_BASE}/videos/`)) return Promise.resolve({ data: [{ id: 'video', chapter_id: 'chapter-1', name: '视频' }] })
+      if (path === `${API_BASE}/progress/term-a`) return Promise.resolve({ data: { message: '仅上学期进度' } })
+      if (path === `${API_BASE}/tasks/course`) return Promise.resolve({ task_id: 'term-b-task' })
+      if (path === `${API_BASE}/tasks/term-b-task`) return Promise.resolve({ data: { task_id: 'term-b-task', course_id: 'shared-catalog', secret: 'term-b', course_name: '高数 本学期', status: 'running', message: '仅本学期任务进度' } })
+      if (path === `${API_BASE}/tasks`) return Promise.resolve({ data: [] })
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+
+    renderPage()
+    await flushPromises()
+    fireEvent.click(getWorkspaceTab('课程'))
+    fireEvent.click(screen.getByRole('button', { name: '刷新课程' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '分组课程' })).toHaveValue('term-a'))
+    expect(screen.getByRole('option', { name: '高数 本学期' })).toHaveValue('term-b')
+    await waitFor(() => expect(countRequests(`${API_BASE}/courses/term-a`)).toBe(1))
+    fireEvent.click(getWorkspaceTab('学习配置'))
+    fireEvent.click(screen.getByRole('button', { name: '加载章节' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '学到哪一章' })).toBeEnabled())
+    fireEvent.change(screen.getByRole('combobox', { name: '学到哪一章' }), { target: { value: 'chapter-1' } })
+
+    fireEvent.click(getWorkspaceTab('课程'))
+    fireEvent.change(screen.getByRole('combobox', { name: '分组课程' }), { target: { value: 'term-b' } })
+    await waitFor(() => expect(countRequests(`${API_BASE}/courses/term-b`)).toBe(1))
+    fireEvent.click(getWorkspaceTab('学习配置'))
+    expect(screen.getByRole('combobox', { name: '学到哪一章' })).toHaveValue('')
+    expect(screen.getByText('高数 本学期')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '加载章节' }))
+    await waitFor(() => expect(countRequests(`${API_BASE}/videos/term-b`)).toBe(1))
+    fireEvent.click(screen.getByRole('button', { name: '启动课程任务' }))
+    await waitFor(() => expect(countRequests(`${API_BASE}/tasks/course`)).toBe(1))
+    const startCall = api.mock.calls.find(([path]) => path === `${API_BASE}/tasks/course`)
+    expect(JSON.parse(startCall[1].body)).toMatchObject({ course_id: 'term-b' })
+    expect(JSON.parse(startCall[1].body)).not.toHaveProperty('end_chapter_id')
+    await waitFor(() => expect(screen.getByRole('tab', { name: '任务' })).toHaveAttribute('aria-selected', 'true'))
+
+    fireEvent.click(getWorkspaceTab('课程'))
+    expect(screen.getByText('消息：仅本学期任务进度')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', { name: '分组课程' }), { target: { value: 'term-a' } })
+    fireEvent.click(screen.getByRole('button', { name: '刷新进度' }))
+    await waitFor(() => expect(countRequests(`${API_BASE}/progress/term-a`)).toBe(1))
+    expect(screen.getByText('消息：仅上学期进度')).toBeInTheDocument()
+    fireEvent.click(getWorkspaceTab('学习配置'))
+    expect(screen.getByRole('combobox', { name: '学到哪一章' })).toHaveValue('chapter-1')
   })
 
   test('does not overlap silent requests for the same task', async () => {
@@ -722,7 +781,7 @@ describe('Zhihuishu request race guards', () => {
     await settle(secondSilentRequest, { data: taskResponse('task-a') })
   })
 
-  test('a qr-login response cannot revive the QR session after reset', async () => {
+  test('a qr-login response cannot revive the QR session after switching to password login', async () => {
     const qrLoginRequest = deferred()
     api.mockImplementation((path) => {
       if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
@@ -735,16 +794,15 @@ describe('Zhihuishu request race guards', () => {
     fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
     await waitFor(() => expect(countRequests(`${API_BASE}/qr-login`)).toBe(1))
 
-    fireEvent.click(getWorkspaceTab('status'))
-    fireEvent.click(screen.getByRole('button', { name: '清理智慧树会话状态' }))
+    fireEvent.click(screen.getByRole('radio', { name: '账号密码登录' }))
     await flushPromises()
     toast.notify.mockReset()
 
     await settle(qrLoginRequest, qrLoginResponse('session-a', 'qr-a'))
-    expect(screen.getByText('二维码状态：未开始')).toBeInTheDocument()
     expect(toast.notify).not.toHaveBeenCalled()
 
-    fireEvent.click(getWorkspaceTab('登录'))
+    fireEvent.click(screen.getByRole('radio', { name: '二维码登录' }))
+    expect(screen.getByText('用智慧树 App 扫码登录。')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '生成二维码' })).toBeEnabled()
     expect(screen.queryByRole('img', { name: '智慧树二维码' })).not.toBeInTheDocument()
   })
@@ -839,12 +897,12 @@ describe('Zhihuishu request race guards', () => {
     expect(countRequests(`${API_BASE}/login-status/session-a`)).toBe(1)
 
     fireEvent.click(screen.getByRole('radio', { name: '账号密码登录' }))
-    fireEvent.change(screen.getByLabelText('账号'), { target: { value: 'account-b' } })
+    fireEvent.change(screen.getByLabelText('智慧树账号'), { target: { value: 'account-b' } })
     fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'password-b' } })
     fireEvent.click(screen.getByRole('button', { name: '密码登录' }))
     await flushPromises()
     expect(countRequests(`${API_BASE}/password-login`)).toBe(1)
-    expect(screen.getByText('智慧树状态：已登录')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '平台账号：account-b' })).toBeInTheDocument()
     expect(countRequests(`${API_BASE}/tasks`)).toBe(1)
     toast.notify.mockReset()
 
@@ -873,8 +931,9 @@ describe('Zhihuishu request race guards', () => {
       if (path === `${API_BASE}/login-status/session-b`) {
         return Promise.resolve({ status: 'pending', message: 'B 仍在等待' })
       }
+      // A failed login keeps the form on screen, so QR reuse can be checked.
       if (path === `${API_BASE}/password-login`) {
-        return Promise.resolve({ message: '密码登录成功' })
+        return Promise.reject(new Error('密码错误'))
       }
       if (path === `${API_BASE}/courses/grouped`) return Promise.resolve({ data: [] })
       if (path === `${API_BASE}/config`) return Promise.resolve({ data: {} })
@@ -890,21 +949,21 @@ describe('Zhihuishu request race guards', () => {
     expect(countRequests(`${API_BASE}/login-status/session-a`)).toBe(1)
 
     fireEvent.click(screen.getByRole('radio', { name: '账号密码登录' }))
-    fireEvent.change(screen.getByLabelText('账号'), { target: { value: 'account-b' } })
+    fireEvent.change(screen.getByLabelText('智慧树账号'), { target: { value: 'account-b' } })
     fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'password-b' } })
     fireEvent.submit(screen.getByRole('button', { name: '密码登录' }).closest('form'))
     await flushPromises()
     expect(countRequests(`${API_BASE}/password-login`)).toBe(1)
-    expect(countRequests(`${API_BASE}/tasks`)).toBe(1)
+    expect(countRequests(`${API_BASE}/tasks`)).toBe(0)
     toast.notify.mockReset()
 
     await fail(oldPollRequest, new Error('A 旧轮询失败'))
 
     expect(toast.notify).not.toHaveBeenCalled()
-    expect(screen.getByLabelText('账号')).toHaveValue('account-b')
+    expect(screen.getByLabelText('智慧树账号')).toHaveValue('account-b')
     expect(screen.getByLabelText('密码')).toHaveValue('password-b')
     fireEvent.click(screen.getByRole('radio', { name: '二维码登录' }))
-    expect(screen.getByText('状态：未开始')).toBeInTheDocument()
+    expect(screen.getByText('用智慧树 App 扫码登录。')).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: '智慧树二维码' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
@@ -1015,23 +1074,18 @@ describe('Zhihuishu request race guards', () => {
     expect(toast.notify).not.toHaveBeenCalled()
   })
 
-  test.each(['reset', 'new QR', 'unmount'])(
+  // Once a QR scan succeeds the 账号 tab shows the signed-in state, so a new QR
+  // can no longer be requested; reset and unmount are the remaining invalidations.
+  test.each(['reset', 'unmount'])(
     'QR success loaders cannot write after %s invalidates their owner',
     async (invalidation) => {
       vi.useFakeTimers()
       const coursesRequest = deferred()
       const configRequest = deferred()
       const tasksRequest = deferred()
-      const nextQrLoginRequest = deferred()
-      let qrLoginCalls = 0
       api.mockImplementation((path) => {
         if (path === `${API_BASE}/status`) return Promise.resolve({ data: { logged_in: false } })
-        if (path === `${API_BASE}/qr-login`) {
-          qrLoginCalls += 1
-          return qrLoginCalls === 1
-            ? Promise.resolve(qrLoginResponse('session-a', 'qr-a'))
-            : nextQrLoginRequest.promise
-        }
+        if (path === `${API_BASE}/qr-login`) return Promise.resolve(qrLoginResponse('session-a', 'qr-a'))
         if (path === `${API_BASE}/login-status/session-a`) {
           return Promise.resolve({ status: 'success', message: 'A 登录成功' })
         }
@@ -1054,11 +1108,8 @@ describe('Zhihuishu request race guards', () => {
       expect(countRequests(`${API_BASE}/tasks`)).toBe(1)
 
       if (invalidation === 'reset') {
-        fireEvent.click(getWorkspaceTab('status'))
+        fireEvent.click(getWorkspaceTab('账号'))
         fireEvent.click(screen.getByRole('button', { name: '清理智慧树会话状态' }))
-        await flushPromises()
-      } else if (invalidation === 'new QR') {
-        fireEvent.click(screen.getByRole('button', { name: '生成二维码' }))
         await flushPromises()
       } else {
         page.unmount()
@@ -1080,8 +1131,7 @@ describe('Zhihuishu request race guards', () => {
         expect(screen.queryByText('任务 ID：old-qr-task')).not.toBeInTheDocument()
       }
       if (invalidation === 'reset') {
-        fireEvent.click(getWorkspaceTab('status'))
-        expect(screen.getByText('智慧树登录：未登录')).toBeInTheDocument()
+        expectLoggedOut()
       }
     },
   )

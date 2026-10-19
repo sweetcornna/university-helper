@@ -7,7 +7,9 @@ import {
   clampCheckInterval,
 } from '../utils'
 
-export default function useAutoSignin(form, executeSignin, requestChaoxingApi, { setResultType, setResultMessage, setSigninTasks, redirectingRef }) {
+// `paused` holds the scheduler (e.g. until the platform account is verified) so
+// a persisted "auto sign-in on" setting never fires requests or errors on load.
+export default function useAutoSignin(form, executeSignin, requestChaoxingApi, { setResultType, setResultMessage, setSigninTasks, redirectingRef, paused = false }) {
   const autoCheckRef = useRef(null)
   const countdownRef = useRef(null)
   const autoSignedTaskCacheRef = useRef(new Map())
@@ -154,7 +156,7 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
 
   // Auto-signin cycle + countdown effect
   useEffect(() => {
-    if (!autoSignin) {
+    if (!autoSignin || paused) {
       stopAutoCheck()
       return undefined
     }
@@ -190,7 +192,7 @@ export default function useAutoSignin(form, executeSignin, requestChaoxingApi, {
     return () => {
       stopAutoCheck()
     }
-  }, [autoSignin, checkInterval, runAutoSigninCycle, stopAutoCheck])
+  }, [autoSignin, paused, checkInterval, runAutoSigninCycle, stopAutoCheck])
 
   return {
     autoSignin,

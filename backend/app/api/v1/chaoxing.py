@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, StringConstraints, ValidationError, field
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.dependencies import get_current_user_id
-from app.services.course.chaoxing.signin import signin_manager
+from app.services.course.chaoxing.signin import SigninSessionExpiredError, signin_manager
 from app.services.course.chaoxing.task_admission import TaskAdmissionError
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,15 @@ class ChaoxingLoginRequest(_ChaoxingCredentials):
     use_cookies: bool = False
 
 
+class ChaoxingChatSignRequest(_ChaoxingCredentials):
+    chat_id: Annotated[str, StringConstraints(strip_whitespace=True, max_length=32)] | None = None
+    active_id: Annotated[str, StringConstraints(strip_whitespace=True, max_length=32)] | None = None
+    activity_url: Annotated[str, StringConstraints(strip_whitespace=True, max_length=4096)] | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    address: OptionalLongString = None
+
+
 class ChaoxingSignRequest(_ChaoxingPhotoPayload):
     sign_type: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=32)] = "all"
     course_id: OptionalShortString = None
@@ -147,16 +156,12 @@ def _request_photon_json(path: str, params: dict[str, Any]) -> Any:
         response.raise_for_status()
     except requests.RequestException as exc:
         logger.error("Geocoding service request failed: %s", exc)
-        raise HTTPException(
-            status_code=502, detail="Geocoding service temporarily unavailable"
-        ) from exc
+        raise HTTPException(status_code=502, detail="Geocoding service temporarily unavailable") from exc
 
     try:
         return response.json()
     except ValueError as exc:
-        raise HTTPException(
-            status_code=502, detail="Invalid geocoding service response"
-        ) from exc
+        raise HTTPException(status_code=502, detail="Invalid geocoding service response") from exc
 
 
 def _photon_feature_to_address(props: dict[str, Any]) -> str:
@@ -234,10 +239,7 @@ def _normalize_sign_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if qrcode:
         if not normalized.get("qr_code"):
             normalized["qr_code"] = (
-                qrcode.get("qr_code")
-                or qrcode.get("url")
-                or qrcode.get("code")
-                or qrcode.get("enc")
+                qrcode.get("qr_code") or qrcode.get("url") or qrcode.get("code") or qrcode.get("enc")
             )
         if normalized.get("latitude") is None:
             normalized["latitude"] = qrcode.get("latitude") or qrcode.get("lat")
@@ -300,10 +302,7 @@ async def _read_limited_upload(upload: UploadFile | StarletteUploadFile) -> byte
 
 async def _parse_request_payload(raw_request: Request) -> dict[str, Any]:
     content_type = (raw_request.headers.get("content-type") or "").lower()
-    if (
-        "multipart/form-data" in content_type
-        or "application/x-www-form-urlencoded" in content_type
-    ):
+    if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
         form = await raw_request.form(max_files=1, max_fields=100)
         payload: dict[str, Any] = {}
         for key, value in form.multi_items():
@@ -320,9 +319,7 @@ async def _parse_request_payload(raw_request: Request) -> dict[str, Any]:
                         )
                     file_bytes = await _read_limited_upload(value)
                     if file_bytes:
-                        payload["photo_base64"] = base64.b64encode(file_bytes).decode(
-                            "utf-8"
-                        )
+                        payload["photo_base64"] = base64.b64encode(file_bytes).decode("utf-8")
                 continue
             payload[key] = _parse_form_value(str(value))
         return payload
@@ -342,7 +339,15 @@ def _validate_payload(model_cls: Any, payload: dict[str, Any]) -> BaseModel:
 
 
 async def _run_blocking(func, *args, **kwargs):
-    return await asyncio.to_thread(func, *args, **kwargs)
+    try:
+        return await asyncio.to_thread(func, *args, **kwargs)
+    except SigninSessionExpiredError as exc:
+        raise HTTPException(status_code=401, detail="学习通登录已失效，请在平台账号中重新登录学习通。") from exc
+    except requests.RequestException as exc:
+        logger.warning("Chaoxing upstream request failed", exc_info=True)
+        raise HTTPException(
+            status_code=502, detail="学习通请求失败，暂时无法确认课程或签到活动，请稍后重新检测。"
+        ) from exc
 
 
 @router.get("/location/geocode")
@@ -408,13 +413,15 @@ async def chaoxing_location_search(
             lon = float(coords[0])
         except (TypeError, ValueError):
             continue
-        normalized.append({
-            "id": str(props.get("osm_id") or f"candidate-{index}"),
-            "name": str(props.get("name") or "").strip(),
-            "address": _photon_feature_to_address(props),
-            "latitude": lat,
-            "longitude": lon,
-        })
+        normalized.append(
+            {
+                "id": str(props.get("osm_id") or f"candidate-{index}"),
+                "name": str(props.get("name") or "").strip(),
+                "address": _photon_feature_to_address(props),
+                "latitude": lat,
+                "longitude": lon,
+            }
+        )
 
     return {
         "status": True,
@@ -429,7 +436,6 @@ async def chaoxing_location_reverse_geocode(
     lng: float,
     user_id: str = Depends(get_current_user_id),
 ):
-
     data = await _run_blocking(
         _request_photon_json,
         "/reverse",
@@ -539,10 +545,42 @@ async def chaoxing_remote_endpoints(
 
 @router.get("/tasks")
 async def chaoxing_tasks(user_id: str = Depends(get_current_user_id)):
-    tasks = await _run_blocking(
-        signin_manager.get_active_tasks, user_id=user_id, sign_type="all"
-    )
+    tasks = await _run_blocking(signin_manager.get_active_tasks, user_id=user_id, sign_type="all")
     return {"status": True, "message": "ok", "data": tasks}
+
+
+@router.get("/chat-activities")
+async def chaoxing_chat_activities(
+    chat_id: Annotated[str, StringConstraints(pattern=r"^[1-9][0-9]{0,31}$")] | None = None,
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        result = await _run_blocking(signin_manager.get_chat_tasks, user_id=user_id, chat_id=chat_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "status": True,
+        "message": "群聊最新消息检测完成",
+        "data": result.get("tasks", []),
+        "warnings": result.get("warnings", []),
+        "scope": result.get("scope", "latest_messages"),
+    }
+
+
+@router.post("/chat-sign")
+async def chaoxing_chat_sign(
+    request: ChaoxingChatSignRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        result = await _run_blocking(signin_manager.sign_chat_once, user_id=user_id, **request.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "status": bool(result.get("status")),
+        "message": result.get("message", ""),
+        "data": result.get("data", {}),
+    }
 
 
 @router.get("/task-list")
@@ -710,9 +748,7 @@ async def chaoxing_class_start_by_path(
 
 @router.get("/task/{task_id}")
 async def chaoxing_task(task_id: str, user_id: str = Depends(get_current_user_id)):
-    task = await _run_blocking(
-        signin_manager.get_task, user_id=user_id, task_id=task_id
-    )
+    task = await _run_blocking(signin_manager.get_task, user_id=user_id, task_id=task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"status": True, "message": "ok", "data": task}
@@ -724,9 +760,7 @@ async def chaoxing_logs(
     cursor: int | None = None,
     user_id: str = Depends(get_current_user_id),
 ):
-    log_state = await _run_blocking(
-        signin_manager.get_task_logs, user_id=user_id, task_id=task_id, cursor=cursor
-    )
+    log_state = await _run_blocking(signin_manager.get_task_logs, user_id=user_id, task_id=task_id, cursor=cursor)
     if log_state is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return {

@@ -21,7 +21,7 @@ class ChaoxingCourseService:
         logger.trace("正在读取所有的课程列表...")
 
         _headers = {
-            "Referer": "https://mooc2-ans.chaoxing.com/mooc-ans/visit/interaction?moocDomain=https://mooc1-1.chaoxing.com/mooc-ans",
+            "Referer": "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/interaction?moocDomain=https://mooc1-1.chaoxing.com/mooc-ans",
         }
         _resp = _session.post(_url, headers=_headers, data=_data)
         logger.info("课程列表读取完毕...")

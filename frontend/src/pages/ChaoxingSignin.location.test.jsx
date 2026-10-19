@@ -84,6 +84,17 @@ const renderSignin = async (container, root) => {
       </RuntimeProfileContext.Provider>
     )
   })
+  await verifySigninAccount(container)
+}
+
+// The sign-in form only renders once the platform account is verified.
+const verifySigninAccount = async (container) => {
+  fireEvent.change(container.querySelector('#cx-username'), { target: { value: 'student' } })
+  fireEvent.change(container.querySelector('#cx-password'), { target: { value: 'password' } })
+  await act(async () => {
+    fireEvent.submit(container.querySelector('#cx-username').form)
+  })
+  await waitFor(() => container.querySelector('#cx-signtype'))
 }
 
 const chooseLocationSignType = (container) => {
@@ -154,17 +165,7 @@ describe('ChaoxingSignin location flow', () => {
   })
 
   test('fills latitude and longitude after resolving an address', async () => {
-    await act(async () => {
-      root.render(
-        <RuntimeProfileContext.Provider value={{ profile: 'server', isLocal: false, requiresAuth: true, loading: false }}>
-          <ToastProvider>
-            <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-              <ChaoxingSignin />
-            </MemoryRouter>
-          </ToastProvider>
-        </RuntimeProfileContext.Provider>
-      )
-    })
+    await renderSignin(container, root)
 
     const signType = container.querySelector('#cx-signtype')
     if (!signType) {
@@ -212,17 +213,7 @@ describe('ChaoxingSignin location flow', () => {
   })
 
   test('lets the user search a place and pick a result', async () => {
-    await act(async () => {
-      root.render(
-        <RuntimeProfileContext.Provider value={{ profile: 'server', isLocal: false, requiresAuth: true, loading: false }}>
-          <ToastProvider>
-            <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-              <ChaoxingSignin />
-            </MemoryRouter>
-          </ToastProvider>
-        </RuntimeProfileContext.Provider>
-      )
-    })
+    await renderSignin(container, root)
 
     const signType = container.querySelector('#cx-signtype')
     if (!signType) {

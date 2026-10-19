@@ -245,10 +245,7 @@ export default function CourseListSection({
                 <div className="min-w-0 flex-1">
 
 
-                  <p className="font-semibold text-text">{getCourseName(course)}</p>
-
-
-                  <p className="text-xs text-text-muted">{courseId || '--'}</p>
+                  <p className="font-semibold text-text" title={courseId}>{getCourseName(course)}</p>
 
 
                   <ChapterLimitSummary chapterList={chapterList} limitId={limitId} limitIndex={limitIndex} />

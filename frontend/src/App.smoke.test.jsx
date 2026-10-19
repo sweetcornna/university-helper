@@ -36,7 +36,7 @@ describe('app shell smoke', () => {
     // Dashboard heading (unique to the home page)
     expect(screen.getByRole('heading', { level: 1, name: '今日任务' })).toBeTruthy()
     // Service entries appear in both the nav and the cards
-    expect(screen.getAllByText('学习通签到').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: '学习通 课堂签到' })).toBeTruthy()
     expect(screen.getAllByText('智慧树').length).toBeGreaterThan(0)
     // Theme toggle is present (radiogroup)
     expect(screen.getByRole('radiogroup', { name: '主题' })).toBeTruthy()

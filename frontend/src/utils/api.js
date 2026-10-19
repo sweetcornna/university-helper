@@ -111,7 +111,7 @@ const pickErrorMessage = (payload, status) => {
 // expiry, so opening the Zhihuishu page (whose bootstrap fetches
 // /course/zhihuishu/config → 401 "Zhihuishu not logged in" until the user logs
 // into Zhihuishu) bounced the user to /login in an endless loop.
-const APP_JWT_401_PATTERN =
+export const APP_JWT_401_PATTERN =
   /(invalid token|invalid authentication credentials|missing bearer token|missing token|invalid authorization header|invalid token payload|token has expired|token validation failed|not authenticated)/i
 
 const messageOf = (payload) =>

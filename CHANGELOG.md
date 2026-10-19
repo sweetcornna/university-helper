@@ -6,6 +6,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Each service is now its own workspace with tabs instead of one long page:
+  学习通 › 课程学习 (选择课程 / 学习配置 / 执行与日志 / 任务记录 / 账号),
+  学习通 › 课堂签到 (手动签到 / 待处理签到 / 自动监控 / 签到记录 / 账号) and
+  智慧树 › 课程学习 (课程 / 学习配置 / 任务 / 账号). Every tab has its own link
+  (`?tab=`); old links such as `?tab=login`, `?tab=status`, `?tab=settings`
+  and `?tab=config` still open the right place.
+- Pages are quieter: before you log in to a platform you only see a small
+  login card, each panel has one main button, and an account chip in the
+  page header shows who is logged in. The sidebar groups pages by platform.
+- 课堂签到 no longer checks for sign-ins as soon as the page opens. It waits
+  until the 学习通 account is verified, so a fresh visit no longer shows a red
+  「登录已失效」 message.
+
+### Added
+- 课堂签到 can sign in to normal and location sign-ins that a teacher posts in
+  a 学习通 group chat (「群聊」). It reads the newest message of your 50 most
+  recent chats, or takes a pasted activity link / group and activity ID. A
+  location sign-in is never submitted without a position: the page asks you to
+  pick one on the map or use your current location, then submits it. Photo, QR,
+  gesture and code sign-ins in group chats are shown but must be done in the
+  学习通 App.
+- 智慧树: with 自动答题 on, pop-up questions in videos are now answered and
+  submitted while the video plays. A rejected answer marks the task as
+  failed instead of counting the video as done.
+
+### Fixed
+- 签到检测: a failed check was shown as 「没有进行中的签到」. Expired 学习通
+  logins, rate-limit pages, login redirects and platform errors are now
+  reported as such, and the site login is not cleared when only the 学习通
+  login expired.
+- 签到检测 missed sign-ins that had been open for more than two hours, and
+  could miss courses whose card used different field names. Sign-ins now run
+  学习通's own pre-sign steps before submitting.
+- 学习通课程内容 (活动/章节/资料/作业/考试):
+  - every course showed 15 fake 「考试」 rows taken from page buttons;
+  - 作业 failed with 「无权限的操作」 on every course. When a teacher hides a
+    栏目 from students the page now says so, and a hidden link is retried with
+    the URL from the course's own navigation;
+  - empty 资料 lists and chapters without 任务点 showed an error instead of
+    「暂无文件」 / the chapter titles;
+  - a failed 栏目 keeps the error on screen with an 「在学习通打开」 link
+    instead of clearing the panel.
+- 智慧树: looking at an older task could show the newest task's progress, and
+  sessions with a running task were cleaned up after an hour.
+- 智慧树 login: QR and password logins follow the current 知到 login service,
+  and Chinese text is padded correctly for encryption.
+- 学习通刷课: chapters with several task cards submitted later cards with the
+  first card's tokens.
+- `scripts/hotfix_publish.sh` rejected valid paths on macOS because of how the
+  system Bash matched control characters.
+
 ## [1.5.0] - 2026-09-27
 
 ### Added

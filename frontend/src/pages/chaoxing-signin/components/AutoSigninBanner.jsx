@@ -1,5 +1,5 @@
  
-import { Camera, MapPin, QrCode, KeyRound, Hand, CheckSquare, RefreshCw, Clock, Target, AlertTriangle, Sparkles } from 'lucide-react'
+import { Camera, MapPin, QrCode, KeyRound, Hand, CheckSquare, RefreshCw, Clock, Target, AlertTriangle } from 'lucide-react'
 
 import { Button } from '../../../components'
 import {
@@ -33,35 +33,23 @@ export default function AutoSigninBanner({
   onApplyAndSubmit,
   onRefresh,
   refreshing = false,
+  error = '',
 }) {
   const task = pickPrimaryActiveTask(signinTasks)
 
   if (!task) {
     return (
-      <div className={`${GLASS_PANEL_CLASS} border-dashed`}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="mt-1 rounded-full bg-primary/10 p-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-            </div>
-            <div>
-              <p className="text-base font-semibold text-text">未检测到进行中的签到</p>
-              <p className="mt-1 text-sm text-text/70">老师发起后重新检测。</p>
-            </div>
-          </div>
-          <Button
-            type="button"
-            variant="secondary"
-            className="min-h-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-            onClick={onRefresh}
-            disabled={refreshing}
-          >
-            <span className="inline-flex items-center gap-2">
-              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-              {refreshing ? '检测中...' : '重新检测'}
-            </span>
-          </Button>
+      <div className={`${GLASS_PANEL_CLASS} flex flex-wrap items-center justify-between gap-3`}>
+        <div className="min-w-0">
+          <p role={error ? 'alert' : 'status'} className={`text-sm font-semibold ${error ? 'text-danger' : 'text-text'}`}>{refreshing ? '正在检测进行中的签到...' : error ? '签到检测未完成' : '未检测到进行中的签到'}</p>
+          {error && <p className="mt-1 text-sm text-text-muted">{error}</p>}
         </div>
+        <Button type="button" variant="secondary" size="sm" onClick={onRefresh} disabled={refreshing}>
+          <span className="inline-flex items-center gap-2">
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {refreshing ? '检测中...' : '重新检测'}
+          </span>
+        </Button>
       </div>
     )
   }
@@ -78,6 +66,7 @@ export default function AutoSigninBanner({
 
   return (
     <div className={`${GLASS_PANEL_CLASS} border-primary/40 bg-primary/5`}>
+      {error && <p role="alert" className="mb-3 text-sm text-danger">{error} 下方保留上次检测结果。</p>}
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div className="flex items-start gap-3 flex-1 min-w-0">
           <div className="mt-1 rounded-full bg-primary/15 p-2">

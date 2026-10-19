@@ -34,14 +34,17 @@ class FakeLearning:
         self.video_list_calls = 0
         self.lock = threading.Lock()
 
+    def get_course_list(self):
+        return []
+
     def get_video_list(self, rac_id):
         del rac_id
         with self.lock:
             self.video_list_calls += 1
         return self._data
 
-    def watch_video(self, video, speed=1.0, is_cancelled=None, is_paused=None):
-        del speed, is_cancelled, is_paused
+    def watch_video(self, video, speed=1.0, is_cancelled=None, is_paused=None, auto_answer=False):
+        del speed, is_cancelled, is_paused, auto_answer
         with self.lock:
             self.watched.append(video["video_id"])
         return True

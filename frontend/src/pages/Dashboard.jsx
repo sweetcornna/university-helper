@@ -15,23 +15,32 @@ import { api } from '../utils/api'
 const SERVICE_DEFINITIONS = [
   {
     id: 'signin',
-    title: '学习通签到',
+    platform: '学习通',
+    name: '课堂签到',
+    description: '检测老师发起的签到并一键完成，也可后台自动监控。',
     path: '/chaoxing-signin',
+    taskPath: '/chaoxing-signin?tab=history',
     icon: CheckCircle,
   },
   {
     id: 'fanya',
-    title: '学习通泛雅',
+    platform: '学习通',
+    name: '课程学习',
+    description: '选好课程和章节范围，自动完成视频与章节任务。',
     path: '/chaoxing-fanya',
+    taskPath: '/chaoxing-fanya?tab=tasks',
     icon: BookOpen,
   },
   {
     id: 'zhihuishu',
-    title: '智慧树',
+    platform: '智慧树',
+    name: '课程学习',
+    description: '扫码登录后选择课程，自动学习视频并回答弹题。',
     path: '/zhihuishu-panel',
+    taskPath: '/zhihuishu-panel?tab=tasks',
     icon: GraduationCap,
   },
-]
+].map((service) => ({ ...service, title: `${service.platform} ${service.name}` }))
 
 const TASK_ACTIVE = new Set([
   'running',
@@ -162,9 +171,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6 sm:space-y-8">
-      <h1 className="text-3xl font-black leading-tight tracking-tight text-text sm:text-4xl">
-        今日任务
-      </h1>
+      <h1 className="text-2xl font-bold text-text">今日任务</h1>
 
       {selectedTaskRecord && (
         <section aria-labelledby="next-step-heading">
@@ -179,7 +186,7 @@ export default function Dashboard() {
             </div>
             <button
               type="button"
-              onClick={() => navigate(selectedService.path)}
+              onClick={() => navigate(selectedService.taskPath)}
               className="inline-flex min-h-[46px] shrink-0 items-center justify-between gap-6 rounded-xl bg-cta px-4 font-bold text-[#172033] hover:bg-cta/90 sm:min-w-44"
             >
               {activeTaskRecord ? '查看任务' : '前往恢复'}
@@ -191,8 +198,8 @@ export default function Dashboard() {
 
       <section aria-labelledby="service-heading">
         <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 id="service-heading" className="text-xl font-black text-text">课程服务</h2>
-          <p role="status" aria-live="polite" className="text-sm font-semibold text-text-muted">
+          <h2 id="service-heading" className="text-lg font-bold text-text">课程服务</h2>
+          <p role="status" aria-live="polite" className="text-xs text-text-muted">
             {syncStatus}
           </p>
         </div>
@@ -211,20 +218,25 @@ export default function Dashboard() {
                 key={service.id}
                 type="button"
                 aria-labelledby={`service-${service.id}-heading`}
+                aria-describedby={`service-${service.id}-description`}
                 onClick={() => navigate(service.path)}
-                className="relative overflow-hidden rounded-2xl border border-border bg-surface p-5 text-left shadow-sm transition-[transform,border-color,box-shadow] hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg focus-visible:ring-offset-2"
+                className="group flex flex-col rounded-2xl border border-border bg-surface p-5 text-left shadow-sm transition-[border-color,box-shadow] hover:border-primary/40 hover:shadow-md focus-visible:ring-offset-2"
               >
                 <div className="flex items-start justify-between gap-4">
-                  <span className="grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary">
+                  <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary/10 text-primary">
                     <Icon className="h-5 w-5" aria-hidden="true" />
                   </span>
                   {serviceTaskRecord && (
                     <StatusBadge status={taskStatus(serviceTaskRecord.task)} />
                   )}
                 </div>
-                <h3 id={`service-${service.id}-heading`} className="mt-5 text-lg font-black text-text">
-                  {service.title}
+                <h3 id={`service-${service.id}-heading`} className="mt-4 text-base font-bold text-text">
+                  <span className="mr-1 text-text-muted">{service.platform}</span>{service.name}
                 </h3>
+                <p id={`service-${service.id}-description`} className="mt-1 text-sm text-text-muted">{service.description}</p>
+                <span className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-primary" aria-hidden="true">
+                  进入<ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                </span>
               </button>
             )
           })}

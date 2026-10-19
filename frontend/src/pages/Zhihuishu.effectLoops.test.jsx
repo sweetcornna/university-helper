@@ -9,9 +9,10 @@ vi.mock('../utils/api', () => ({
   api: vi.fn(),
 }))
 
-vi.mock('../components', () => {
+vi.mock('../components', async (importOriginal) => {
   const toast = { notify: () => {} }
   return {
+    ...(await importOriginal()),
     Input: ({ label, ...props }) => (
       <label>
         {label}
@@ -112,9 +113,9 @@ describe('Zhihuishu effect feedback loops', () => {
     renderPage()
     await flushPromises()
 
-    fireEvent.click(screen.getByText('课程'))
-    fireEvent.click(screen.getByText('任务'))
-    fireEvent.click(screen.getByText('登录'))
+    fireEvent.click(screen.getByRole('tab', { name: '课程' }))
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+    fireEvent.click(screen.getByRole('tab', { name: '账号' }))
     await flushPromises()
 
     expect(countRequests('/course/zhihuishu/status')).toBe(1)

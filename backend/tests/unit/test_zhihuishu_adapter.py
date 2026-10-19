@@ -1,10 +1,9 @@
 """Unit tests for ZhihuishuAdapter._run_task_loop and the ZhihuishuLearning
 request protocol.
 
-The adapter tests mock the Zhihuishu HTTP layer (ZhihuishuLearning / ZhihuishuAnswer)
-so they assert the worker loop actually CALLS watch_video / answer_question and
-reflects the mocked platform responses in progress -- instead of running a fake
-timer that fabricates a 'completed' status.
+The adapter tests replace ZhihuishuLearning to verify that task controls reach
+the actual playback/popup flow and failed responses remain visible in progress.
+Popup HTTP contracts are exercised by test_zhihuishu_popup.py.
 
 The protocol tests pin the corrected request shapes against the live API
 (queryShareCourseInfo pagination payload, videolist endpoint + VIDEO_KEY signing)
@@ -57,10 +56,13 @@ class FakeLearning:
         self.watch_calls = []
         self.lock = threading.Lock()
 
+    def get_course_list(self):
+        return []
+
     def get_video_list(self, rac_id):
         return self._data
 
-    def watch_video(self, video, speed=1.0, is_cancelled=None, is_paused=None):
+    def watch_video(self, video, speed=1.0, is_cancelled=None, is_paused=None, auto_answer=False):
         # Signature mirrors the real ZhihuishuLearning.watch_video: the adapter now
         # forwards the full video-context dict + speed + pause/cancel checkers.
         with self.lock:
@@ -71,6 +73,7 @@ class FakeLearning:
                     "speed": speed,
                     "is_cancelled": is_cancelled,
                     "is_paused": is_paused,
+                    "auto_answer": auto_answer,
                 }
             )
         return self._watch_results.get(str(video.get("video_id")), True)
@@ -168,24 +171,24 @@ def test_progress_reflects_failed_watch_response():
     progress = _wait_for_terminal(adapter, "c-2")
 
     assert {c["video_id"] for c in adapter.learning.watch_calls} == {"v1", "v2"}
+    assert progress["status"] == "error"
+    assert progress["message"] == "Task finished with failed videos"
     assert progress["completed"] == 1
     assert progress["failed"] == 1
     # Percentage reflects only genuinely completed videos.
     assert progress["percentage"] == 50.0
 
 
-def test_loop_answers_questions_when_auto_answer_enabled():
-    q1 = {"title": "Q1", "choices": [{"name": "A", "content": "x"}]}
-    q2 = {"title": "Q2", "choices": [{"name": "B", "content": "y"}]}
-    adapter = _make_adapter(_chapters(("v1", "Has quiz", 5, [q1, q2])), ai_enabled=True)
+def test_loop_forwards_auto_answer_to_the_real_popup_flow():
+    q1 = {"title": "Embedded DTO is not the popup endpoint", "choices": []}
+    adapter = _make_adapter(_chapters(("v1", "Has quiz", 5, [q1])), ai_enabled=True)
 
     adapter.start_course("c-3", speed=1.0, auto_answer=True)
     progress = _wait_for_terminal(adapter, "c-3")
 
     assert progress["status"] == "completed"
-    # answer_question must have been invoked for each embedded question.
-    answered_titles = [q.get("title") for q in adapter.answer.answer_calls]
-    assert answered_titles == ["Q1", "Q2"], answered_titles
+    assert adapter.learning.watch_calls[0]["auto_answer"] is True
+    assert adapter.answer.answer_calls == []
 
 
 def test_loop_skips_answering_when_auto_answer_disabled():
@@ -196,6 +199,7 @@ def test_loop_skips_answering_when_auto_answer_disabled():
     _wait_for_terminal(adapter, "c-4")
 
     assert adapter.answer.answer_calls == []
+    assert adapter.learning.watch_calls[0]["auto_answer"] is False
 
 
 def test_cancel_stops_loop_before_remaining_videos():
@@ -207,11 +211,11 @@ def test_cancel_stops_loop_before_remaining_videos():
 
     real_watch = adapter.learning.watch_video
 
-    def blocking_watch(video, speed=1.0, is_cancelled=None, is_paused=None):
+    def blocking_watch(video, speed=1.0, is_cancelled=None, is_paused=None, auto_answer=False):
         if video.get("video_id") == "v1":
             started.set()
             release.wait(timeout=5)
-        return real_watch(video, speed=speed, is_cancelled=is_cancelled, is_paused=is_paused)
+        return real_watch(video, speed=speed, is_cancelled=is_cancelled, is_paused=is_paused, auto_answer=auto_answer)
 
     adapter.learning.watch_video = blocking_watch
 
@@ -254,7 +258,7 @@ def test_zero_duration_video_not_faked_complete():
     data = _chapters(("v0", "NoDur", 0))
     adapter = ZhihuishuAdapter(ai_config={"enabled": False})
     real_learning = ZhihuishuLearning(cookies={}, proxies={})
-    real_learning.get_course_list = lambda: []  # avoid network in _resolve_rac_id
+    real_learning.get_course_list = list  # avoid network in _resolve_rac_id
     real_learning.get_video_list = lambda rac_id: data
     real_learning.query_study_info = lambda *a, **k: {}  # avoid network in _annotate_watch_state
     adapter.learning = real_learning
@@ -349,15 +353,21 @@ def test_watch_video_skips_completed_video_without_network():
     learning.session.post = boom
     learning.session.get = boom
     video = {
-        "video_id": "v", "video_sec": 100, "watch_state": 1, "study_total_time": 100,
-        "small_lesson_id": 0, "lesson_id": "L", "chapter_id": "C", "recruit_id": "R", "course_id": "CC",
+        "video_id": "v",
+        "video_sec": 100,
+        "watch_state": 1,
+        "study_total_time": 100,
+        "small_lesson_id": 0,
+        "lesson_id": "L",
+        "chapter_id": "C",
+        "recruit_id": "R",
+        "course_id": "CC",
     }
     assert learning.watch_video(video) is True
 
 
-def test_watch_video_resumes_from_study_total_time(monkeypatch):
-    """Reports must resume from the server's studyTotalTime, never restart at 0
-    (else the first report is < recorded time → code -8)."""
+def test_watch_video_resumes_from_playback_position(monkeypatch):
+    """Playback resumes from learnTimeSec while studyTotalTime stays cumulative."""
     import app.services.course.zhihuishu.learning as learning_mod
 
     monkeypatch.setattr(learning_mod.time, "sleep", lambda *_: None)
@@ -371,8 +381,16 @@ def test_watch_video_resumes_from_study_total_time(monkeypatch):
 
     learning._save_progress = fake_save
     video = {
-        "video_id": "v", "video_sec": 10, "study_total_time": 4, "watch_state": 0,
-        "small_lesson_id": 0, "lesson_id": "L", "chapter_id": "C", "recruit_id": "R", "course_id": "CC",
+        "video_id": "v",
+        "video_sec": 10,
+        "study_total_time": 4,
+        "learn_time_sec": 4,
+        "watch_state": 0,
+        "small_lesson_id": 0,
+        "lesson_id": "L",
+        "chapter_id": "C",
+        "recruit_id": "R",
+        "course_id": "CC",
     }
     assert learning.watch_video(video, speed=2.0) is True
     assert reports, "should have reported at least once"
@@ -380,8 +398,8 @@ def test_watch_video_resumes_from_study_total_time(monkeypatch):
     assert all(r["token"] == "tok" for r in reports)
 
 
-def test_watch_video_treats_code_minus8_as_already_complete(monkeypatch):
-    """A -8 ('学习总时长下降了') means the server is already ahead → treat as done, not failed."""
+def test_watch_video_does_not_treat_code_minus8_as_complete(monkeypatch):
+    """A -8 only rejects a lower cumulative time; it does not prove completion."""
     import app.services.course.zhihuishu.learning as learning_mod
 
     monkeypatch.setattr(learning_mod.time, "sleep", lambda *_: None)
@@ -389,10 +407,17 @@ def test_watch_video_treats_code_minus8_as_already_complete(monkeypatch):
     learning._learning_token_id = lambda video: "tok"
     learning._save_progress = lambda *a, **k: -8
     video = {
-        "video_id": "v", "video_sec": 10, "study_total_time": 0, "watch_state": 0,
-        "small_lesson_id": 0, "lesson_id": "L", "chapter_id": "C", "recruit_id": "R", "course_id": "CC",
+        "video_id": "v",
+        "video_sec": 10,
+        "study_total_time": 0,
+        "watch_state": 0,
+        "small_lesson_id": 0,
+        "lesson_id": "L",
+        "chapter_id": "C",
+        "recruit_id": "R",
+        "course_id": "CC",
     }
-    assert learning.watch_video(video, speed=2.0) is True
+    assert learning.watch_video(video, speed=2.0) is False
 
 
 def test_annotate_watch_state_maps_study_info():

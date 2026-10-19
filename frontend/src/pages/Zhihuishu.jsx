@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  List,
+  ChevronDown,
   Loader2,
   Pause,
   Play,
@@ -9,13 +9,16 @@ import {
   RefreshCcw,
   X
 } from 'lucide-react'
-import { Input, Toggle, useRuntimeProfile, useToast } from '../components'
+import { AccountChip, Input, PageHeader, Toggle, useRuntimeProfile, useToast } from '../components'
+import WorkspaceTabs from '../components/WorkspaceTabs'
+import useWorkspaceTab from '../components/useWorkspaceTab'
 import { api } from '../utils/api'
 import { removeToken } from '../utils/auth'
 import {
   applyCourseProgressToTaskRecords,
   applyTaskActionToRecords,
   groupVideosByChapter,
+  getZhihuishuCourseId,
   TERMINAL_ZHIHUISHU_TASK_STATUSES,
 } from '../utils/zhihuishuTasks'
 
@@ -27,23 +30,27 @@ const SETTINGS_STORAGE_KEY = 'zhihuishu_page_settings_v1'
 const ACTIVE_TASK_ID_STORAGE_KEY = 'zhihuishu_active_task_id_v1'
 const ZHIHUISHU_API_BASE = '/course/zhihuishu'
 
-const GLASS_CARD_CLASS =
-  'rounded-2xl border border-border/20 bg-surface/80 p-6 shadow-lg backdrop-blur-lg transition-all duration-200'
-const PANEL_CLASS =
-  'rounded-xl border border-border/30 bg-surface/60 p-4 backdrop-blur-sm transition-all duration-200'
-const TAB_BUTTON_CLASS =
-  'min-h-[44px] min-w-[44px] rounded-xl px-4 py-2 font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/30'
+const CARD_CLASS = 'rounded-2xl border border-border bg-surface p-5 shadow-sm sm:p-6'
+const PANEL_CLASS = 'rounded-xl border border-border bg-surface-hover/40 p-4'
 const ZHIHUISHU_TABS = [
-  { id: 'login', label: '登录' },
   { id: 'courses', label: '课程' },
+  { id: 'study', label: '学习配置' },
   { id: 'tasks', label: '任务' },
-  { id: 'settings', label: '设置' },
-  { id: 'status', label: '状态与退出' },
+  { id: 'account', label: '账号' },
 ]
+// Old links: 登录 and 状态与退出 became 账号; 设置 became the 默认设置
+// section of 学习配置.
+const ZHIHUISHU_TAB_ALIASES = { login: 'account', status: 'account', settings: 'study' }
 const FIELD_CLASS =
-  'w-full min-h-[44px] rounded-xl border border-border/30 bg-surface/70 px-4 py-2 text-text transition-all duration-200 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20'
-const ACTION_BUTTON_CLASS =
-  'min-h-[44px] min-w-[44px] rounded-xl px-4 py-2 font-medium text-white cursor-pointer transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60'
+  'w-full min-w-0 min-h-[44px] rounded-xl border border-border bg-surface px-4 py-2 text-text focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60'
+const LABEL_CLASS = 'mb-2 block text-sm font-semibold text-text'
+const BUTTON_CLASS =
+  'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60'
+const PRIMARY_BUTTON_CLASS = `${BUTTON_CLASS} bg-primary text-white hover:bg-primary/90`
+const SECONDARY_BUTTON_CLASS = `${BUTTON_CLASS} border border-border bg-surface text-text hover:bg-surface-hover`
+const GHOST_BUTTON_CLASS = `${BUTTON_CLASS} text-text-muted hover:bg-surface-hover hover:text-text`
+const DANGER_BUTTON_CLASS = `${BUTTON_CLASS} border border-danger/40 text-danger hover:bg-danger/10`
+const SPEED_OPTIONS = ['0.5', '1.0', '1.5', '2.0']
 
 // The speed <select> uses one-decimal values ("1.0"), but the config API
 // returns numbers, and JSON turns 1.0 into 1. Without this, "1" matches no
@@ -207,7 +214,7 @@ const normalizeTaskRecord = (payload, fallback = {}) => {
   return {
     taskId,
     taskType: payload?.task_type || payload?.taskType || fallback.taskType || 'course',
-    courseId: parseCourseId(payload?.course_id || payload?.courseId || fallback.courseId),
+    courseId: getZhihuishuCourseId(payload) || getZhihuishuCourseId(fallback),
     courseName: payload?.course_name || payload?.courseName || fallback.courseName || '',
     status,
     message,
@@ -266,10 +273,18 @@ export default function Zhihuishu() {
   const toast = useToast()
 
   const [booting, setBooting] = useState(true)
-  const [activeTab, setActiveTab] = useState('login')
+  const [zhihuishuLoggedIn, setZhihuishuLoggedIn] = useState(false)
+  // Only known after a password login; the status API does not name the user.
+  const [loggedInAccount, setLoggedInAccount] = useState('')
+  const [activeTab, setActiveTab] = useWorkspaceTab(
+    ZHIHUISHU_TABS,
+    zhihuishuLoggedIn ? 'courses' : 'account',
+    ZHIHUISHU_TAB_ALIASES,
+  )
+  const [searchParams] = useSearchParams()
+  const [defaultsOpen, setDefaultsOpen] = useState(() => searchParams.get('tab') === 'settings')
 
   const [loginMethod, setLoginMethod] = useState('qr')
-  const [zhihuishuLoggedIn, setZhihuishuLoggedIn] = useState(false)
 
   const [qrSessionId, setQrSessionId] = useState('')
   const [qrCode, setQrCode] = useState('')
@@ -574,10 +589,10 @@ export default function Zhihuishu() {
     setCourses(flatCourses)
     const currentCourseId = selectedCourseIdRef.current
     const nextCourseId = currentCourseId && flatCourses.some(
-      (course) => parseCourseId(course?.courseId || course?.id) === currentCourseId,
+      (course) => getZhihuishuCourseId(course) === currentCourseId,
     )
       ? currentCourseId
-      : parseCourseId(flatCourses[0]?.courseId || flatCourses[0]?.id)
+      : getZhihuishuCourseId(flatCourses[0])
     selectCourse(nextCourseId)
     return flatCourses
   }, [selectCourse])
@@ -597,7 +612,7 @@ export default function Zhihuishu() {
 
     setCourseDetailLoading((current) => (isCurrent() ? true : current))
     try {
-      const resp = await requestZhihuishuApi(`/courses/${courseId}`, { method: 'GET' })
+      const resp = await requestZhihuishuApi(`/courses/${encodeURIComponent(courseId)}`, { method: 'GET' })
       if (!isCurrent()) return null
       const detail = parseObject(resp, 'data')
       setCourseDetail((current) => (isCurrent() ? detail : current))
@@ -617,7 +632,7 @@ export default function Zhihuishu() {
     } catch (err) {
       if (!isCurrent()) return null
       const fallback = coursesRef.current.find(
-        (course) => parseCourseId(course?.courseId || course?.id) === courseId,
+        (course) => getZhihuishuCourseId(course) === courseId,
       ) || null
       setCourseDetail((current) => (isCurrent() ? fallback : current))
       setCourseStructure((current) => (isCurrent() ? [] : current))
@@ -657,7 +672,7 @@ export default function Zhihuishu() {
 
     setChaptersLoading(true)
     try {
-      const resp = await api(`${ZHIHUISHU_API_BASE}/videos/${courseId}`, { method: 'GET' })
+      const resp = await api(`${ZHIHUISHU_API_BASE}/videos/${encodeURIComponent(courseId)}`, { method: 'GET' })
       if (!isCurrent()) return
       const videoChapters = groupVideosByChapter(parseList(resp, 'data', 'videos'))
       storeChapters(courseId, videoChapters)
@@ -705,7 +720,7 @@ export default function Zhihuishu() {
         return
       }
 
-      const legacyResp = await api(`${ZHIHUISHU_API_BASE}/videos/${courseId}`, { method: 'GET' })
+      const legacyResp = await api(`${ZHIHUISHU_API_BASE}/videos/${encodeURIComponent(courseId)}`, { method: 'GET' })
       if (!isCurrent()) return null
       const legacyVideos = parseList(legacyResp, 'data', 'videos')
       setVideos((current) => (isCurrent() ? legacyVideos : current))
@@ -791,7 +806,7 @@ export default function Zhihuishu() {
 
     setProgressLoading((current) => (isCurrent() ? true : current))
     try {
-      const resp = await api(`${ZHIHUISHU_API_BASE}/progress/${courseId}`, { method: 'GET' })
+      const resp = await api(`${ZHIHUISHU_API_BASE}/progress/${encodeURIComponent(courseId)}`, { method: 'GET' })
       if (!isCurrent()) return null
       const progressPayload = parseObject(resp, 'data', '')
       const statusValue = String(progressPayload?.status || resp?.status || 'running')
@@ -886,7 +901,7 @@ export default function Zhihuishu() {
       }
 
       const fallbackCourse = coursesRef.current.find(
-        (course) => parseCourseId(course?.courseId || course?.id) === normalized.courseId,
+        (course) => getZhihuishuCourseId(course) === normalized.courseId,
       )
       if (!normalized.courseName && fallbackCourse) {
         normalized.courseName = fallbackCourse.courseName || fallbackCourse.name || fallbackCourse.title || normalized.courseId
@@ -965,7 +980,7 @@ export default function Zhihuishu() {
           const item = normalizeTaskRecord(task)
           if (!item) return null
           const linkedCourse = coursesRef.current.find(
-            (course) => parseCourseId(course?.courseId || course?.id) === item.courseId,
+            (course) => getZhihuishuCourseId(course) === item.courseId,
           )
           if (!item.courseName && linkedCourse) {
             item.courseName = linkedCourse.courseName || linkedCourse.name || linkedCourse.title || item.courseId
@@ -1066,7 +1081,7 @@ export default function Zhihuishu() {
       if (!taskId) {
         throw new Error('服务端未返回有效任务编号，任务未启动。')
       }
-      const selectedCourse = courses.find((course) => parseCourseId(course.courseId || course.id) === selectedCourseId)
+      const selectedCourse = courses.find((course) => getZhihuishuCourseId(course) === selectedCourseId)
       const courseName = selectedCourse?.courseName || selectedCourse?.name || selectedCourse?.title || selectedCourseId
 
       upsertTaskRecord({
@@ -1091,7 +1106,7 @@ export default function Zhihuishu() {
     } finally {
       setStartLoadingType('')
     }
-  }, [chapterScope.endChapterId, courses, fetchTaskDetail, requestZhihuishuApi, selectActiveTask, selectedCourseId, setNoticeMessage, settings.autoAnswer, settings.speed, startLoadingType, upsertTaskRecord])
+  }, [chapterScope.endChapterId, courses, fetchTaskDetail, requestZhihuishuApi, selectActiveTask, selectedCourseId, setNoticeMessage, settings.autoAnswer, settings.speed, startLoadingType, upsertTaskRecord, setActiveTab])
 
   const cancelTaskById = useCallback(async (taskId) => {
     if (!taskId || taskActionLoading || taskItemActionLoading) return
@@ -1291,6 +1306,7 @@ export default function Zhihuishu() {
       })
 
       setZhihuishuLoggedIn(true)
+      setLoggedInAccount(username)
       setNoticeMessage('success', pickMessage(resp) || '密码登录成功。')
       await Promise.all([loadCourses(true), loadConfigFromBackend(true), fetchTaskList({ silent: true })])
     } catch (err) {
@@ -1306,6 +1322,7 @@ export default function Zhihuishu() {
       const statusPayload = parseObject(resp, 'data')
       const loggedIn = Boolean(statusPayload?.logged_in)
       setZhihuishuLoggedIn(loggedIn)
+      if (!loggedIn) setLoggedInAccount('')
       if (!loggedIn) {
         if (!silent) {
           setNoticeMessage('info', '当前未登录智慧树。')
@@ -1346,6 +1363,7 @@ export default function Zhihuishu() {
     coursesRef.current = []
 
     setZhihuishuLoggedIn(false)
+    setLoggedInAccount('')
     setLoginMethod('qr')
 
     setQrSessionId('')
@@ -1522,7 +1540,6 @@ export default function Zhihuishu() {
   }, [loadCourseDetail, selectedCourseId])
 
   const qrStatusText = useMemo(() => {
-    if (qrStatus === 'idle') return '未开始'
     if (qrStatus === 'loading') return '加载中'
     if (qrStatus === 'pending') return '等待扫码'
     if (qrStatus === 'success') return '登录成功'
@@ -1532,13 +1549,13 @@ export default function Zhihuishu() {
 
   const selectedCourse = useMemo(() => {
     if (!selectedCourseId) return null
-    if (courseDetail && parseCourseId(courseDetail.courseId || courseDetail.id) === selectedCourseId) {
+    if (courseDetail && getZhihuishuCourseId(courseDetail) === selectedCourseId) {
       return {
-        ...courses.find((course) => parseCourseId(course.courseId || course.id) === selectedCourseId),
+        ...courses.find((course) => getZhihuishuCourseId(course) === selectedCourseId),
         ...courseDetail
       }
     }
-    return courses.find((course) => parseCourseId(course.courseId || course.id) === selectedCourseId) || null
+    return courses.find((course) => getZhihuishuCourseId(course) === selectedCourseId) || null
   }, [courseDetail, courses, selectedCourseId])
 
   const sortedTasks = useMemo(() => {
@@ -1561,26 +1578,6 @@ export default function Zhihuishu() {
     }
   }, [progress])
 
-  const handleTabKeyDown = useCallback((event) => {
-    const focusedTab = event.target.closest?.('[role="tab"]')
-    const currentIndex = ZHIHUISHU_TABS.findIndex(
-      (tab) => focusedTab?.id === `zhs-tab-${tab.id}`
-    )
-    if (currentIndex < 0) return
-
-    let nextIndex = currentIndex
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % ZHIHUISHU_TABS.length
-    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + ZHIHUISHU_TABS.length) % ZHIHUISHU_TABS.length
-    else if (event.key === 'Home') nextIndex = 0
-    else if (event.key === 'End') nextIndex = ZHIHUISHU_TABS.length - 1
-    else return
-
-    event.preventDefault()
-    const nextTab = ZHIHUISHU_TABS[nextIndex].id
-    setActiveTab(nextTab)
-    requestAnimationFrame(() => document.getElementById(`zhs-tab-${nextTab}`)?.focus())
-  }, [])
-
   const activeTaskSummary = useMemo(() => {
     const activeTask = taskRecords.find((task) => task.taskId === activeTaskId) || null
     const payload = parseObject(activeTask?.progress, '')
@@ -1597,459 +1594,362 @@ export default function Zhihuishu() {
     }
   }, [activeTaskId, taskRecords])
 
+  const courseLabel = selectedCourse?.courseName || selectedCourse?.name || selectedCourse?.title || selectedCourseId
+
   if (booting) {
     return (
-      <div className={GLASS_CARD_CLASS}>
-        <div className="flex items-center gap-3 text-text">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          <p>正在检查登录状态...</p>
-        </div>
+      <div className="space-y-6">
+        <PageHeader eyebrow="智慧树" title="课程学习" />
+        <p role="status" className="flex items-center gap-2 text-sm text-text-muted">
+          <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
+          正在检查登录状态...
+        </p>
       </div>
     )
   }
 
   return (
-    <div className="overflow-x-hidden">
-      <div className="space-y-6">
-        <section className={GLASS_CARD_CLASS}>
-          <h1 className="text-2xl font-bold text-text">智慧树学习助手</h1>
-
-          <div
-            role="tablist"
-            aria-label="智慧树工作区"
-            tabIndex="-1"
-            className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-5"
-            onKeyDown={handleTabKeyDown}
-          >
-            {ZHIHUISHU_TABS.map((tab) => (
-              <button
-                key={tab.id}
-                id={`zhs-tab-${tab.id}`}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === tab.id}
-                aria-controls={`zhs-panel-${tab.id}`}
-                tabIndex={activeTab === tab.id ? 0 : -1}
-                className={`${TAB_BUTTON_CLASS} ${activeTab === tab.id ? 'bg-primary text-white' : 'bg-surface text-text hover:bg-surface-hover'}`}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {activeTab === 'login' && (
-          <section id="zhs-panel-login" role="tabpanel" aria-labelledby="zhs-tab-login" tabIndex="0" className="mx-auto max-w-xl space-y-4">
-            {/* Login-method switcher — only the chosen method's form shows, so
-                the two forms no longer compete on screen. */}
-            <div
-              role="radiogroup"
-              aria-label="登录方式"
-              className="inline-flex rounded-full border border-border/60 bg-surface/70 p-0.5"
-            >
-              {[
-                { value: 'qr', label: '二维码登录' },
-                { value: 'password', label: '账号密码登录' },
-              ].map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={loginMethod === opt.value}
-                  onClick={() => {
-                    if (opt.value === 'password') abandonQrLoginIntent()
-                    setLoginMethod(opt.value)
-                  }}
-                  className={`min-h-[40px] rounded-full px-4 text-sm font-medium transition-colors ${
-                    loginMethod === opt.value
-                      ? 'bg-primary text-white'
-                      : 'text-text/70 hover:bg-surface-hover'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-
-            {loginMethod === 'qr' ? (
-              <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-                <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-bold text-text">二维码登录</h2>
-                  <button
-                    type="button"
-                    className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`}
-                    onClick={() => {
-                      void startQrLogin()
-                    }}
-                    disabled={qrLoading}
-                  >
-                    <span className="inline-flex items-center gap-2">
-                      <RefreshCcw className="h-4 w-4" />
-                      {qrLoading ? '生成中...' : '生成二维码'}
-                    </span>
-                  </button>
-                </div>
-
-                <p className="text-sm text-text/70">{qrMessage || '请生成二维码并使用智慧树 App 扫码。'}</p>
-                <div className="flex justify-center">
-                  {qrLoading && !qrCode && <div className="flex h-56 w-56 items-center justify-center rounded-2xl border border-border/30 bg-surface/70"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}
-                  {!qrLoading && qrCode && <img src={`data:image/png;base64,${qrCode}`} alt="智慧树二维码" className="h-56 w-56 rounded-2xl border border-border/30 bg-surface object-contain shadow-sm" />}
-                </div>
-                <div className="rounded-xl border border-border/30 bg-surface/70 p-3 text-sm text-text">
-                  <p className="flex items-center gap-2"><QrCode className="h-4 w-4 text-primary" />状态：{qrStatusText}</p>
-                  {qrError && <p className="mt-2 text-danger">{qrError}</p>}
-                </div>
-              </div>
-            ) : (
-              <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-                <h2 className="text-lg font-bold text-text">账号密码登录</h2>
-                <form className="space-y-4" onSubmit={submitPasswordLogin}>
-                  <Input id="zhs-username" label="账号" type="text" autoComplete="username" value={passwordForm.username} onChange={(event) => setPasswordForm((prev) => ({ ...prev, username: event.target.value }))} required />
-                  <Input id="zhs-password" label="密码" type="password" autoComplete="current-password" value={passwordForm.password} onChange={(event) => setPasswordForm((prev) => ({ ...prev, password: event.target.value }))} required />
-                  <button type="submit" className={`${ACTION_BUTTON_CLASS} w-full bg-primary hover:bg-primary/90`} disabled={passwordLoading}>{passwordLoading ? '登录中...' : '密码登录'}</button>
-                </form>
-              </div>
-            )}
-
-            <div className={PANEL_CLASS}>
-              <p className="text-sm text-text/80">智慧树状态：{zhihuishuLoggedIn ? '已登录' : '未登录'}</p>
-            </div>
-          </section>
+    <div className="min-w-0 space-y-6">
+      <PageHeader
+        eyebrow="智慧树"
+        title="课程学习"
+        actions={(
+          <AccountChip
+            ready={zhihuishuLoggedIn}
+            account={loggedInAccount}
+            onClick={() => setActiveTab('account')}
+          />
         )}
-        {activeTab === 'courses' && (
-          <section id="zhs-panel-courses" role="tabpanel" aria-labelledby="zhs-tab-courses" tabIndex="0" className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-text">课程与启动</h2>
-                <button
-                  type="button"
-                  className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`}
-                  onClick={() => {
-                    void loadCourses(false)
-                  }}
-                  disabled={coursesLoading}
-                >
-                  {coursesLoading ? '刷新中...' : '刷新课程'}
-                </button>
-              </div>
+      >
+        <WorkspaceTabs id="zhs" label="智慧树工作区" tabs={ZHIHUISHU_TABS} activeTab={activeTab} onChange={setActiveTab} />
+      </PageHeader>
 
-              <div>
-                <label htmlFor="zhs-course" className="mb-2 block text-sm font-medium text-text">分组课程</label>
-                <select
-                  id="zhs-course"
-                  className={`${FIELD_CLASS} cursor-pointer`}
-                  value={selectedCourseId}
-                  onChange={(event) => {
-                    selectCourse(event.target.value)
-                  }}
-                >
-                  <option value="">请选择课程</option>
-                  {courseGroups.map((group) => (
-                    <optgroup key={group.group} label={`${group.group}（${group.courses.length}）`}>
-                      {group.courses.map((course) => {
-                        const id = parseCourseId(course.courseId || course.id)
-                        const title = course.courseName || course.name || course.title || id
-                        return <option key={`${group.group}-${id}`} value={id}>{title}</option>
-                      })}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
+      {activeTab === 'courses' && (
+        <section
+          id="zhs-panel-courses"
+          role="tabpanel"
+          aria-labelledby="zhs-tab-courses"
+          tabIndex="0"
+          className={courses.length > 0 ? 'grid grid-cols-1 items-start gap-6 lg:grid-cols-2' : 'max-w-2xl'}
+        >
+          <div className={`${CARD_CLASS} space-y-4`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-text">选择课程</h2>
+              <button
+                type="button"
+                className={GHOST_BUTTON_CLASS}
+                onClick={() => {
+                  void loadCourses(false)
+                }}
+                disabled={coursesLoading}
+              >
+                <RefreshCcw className="h-4 w-4" aria-hidden="true" />
+                {coursesLoading ? '刷新中...' : '刷新课程'}
+              </button>
+            </div>
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {courses.length > 0 ? (
+              <>
                 <div>
-                  <label htmlFor="zhs-speed" className="mb-2 block text-sm font-medium text-text">学习倍速</label>
-                  <select id="zhs-speed" className={`${FIELD_CLASS} cursor-pointer`} value={settings.speed} onChange={(event) => setSettings((prev) => ({ ...prev, speed: event.target.value }))}>
-                    <option value="0.5">0.5x</option>
-                    <option value="1.0">1.0x</option>
-                    <option value="1.5">1.5x</option>
-                    <option value="2.0">2.0x</option>
-                  </select>
-                </div>
-
-                <div>
-                  <Toggle
-                    label="自动答题"
-                    checked={settings.autoAnswer}
-                    onChange={(next) => setSettings((prev) => ({ ...prev, autoAnswer: next }))}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="zhs-end-chapter" className="mb-2 block text-sm font-medium text-text">学到哪一章</label>
-                <div className="flex gap-2">
+                  <label htmlFor="zhs-course" className={LABEL_CLASS}>分组课程</label>
                   <select
-                    id="zhs-end-chapter"
-                    className={`${FIELD_CLASS} min-w-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60`}
-                    value={chapterScope.endChapterId}
-                    disabled={!selectedCourseId || chapterScope.chapters.length === 0}
-                    aria-describedby="zhs-end-chapter-hint"
-                    onChange={(event) => setEndChapter(event.target.value)}
+                    id="zhs-course"
+                    className={`${FIELD_CLASS} cursor-pointer`}
+                    value={selectedCourseId}
+                    onChange={(event) => {
+                      selectCourse(event.target.value)
+                    }}
                   >
-                    <option value="">全部章节</option>
-                    {chapterScope.chapters.map((chapter, index) => (
-                      <option key={chapter.id} value={chapter.id}>
-                        {index + 1}. {chapter.title}（{chapter.videoCount} 个视频）
-                      </option>
+                    <option value="">请选择课程</option>
+                    {courseGroups.map((group) => (
+                      <optgroup key={group.group} label={`${group.group}（${group.courses.length}）`}>
+                        {group.courses.map((course) => {
+                          const id = getZhihuishuCourseId(course)
+                          const title = course.courseName || course.name || course.title || id
+                          return <option key={`${group.group}-${id}`} value={id}>{title}</option>
+                        })}
+                      </optgroup>
                     ))}
                   </select>
-                  {chapterScope.chapters.length === 0 && (
-                    <button
-                      type="button"
-                      className={`${ACTION_BUTTON_CLASS} shrink-0 bg-secondary/90 hover:bg-secondary`}
-                      onClick={() => {
-                        void loadChapters(selectedCourseId)
-                      }}
-                      disabled={!selectedCourseId || chaptersLoading}
-                    >
-                      {chaptersLoading ? '章节加载中...' : '加载章节'}
-                    </button>
-                  )}
                 </div>
-                <p id="zhs-end-chapter-hint" className="mt-1 text-xs text-text/60">{chapterScope.hint}</p>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <button
                   type="button"
-                  className={`${ACTION_BUTTON_CLASS} bg-cta hover:bg-cta/90`}
-                  onClick={() => {
-                    void startCourseTask('course')
-                  }}
-                  disabled={!selectedCourseId || startLoadingType !== ''}
+                  className={`${PRIMARY_BUTTON_CLASS} w-full`}
+                  onClick={() => setActiveTab('study')}
+                  disabled={!selectedCourseId}
                 >
-                  <span className="inline-flex items-center gap-2">
-                    <Play className="h-4 w-4" />
-                    {startLoadingType === 'course' ? '启动中...' : '启动课程任务'}
-                  </span>
+                  下一步：学习配置
                 </button>
-                <button
-                  type="button"
-                  className={`${ACTION_BUTTON_CLASS} bg-primary/90 hover:bg-primary`}
-                  onClick={() => {
-                    void startCourseTask('ai-course')
-                  }}
-                  disabled={!selectedCourseId || startLoadingType !== ''}
-                >
-                  <span className="inline-flex items-center gap-2">
-                    <Play className="h-4 w-4" />
-                    {startLoadingType === 'ai-course' ? '启动中...' : '启动 AI 任务'}
-                  </span>
-                </button>
+              </>
+            ) : !coursesLoading && (
+              <div role="status" className="space-y-3 text-sm text-text-muted">
+                <p>{zhihuishuLoggedIn ? '没有读到课程，可稍后刷新重试。' : '登录智慧树后即可看到课程。'}</p>
+                {!zhihuishuLoggedIn && (
+                  <button type="button" className={PRIMARY_BUTTON_CLASS} onClick={() => setActiveTab('account')}>
+                    前往登录
+                  </button>
+                )}
               </div>
+            )}
+          </div>
 
-              <div>
-                <button
-                  type="button"
-                  className={`${ACTION_BUTTON_CLASS} w-full bg-secondary/90 hover:bg-secondary`}
-                  onClick={() => {
-                    void loadVideos(selectedCourseId)
-                  }}
-                  disabled={!selectedCourseId || videosLoading}
-                >
-                  <span className="inline-flex items-center gap-2">
-                    <List className="h-4 w-4" />
-                    {videosLoading ? '加载中...' : '查看视频列表/结构'}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-              <h2 className="text-lg font-bold text-text">课程详情</h2>
+          {courses.length > 0 && (
+            <div className={`${CARD_CLASS} space-y-4`}>
               {!selectedCourseId ? (
-                <p className="text-sm text-text/70">请选择课程查看详情与进度。</p>
+                <p className="text-sm text-text-muted">请选择课程查看详情与进度。</p>
               ) : (
-                <div className="space-y-3">
-                  <div className={PANEL_CLASS}>
-                    <p className="text-sm text-text/70">课程名称</p>
-                    <p className="mt-1 font-semibold text-text">{selectedCourse?.courseName || selectedCourse?.name || selectedCourse?.title || selectedCourseId}</p>
-                    <p className="mt-2 text-xs text-text/60">课程 ID：{selectedCourseId}</p>
-                    <p className="mt-1 text-xs text-text/60">分组：{selectedCourse?._groupName || selectedCourse?.semesterName || selectedCourse?.termName || '未分类'}</p>
-                    {courseDetailLoading && <p className="mt-2 text-xs text-text/70">正在加载课程详情...</p>}
+                <>
+                  <div className="min-w-0">
+                    <h2 className="break-words text-lg font-semibold text-text">{courseLabel}</h2>
+                    <p className="mt-1 break-all text-xs text-text-muted">
+                      {selectedCourse?._groupName || selectedCourse?.semesterName || selectedCourse?.termName || '未分类'} · ID {selectedCourseId}
+                    </p>
+                    {courseDetailLoading && <p className="mt-2 text-xs text-text-muted">正在加载课程详情...</p>}
                   </div>
 
-                  <div className={PANEL_CLASS}>
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-medium text-text">学习进度</p>
+                  <div className={`${PANEL_CLASS} space-y-3`}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-text">学习进度</h3>
                       <button
                         type="button"
-                        className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`}
+                        className={SECONDARY_BUTTON_CLASS}
                         onClick={() => {
-                          if (activeTaskId) {
-                            void fetchTaskDetail(activeTaskId, false)
+                          const courseTask = taskRecords.find((task) => task.taskId === activeTaskId && task.courseId === selectedCourseId)
+                          if (courseTask) {
+                            void fetchTaskDetail(courseTask.taskId, false)
                           } else {
                             void loadCourseProgress(selectedCourseId, false)
                           }
                         }}
-                        disabled={!selectedCourseId || progressLoading}
+                        disabled={progressLoading}
                       >
                         {progressLoading ? '刷新中...' : '刷新进度'}
                       </button>
                     </div>
-                    <p className="mt-3 text-sm text-text/80">状态：{progress?.status || '未获取'}</p>
-                    <p className="mt-1 text-sm text-text/80">消息：{progress?.message || '暂无'}</p>
-                    <p className="mt-1 text-sm text-text/80">当前视频：{selectedCourseProgress.currentVideo || '暂无'}</p>
-                    <p className="mt-1 text-sm text-text/80">实时进度：{selectedCourseProgress.completed}/{selectedCourseProgress.total}（{Math.round(selectedCourseProgress.percentage)}%）</p>
-                    <div
-                      className="mt-3 h-2 overflow-hidden rounded-full bg-surface-hover/80"
-                      role="progressbar"
-                      aria-valuenow={Math.round(selectedCourseProgress.percentage)}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-label="课程学习进度"
-                    >
-                      <div className="h-full rounded-full bg-cta transition-all duration-200" style={{ width: `${selectedCourseProgress.percentage}%` }} />
-                    </div>
-                    <p className="mt-2 text-xs text-text/60">失败：{selectedCourseProgress.failed}{selectedCourseProgress.estimatedTime ? ` · 预计剩余：${selectedCourseProgress.estimatedTime}` : ""}</p>
+                    {progress ? (
+                      <>
+                        <div
+                          className="h-2 overflow-hidden rounded-full bg-border/60"
+                          role="progressbar"
+                          aria-valuenow={Math.round(selectedCourseProgress.percentage)}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-label="课程学习进度"
+                        >
+                          <div className="h-full rounded-full bg-primary transition-all duration-200" style={{ width: `${selectedCourseProgress.percentage}%` }} />
+                        </div>
+                        <p className="text-xs text-text-muted">
+                          {progress.status ? `${progress.status} · ` : ''}
+                          {selectedCourseProgress.completed}/{selectedCourseProgress.total}（{Math.round(selectedCourseProgress.percentage)}%）
+                          {selectedCourseProgress.failed > 0 ? ` · 失败 ${selectedCourseProgress.failed}` : ''}
+                          {selectedCourseProgress.estimatedTime ? ` · 预计剩余 ${selectedCourseProgress.estimatedTime}` : ''}
+                        </p>
+                        <p className="break-words text-sm text-text">消息：{progress.message || '暂无'}</p>
+                        {selectedCourseProgress.currentVideo && (
+                          <p className="break-words text-sm text-text-muted">当前视频：{selectedCourseProgress.currentVideo}</p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-sm text-text-muted">暂无进度。</p>
+                    )}
                   </div>
 
-                  <div className={PANEL_CLASS}>
-                    <p className="text-sm font-medium text-text">课程结构</p>
-                    {courseStructure.length === 0 ? (
-                      <p className="mt-2 text-sm text-text/70">暂无结构数据，可尝试“查看视频列表/结构”。</p>
-                    ) : (
-                      <ul className="mt-2 max-h-40 space-y-2 overflow-y-auto pr-1 text-sm text-text/80">
+                  <div className={`${PANEL_CLASS} space-y-3`}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-text">课程内容</h3>
+                      <button
+                        type="button"
+                        className={SECONDARY_BUTTON_CLASS}
+                        onClick={() => {
+                          void loadVideos(selectedCourseId)
+                        }}
+                        disabled={videosLoading}
+                      >
+                        {videosLoading ? '加载中...' : '查看视频列表/结构'}
+                      </button>
+                    </div>
+                    {courseStructure.length === 0 && videos.length === 0 && (
+                      <p className="text-sm text-text-muted">尚未加载课程内容。</p>
+                    )}
+                    {courseStructure.length > 0 && (
+                      <ul className="max-h-48 space-y-2 overflow-y-auto pr-1 text-sm">
                         {courseStructure.map((section, index) => (
-                          <li key={`${section.id || index}`} className="rounded-lg border border-border/30 bg-surface/70 px-3 py-2">
-                            <p className="font-medium text-text">{section.title || `结构 ${index + 1}`}</p>
-                            <p className="text-xs text-text/70">视频数：{Array.isArray(section.videos) ? section.videos.length : 0}</p>
+                          <li key={`${section.id || index}`} className="flex items-start justify-between gap-3 rounded-lg bg-surface px-3 py-2">
+                            <p className="min-w-0 break-words font-medium text-text">{section.title || `结构 ${index + 1}`}</p>
+                            <span className="shrink-0 text-xs text-text-muted">{Array.isArray(section.videos) ? section.videos.length : 0} 个视频</span>
                           </li>
                         ))}
                       </ul>
                     )}
-                  </div>
-
-                  <div className={PANEL_CLASS}>
-                    <p className="text-sm font-medium text-text">视频列表</p>
-                    {videos.length === 0 ? (
-                      <p className="mt-2 text-sm text-text/70">尚未加载视频任务。</p>
-                    ) : (
-                      <ul className="mt-2 max-h-48 space-y-2 overflow-y-auto pr-1 text-sm text-text/80">
-                        {videos.map((video, index) => {
-                          const title = video.name || video.title || video.videoName || `视频 ${index + 1}`
-                          const status = video.status || 'unknown'
-                          return (
-                            <li key={`${title}-${index}`} className="rounded-lg border border-border/30 bg-surface/70 px-3 py-2">
-                              <p className="font-medium text-text">{title}</p>
-                              <p className="text-xs text-text/70">状态：{status}</p>
-                              {video.sectionTitle && <p className="text-xs text-text/70">章节：{video.sectionTitle}</p>}
-                            </li>
-                          )
-                        })}
-                      </ul>
+                    {videos.length > 0 && (
+                      <details>
+                        <summary className="cursor-pointer text-sm font-medium text-text">视频（{videos.length}）</summary>
+                        <ul className="mt-2 max-h-56 space-y-2 overflow-y-auto pr-1 text-sm">
+                          {videos.map((video, index) => {
+                            const title = video.name || video.title || video.videoName || `视频 ${index + 1}`
+                            return (
+                              <li key={`${title}-${index}`} className="rounded-lg bg-surface px-3 py-2">
+                                <div className="flex items-start justify-between gap-3">
+                                  <span className="min-w-0 break-words text-text">{title}</span>
+                                  <span className="shrink-0 text-xs text-text-muted">{video.status || 'unknown'}</span>
+                                </div>
+                                {video.sectionTitle && <p className="mt-0.5 text-xs text-text-muted">章节：{video.sectionTitle}</p>}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </details>
                     )}
                   </div>
-                </div>
+                </>
               )}
             </div>
-          </section>
-        )}
+          )}
+        </section>
+      )}
 
-        {activeTab === 'tasks' && (
-          <section id="zhs-panel-tasks" role="tabpanel" aria-labelledby="zhs-tab-tasks" tabIndex="0" className="space-y-6">
-            <div className={GLASS_CARD_CLASS}>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <h2 className="text-lg font-bold text-text">任务控制</h2>
-                <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                  <button type="button" className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`} onClick={refreshTaskList} disabled={progressLoading}><span className="inline-flex items-center gap-2"><RefreshCcw className="h-4 w-4" />刷新列表</span></button>
-                  <button type="button" className={`${ACTION_BUTTON_CLASS} bg-primary/90 hover:bg-primary`} onClick={pauseTask} disabled={taskActionLoading !== ''}><span className="inline-flex items-center gap-2"><Pause className="h-4 w-4" />{taskActionLoading === 'pause' ? '暂停中...' : '暂停'}</span></button>
-                  <button type="button" className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`} onClick={resumeTask} disabled={taskActionLoading !== ''}><span className="inline-flex items-center gap-2"><Play className="h-4 w-4" />{taskActionLoading === 'resume' ? '恢复中...' : '恢复'}</span></button>
-                  <button type="button" className={`${ACTION_BUTTON_CLASS} bg-danger hover:bg-danger/90`} onClick={cancelTask} disabled={taskActionLoading !== ''}><span className="inline-flex items-center gap-2"><X className="h-4 w-4" />{taskActionLoading === 'cancel' ? '取消中...' : '取消'}</span></button>
-                </div>
+      {activeTab === 'study' && (
+        <section id="zhs-panel-study" role="tabpanel" aria-labelledby="zhs-tab-study" tabIndex="0" className="max-w-3xl space-y-4">
+          <div className={`${CARD_CLASS} space-y-5`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-text-muted">当前课程</p>
+                <h2 className="mt-1 break-words text-lg font-semibold text-text">{selectedCourseId ? courseLabel : '尚未选择课程'}</h2>
               </div>
+              <button
+                type="button"
+                className={selectedCourseId ? GHOST_BUTTON_CLASS : PRIMARY_BUTTON_CLASS}
+                onClick={() => setActiveTab('courses')}
+              >
+                {selectedCourseId ? '换课程' : '去选择课程'}
+              </button>
             </div>
 
-            <div className={GLASS_CARD_CLASS}>
-              <h3 className="text-base font-semibold text-text">任务列表</h3>
-              {sortedTasks.length === 0 ? (
-                <p className="py-8 text-center text-sm text-text/70">暂无任务记录，启动课程后会显示在这里。</p>
-              ) : (
-                <div className="mt-4 space-y-3">
-                  {sortedTasks.map((task) => (
-                    <div key={task.taskId} className={PANEL_CLASS}>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <p className="font-semibold text-text">{task.courseName}</p>
-                          <p className="mt-1 text-xs text-text/70">任务 ID：{task.taskId}</p>
-                        </div>
-                        <div className="text-sm text-text/80">
-                          <p>类型：{task.taskType || 'course'}</p>
-                          <p>状态：{task.status || 'unknown'}</p>
-                          <p className="mt-1">更新时间：{new Date(task.updatedAt || task.startedAt).toLocaleString()}</p>
-                        </div>
-                      </div>
-                      <p className="mt-2 text-sm text-text/80">消息：{task.message || '暂无'}</p>
-                      <p className="mt-1 text-sm text-text/80">当前视频：{task.currentTask || '暂无'}</p>
-                      <p className="mt-1 text-sm text-text/80">
-                        进度：{task.completed || 0}/{task.total || 0}（{Math.round(Number(task.percentage || 0))}%）
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`}
-                          onClick={() => {
-                            void fetchTaskDetail(task.taskId, false)
-                          }}
-                          disabled={taskActionLoading !== '' || taskItemActionLoading === task.taskId}
-                        >
-                          查看详情
-                        </button>
-                        <button
-                          type="button"
-                          className={`${ACTION_BUTTON_CLASS} bg-danger hover:bg-danger/90`}
-                          onClick={() => {
-                            void cancelTaskById(task.taskId)
-                          }}
-                          disabled={taskActionLoading !== '' || taskItemActionLoading === task.taskId}
-                        >
-                          {taskItemActionLoading === task.taskId ? '取消中...' : '取消该任务'}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
-        )}
-
-        {activeTab === 'settings' && (
-          <section id="zhs-panel-settings" role="tabpanel" aria-labelledby="zhs-tab-settings" tabIndex="0" className={GLASS_CARD_CLASS}>
-            <h2 className="text-lg font-bold text-text">学习设置</h2>
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label htmlFor="settings-speed" className="mb-2 block text-sm font-medium text-text">默认学习倍速</label>
-                <select id="settings-speed" className={`${FIELD_CLASS} cursor-pointer`} value={settings.speed} onChange={(event) => setSettings((prev) => ({ ...prev, speed: event.target.value }))}>
-                  <option value="0.5">0.5x</option>
-                  <option value="1.0">1.0x</option>
-                  <option value="1.5">1.5x</option>
-                  <option value="2.0">2.0x</option>
+                <label htmlFor="zhs-speed" className={LABEL_CLASS}>学习倍速</label>
+                <select
+                  id="zhs-speed"
+                  className={`${FIELD_CLASS} cursor-pointer`}
+                  value={settings.speed}
+                  onChange={(event) => setSettings((prev) => ({ ...prev, speed: event.target.value }))}
+                >
+                  {SPEED_OPTIONS.map((speed) => <option key={speed} value={speed}>{speed}x</option>)}
                 </select>
               </div>
-
-              <div>
-                <label htmlFor="settings-poll" className="mb-2 block text-sm font-medium text-text">进度轮询间隔（秒）</label>
-                <input id="settings-poll" type="number" min={String(MIN_PROGRESS_POLL_SECONDS)} max={String(MAX_PROGRESS_POLL_SECONDS)} value={settings.progressPollSeconds} onChange={(event) => setSettings((prev) => ({ ...prev, progressPollSeconds: clampPollSeconds(event.target.value) }))} className={FIELD_CLASS} />
+              <div className="flex min-h-[44px] items-center justify-between gap-3 self-end rounded-xl border border-border pl-4 pr-1">
+                <span className="text-sm font-semibold text-text">
+                  自动答题<span className="ml-1 text-xs font-normal text-text-muted">视频弹题</span>
+                </span>
+                <Toggle
+                  label="自动答题"
+                  checked={settings.autoAnswer}
+                  onChange={(next) => setSettings((prev) => ({ ...prev, autoAnswer: next }))}
+                />
               </div>
             </div>
 
-            <div className="mt-4 flex items-center justify-between rounded-xl border border-border/30 bg-surface/70 px-4 py-3">
-              <p className="font-medium text-text">默认自动答题</p>
-              <Toggle
-                label="默认自动答题"
-                checked={settings.autoAnswer}
-                onChange={(next) => setSettings((prev) => ({ ...prev, autoAnswer: next }))}
-              />
-            </div>
+            {selectedCourseId && (
+              <>
+                <div>
+                  <label htmlFor="zhs-end-chapter" className={LABEL_CLASS}>学到哪一章</label>
+                  <div className="flex gap-2">
+                    <select
+                      id="zhs-end-chapter"
+                      className={`${FIELD_CLASS} cursor-pointer`}
+                      value={chapterScope.endChapterId}
+                      disabled={chapterScope.chapters.length === 0}
+                      aria-describedby="zhs-end-chapter-hint"
+                      onChange={(event) => setEndChapter(event.target.value)}
+                    >
+                      <option value="">全部章节</option>
+                      {chapterScope.chapters.map((chapter, index) => (
+                        <option key={chapter.id} value={chapter.id}>
+                          {index + 1}. {chapter.title}（{chapter.videoCount} 个视频）
+                        </option>
+                      ))}
+                    </select>
+                    {chapterScope.chapters.length === 0 && (
+                      <button
+                        type="button"
+                        className={`${SECONDARY_BUTTON_CLASS} shrink-0`}
+                        onClick={() => {
+                          void loadChapters(selectedCourseId)
+                        }}
+                        disabled={chaptersLoading}
+                      >
+                        {chaptersLoading ? '章节加载中...' : '加载章节'}
+                      </button>
+                    )}
+                  </div>
+                  <p id="zhs-end-chapter-hint" className="mt-1.5 text-xs text-text-muted">{chapterScope.hint}</p>
+                </div>
 
-            <div className="mt-4">
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    className={PRIMARY_BUTTON_CLASS}
+                    onClick={() => {
+                      void startCourseTask('course')
+                    }}
+                    disabled={startLoadingType !== ''}
+                  >
+                    <Play className="h-4 w-4" aria-hidden="true" />
+                    {startLoadingType === 'course' ? '启动中...' : '启动课程任务'}
+                  </button>
+                  <button
+                    type="button"
+                    className={SECONDARY_BUTTON_CLASS}
+                    onClick={() => {
+                      void startCourseTask('ai-course')
+                    }}
+                    disabled={startLoadingType !== ''}
+                  >
+                    <Play className="h-4 w-4" aria-hidden="true" />
+                    {startLoadingType === 'ai-course' ? '启动中...' : '启动 AI 任务'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          <details
+            className={CARD_CLASS}
+            open={defaultsOpen}
+            onToggle={(event) => setDefaultsOpen(event.currentTarget.open)}
+          >
+            <summary className="flex min-h-[28px] cursor-pointer list-none items-center justify-between gap-3 font-semibold text-text [&::-webkit-details-marker]:hidden">
+              默认设置
+              <ChevronDown className={`h-4 w-4 text-text-muted transition-transform ${defaultsOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+            </summary>
+            <div className="mt-4 space-y-4">
+              <p className="text-sm text-text-muted">保存后，上面的倍速、自动答题和这里的轮询间隔会在下次打开时沿用。</p>
+              <div className="sm:max-w-xs">
+                <label htmlFor="zhs-poll" className={LABEL_CLASS}>进度轮询间隔（秒）</label>
+                <input
+                  id="zhs-poll"
+                  type="number"
+                  min={String(MIN_PROGRESS_POLL_SECONDS)}
+                  max={String(MAX_PROGRESS_POLL_SECONDS)}
+                  value={settings.progressPollSeconds}
+                  onChange={(event) => setSettings((prev) => ({ ...prev, progressPollSeconds: clampPollSeconds(event.target.value) }))}
+                  className={FIELD_CLASS}
+                />
+              </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`}
+                  className={SECONDARY_BUTTON_CLASS}
+                  onClick={() => {
+                    void saveSettings(settings)
+                  }}
+                  disabled={settingsSaving}
+                >
+                  {settingsSaving ? '保存中...' : '保存为默认'}
+                </button>
+                <button
+                  type="button"
+                  className={GHOST_BUTTON_CLASS}
                   onClick={() => {
                     void loadConfigFromBackend(false)
                   }}
@@ -2057,82 +1957,246 @@ export default function Zhihuishu() {
                 >
                   同步配置
                 </button>
-                <button
-                  type="button"
-                  className={`${ACTION_BUTTON_CLASS} bg-cta hover:bg-cta/90`}
-                  onClick={() => {
-                    void saveSettings(settings)
-                  }}
-                  disabled={settingsSaving}
-                >
-                  {settingsSaving ? '保存中...' : '保存配置'}
-                </button>
               </div>
             </div>
-          </section>
-        )}
+          </details>
+        </section>
+      )}
 
-        {activeTab === 'status' && (
-          <section id="zhs-panel-status" role="tabpanel" aria-labelledby="zhs-tab-status" tabIndex="0" className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-lg font-bold text-text">当前状态</h2>
+      {activeTab === 'tasks' && (
+        <section id="zhs-panel-tasks" role="tabpanel" aria-labelledby="zhs-tab-tasks" tabIndex="0" className="space-y-4">
+          <div className={`${CARD_CLASS} space-y-4`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-text">当前任务</h2>
+              <button type="button" className={GHOST_BUTTON_CLASS} onClick={refreshTaskList} disabled={progressLoading}>
+                <RefreshCcw className="h-4 w-4" aria-hidden="true" />
+                刷新列表
+              </button>
+            </div>
+
+            {activeTaskId ? (
+              <>
+                <div className="min-w-0">
+                  <p className="break-words font-semibold text-text">{activeTaskSummary.courseName || '智慧树任务'}</p>
+                  <p className="mt-1 break-all text-xs text-text-muted">任务 ID：{activeTaskId}</p>
+                </div>
+                <div className="space-y-2">
+                  <div
+                    className="h-2 overflow-hidden rounded-full bg-border/60"
+                    role="progressbar"
+                    aria-valuenow={Math.round(activeTaskSummary.percentage)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label="最近任务进度"
+                  >
+                    <div className="h-full rounded-full bg-primary transition-all duration-200" style={{ width: `${activeTaskSummary.percentage}%` }} />
+                  </div>
+                  <p className="text-xs text-text-muted">
+                    {activeTaskSummary.completed}/{activeTaskSummary.total}（{Math.round(activeTaskSummary.percentage)}%）
+                    {activeTaskSummary.failed > 0 ? ` · 失败 ${activeTaskSummary.failed}` : ''}
+                    {activeTaskSummary.estimatedTime ? ` · 预计剩余 ${activeTaskSummary.estimatedTime}` : ''}
+                  </p>
+                </div>
+                <div className="space-y-1 text-sm">
+                  <p className="text-text">状态：{activeTaskSummary.status}</p>
+                  <p className="break-words text-text-muted">消息：{activeTaskSummary.message}</p>
+                  {activeTaskSummary.currentVideo && (
+                    <p className="break-words text-text-muted">当前视频：{activeTaskSummary.currentVideo}</p>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" className={SECONDARY_BUTTON_CLASS} onClick={pauseTask} disabled={taskActionLoading !== ''}>
+                    <Pause className="h-4 w-4" aria-hidden="true" />
+                    {taskActionLoading === 'pause' ? '暂停中...' : '暂停'}
+                  </button>
+                  <button type="button" className={SECONDARY_BUTTON_CLASS} onClick={resumeTask} disabled={taskActionLoading !== ''}>
+                    <Play className="h-4 w-4" aria-hidden="true" />
+                    {taskActionLoading === 'resume' ? '恢复中...' : '恢复'}
+                  </button>
+                  <button type="button" className={DANGER_BUTTON_CLASS} onClick={cancelTask} disabled={taskActionLoading !== ''}>
+                    <X className="h-4 w-4" aria-hidden="true" />
+                    {taskActionLoading === 'cancel' ? '取消中...' : '取消'}
+                  </button>
+                </div>
+              </>
+            ) : sortedTasks.length > 0 ? (
+              <p role="status" className="text-sm text-text-muted">在下方任务记录中点「查看详情」查看进度。</p>
+            ) : (
+              <div role="status" className="space-y-3 text-sm text-text-muted">
+                <p>还没有任务。</p>
                 <button
                   type="button"
-                  className={`${ACTION_BUTTON_CLASS} bg-secondary/90 hover:bg-secondary`}
+                  className={PRIMARY_BUTTON_CLASS}
+                  onClick={() => setActiveTab(zhihuishuLoggedIn ? 'study' : 'account')}
+                >
+                  {zhihuishuLoggedIn ? '去学习配置' : '前往登录'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {sortedTasks.length > 0 && (
+            <div className={`${CARD_CLASS} space-y-3`}>
+              <h2 className="text-lg font-semibold text-text">任务记录</h2>
+              <ul className="space-y-3">
+                {sortedTasks.map((task) => (
+                  <li key={task.taskId} className={`${PANEL_CLASS} space-y-2`}>
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+                      <div className="min-w-0">
+                        <p className="break-words font-semibold text-text">{task.courseName || '智慧树任务'}</p>
+                        <p className="mt-1 break-all text-xs text-text-muted">任务 ID：{task.taskId}{task.taskId === activeTaskId ? ' · 当前查看' : ''}</p>
+                      </div>
+                      <p className="shrink-0 text-sm text-text">状态：{task.status || 'unknown'}</p>
+                    </div>
+                    <p className="break-words text-sm text-text-muted">
+                      进度：{task.completed || 0}/{task.total || 0}（{Math.round(Number(task.percentage || 0))}%）{task.currentTask ? ` · ${task.currentTask}` : ''}
+                    </p>
+                    {task.message && <p className="break-words text-sm text-text-muted">消息：{task.message}</p>}
+                    <p className="text-xs text-text-muted">
+                      {task.taskType === 'ai-course' ? 'AI 任务' : '课程任务'} · 更新于 {new Date(task.updatedAt || task.startedAt).toLocaleString()}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className={SECONDARY_BUTTON_CLASS}
+                        onClick={() => {
+                          void fetchTaskDetail(task.taskId, false)
+                        }}
+                        disabled={taskActionLoading !== '' || taskItemActionLoading === task.taskId}
+                      >
+                        查看详情
+                      </button>
+                      {!TERMINAL_ZHIHUISHU_TASK_STATUSES.has(task.status) && (
+                        <button
+                          type="button"
+                          className={`${GHOST_BUTTON_CLASS} hover:text-danger`}
+                          onClick={() => {
+                            void cancelTaskById(task.taskId)
+                          }}
+                          disabled={taskActionLoading !== '' || taskItemActionLoading === task.taskId}
+                        >
+                          {taskItemActionLoading === task.taskId ? '取消中...' : '取消该任务'}
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeTab === 'account' && (
+        <section id="zhs-panel-account" role="tabpanel" aria-labelledby="zhs-tab-account" tabIndex="0" className="max-w-2xl">
+          {zhihuishuLoggedIn ? (
+            <div className={`${CARD_CLASS} space-y-4`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold text-text">智慧树已登录</h2>
+                  {loggedInAccount && <p className="mt-1 break-all text-sm text-text-muted">账号：{loggedInAccount}</p>}
+                </div>
+                <button
+                  type="button"
+                  className={GHOST_BUTTON_CLASS}
                   onClick={() => {
                     void loadZhihuishuStatus(false)
                   }}
                 >
+                  <RefreshCcw className="h-4 w-4" aria-hidden="true" />
                   同步状态
                 </button>
               </div>
-              <div className={PANEL_CLASS}>
-                <p className="text-sm text-text/80">智慧树登录：{zhihuishuLoggedIn ? '已登录' : '未登录'}</p>
-                <p className="mt-2 text-sm text-text/80">二维码状态：{qrStatusText}</p>
-                <p className="mt-2 text-sm text-text/80">活跃任务 ID：{activeTaskId || '无'}</p>
-                <p className="mt-2 text-sm text-text/80">任务总数：{taskRecords.length}</p>
-                <p className="mt-2 text-sm text-text/80">进度轮询：{clampPollSeconds(settings.progressPollSeconds)} 秒</p>
+              <div className={`${PANEL_CLASS} grid grid-cols-1 gap-2 text-sm sm:grid-cols-2`}>
+                <p className="break-all text-text">当前任务：{activeTaskSummary.courseName || activeTaskId || '无'}</p>
+                <p className="text-text">任务记录：{taskRecords.length} 条</p>
               </div>
-
-              <div className={PANEL_CLASS}>
-                <p className="text-sm text-text/80">最近进度</p>
-                <p className="mt-2 text-sm text-text/80">状态：{activeTaskSummary.status}</p>
-                <p className="mt-1 text-sm text-text/80">消息：{activeTaskSummary.message}</p>
-                <p className="mt-1 text-sm text-text/80">活跃课程：{activeTaskSummary.courseName || '暂无'}</p>
-                <p className="mt-1 text-sm text-text/80">当前视频：{activeTaskSummary.currentVideo || '暂无'}</p>
-                <p className="mt-1 text-sm text-text/80">实时进度：{activeTaskSummary.completed}/{activeTaskSummary.total}（{Math.round(activeTaskSummary.percentage)}%）</p>
-                <div
-                  className="mt-3 h-2 overflow-hidden rounded-full bg-surface-hover/80"
-                  role="progressbar"
-                  aria-valuenow={Math.round(activeTaskSummary.percentage)}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label="最近任务进度"
-                >
-                  <div className="h-full rounded-full bg-primary transition-all duration-200" style={{ width: `${activeTaskSummary.percentage}%` }} />
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className={DANGER_BUTTON_CLASS} onClick={logoutZhihuishu}>退出智慧树会话</button>
+                <button type="button" className={GHOST_BUTTON_CLASS} onClick={resetZhihuishuSession}>清理智慧树会话状态</button>
+                {!isLocal && (
+                  <button type="button" className={GHOST_BUTTON_CLASS} onClick={() => { void logoutSystem() }}>系统退出登录</button>
+                )}
+              </div>
+              <p className="text-xs text-text-muted">退出会结束智慧树会话并取消相关任务；清理只重置本页状态。</p>
+            </div>
+          ) : (
+            <div className={`${CARD_CLASS} space-y-5`}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-text">登录智慧树</h2>
+                {/* Only the chosen method's form shows, so the two never compete on screen. */}
+                <div role="radiogroup" aria-label="登录方式" className="inline-flex rounded-xl bg-surface-hover p-1">
+                  {[
+                    { value: 'qr', label: '二维码登录' },
+                    { value: 'password', label: '账号密码登录' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={loginMethod === opt.value}
+                      onClick={() => {
+                        if (opt.value === 'password') abandonQrLoginIntent()
+                        setLoginMethod(opt.value)
+                      }}
+                      className={`min-h-[40px] rounded-lg px-3 text-sm font-medium transition-colors ${
+                        loginMethod === opt.value
+                          ? 'bg-surface text-text shadow-sm'
+                          : 'text-text-muted hover:text-text'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
-                <p className="mt-2 text-xs text-text/60">失败：{activeTaskSummary.failed}{activeTaskSummary.estimatedTime ? ` · 预计剩余：${activeTaskSummary.estimatedTime}` : ""}</p>
               </div>
-            </div>
 
-            <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-              <h2 className="text-lg font-bold text-text">退出与清理</h2>
-              <button type="button" className={`${ACTION_BUTTON_CLASS} w-full bg-primary/90 hover:bg-primary`} onClick={logoutZhihuishu}>退出智慧树会话</button>
-              <button type="button" className={`${ACTION_BUTTON_CLASS} w-full bg-secondary/90 hover:bg-secondary`} onClick={resetZhihuishuSession}>清理智慧树会话状态</button>
-              {!isLocal && (
-                <button type="button" className={`${ACTION_BUTTON_CLASS} w-full bg-danger hover:bg-danger/90`} onClick={() => { void logoutSystem() }}>系统退出登录</button>
+              {loginMethod === 'qr' ? (
+                <div className="flex flex-col items-center gap-5 sm:flex-row">
+                  <div className="flex h-48 w-48 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-dashed border-border bg-surface-hover/40">
+                    {qrLoading ? (
+                      <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden="true" />
+                    ) : qrCode ? (
+                      <img src={`data:image/png;base64,${qrCode}`} alt="智慧树二维码" className="h-full w-full bg-white object-contain" />
+                    ) : (
+                      <QrCode className="h-12 w-12 text-text-muted" aria-hidden="true" />
+                    )}
+                  </div>
+                  <div className="w-full min-w-0 space-y-4 text-center sm:text-left">
+                    {qrError ? (
+                      <p role="alert" className="break-words text-sm text-danger">{qrError}</p>
+                    ) : (
+                      <p className="break-words text-sm text-text-muted">
+                        {qrStatus === 'idle' ? '用智慧树 App 扫码登录。' : (qrMessage || qrStatusText)}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      className={PRIMARY_BUTTON_CLASS}
+                      onClick={() => {
+                        void startQrLogin()
+                      }}
+                      disabled={qrLoading}
+                    >
+                      {qrLoading ? '生成中...' : '生成二维码'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <form className="space-y-4" onSubmit={submitPasswordLogin}>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Input id="zhs-username" label="智慧树账号" type="text" autoComplete="username" value={passwordForm.username} onChange={(event) => setPasswordForm((prev) => ({ ...prev, username: event.target.value }))} required />
+                    <Input id="zhs-password" label="密码" type="password" autoComplete="current-password" value={passwordForm.password} onChange={(event) => setPasswordForm((prev) => ({ ...prev, password: event.target.value }))} required />
+                  </div>
+                  <button type="submit" className={`${PRIMARY_BUTTON_CLASS} w-full sm:w-auto`} disabled={passwordLoading}>
+                    {passwordLoading ? '登录中...' : '密码登录'}
+                  </button>
+                </form>
               )}
-              <div className="rounded-xl border border-border/30 bg-surface/70 p-4 text-sm text-text/70">
-                <p>清理会话仅重置当前页面状态，不会删除已保存设置。</p>
-                <p className="mt-1">退出智慧树会结束该平台会话并取消相关任务。</p>
-                {!isLocal && <p className="mt-1">系统退出会清除登录状态并返回登录页。</p>}
-              </div>
             </div>
-          </section>
-        )}
-      </div>
+          )}
+        </section>
+      )}
     </div>
   )
 }
-

@@ -12,9 +12,10 @@ vi.mock('../utils/api', () => ({
 
 const notify = vi.hoisted(() => vi.fn())
 
-vi.mock('../components', () => {
+vi.mock('../components', async (importOriginal) => {
   const toast = { notify }
   return {
+    ...(await importOriginal()),
     Input: ({ label, ...props }) => (
       <label>
         {label}
@@ -100,19 +101,21 @@ const startBody = () => {
 }
 
 const openCourse = async () => {
-  fireEvent.click(await screen.findByText('课程', { selector: 'button' }))
+  fireEvent.click(await screen.findByRole('tab', { name: '课程' }))
   fireEvent.click(await screen.findByRole('button', { name: '刷新课程' }))
   const selector = await screen.findByRole('combobox', { name: '分组课程' })
   await waitFor(() => expect(selector).toHaveValue(course.courseId))
 }
 
 const loadChapters = async () => {
+  fireEvent.click(screen.getByRole('tab', { name: '学习配置' }))
   fireEvent.click(screen.getByRole('button', { name: '加载章节' }))
   await waitFor(() => expect(screen.getByRole('combobox', { name: '学到哪一章' })).toBeEnabled())
   return screen.getByRole('combobox', { name: '学到哪一章' })
 }
 
 const clickStart = async () => {
+  fireEvent.click(screen.getByRole('tab', { name: '学习配置' }))
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: /启动课程任务/ }))
     await Promise.resolve()
@@ -136,6 +139,7 @@ describe('Zhihuishu 学到哪一章', () => {
     renderPage()
     await openCourse()
 
+    fireEvent.click(screen.getByRole('tab', { name: '学习配置' }))
     expect(screen.getByRole('combobox', { name: '学到哪一章' })).toBeDisabled()
     expect(screen.getByText('默认学完整门课。想只学一部分，先加载章节再选。')).toBeInTheDocument()
   })
@@ -191,8 +195,11 @@ describe('Zhihuishu 学到哪一章', () => {
     fireEvent.change(select, { target: { value: 'ch3' } })
     expect(select).toHaveValue('ch3')
 
+    fireEvent.click(screen.getByRole('tab', { name: '课程' }))
     fireEvent.click(screen.getByRole('button', { name: '查看视频列表/结构' }))
-    await waitFor(() => expect(select).toHaveValue(''))
+    await waitFor(() => expect(notify).toHaveBeenCalledWith('info', expect.stringContaining('已改回「全部章节」')))
+    fireEvent.click(screen.getByRole('tab', { name: '学习配置' }))
+    expect(screen.getByRole('combobox', { name: '学到哪一章' })).toHaveValue('')
     expect(notify).toHaveBeenCalledWith('info', expect.stringContaining('已改回「全部章节」'))
 
     await clickStart()

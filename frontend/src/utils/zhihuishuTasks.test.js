@@ -1,6 +1,25 @@
 import { describe, expect, test } from 'vitest'
 
-import { applyCourseProgressToTaskRecords, applyTaskActionToRecords, groupVideosByChapter } from './zhihuishuTasks'
+import { applyCourseProgressToTaskRecords, applyTaskActionToRecords, getZhihuishuCourseId, groupVideosByChapter } from './zhihuishuTasks'
+
+describe('Wisdom Tree enrollment identity', () => {
+  test('prefers enrollment selectors over shared catalog ids', () => {
+    expect(getZhihuishuCourseId({ recruitAndCourseId: 'term-a', secret: 'fallback', courseId: '1001' })).toBe('term-a')
+    expect(getZhihuishuCourseId({ secret: 'term-b', courseId: '1001' })).toBe('term-b')
+    expect(getZhihuishuCourseId({ courseId: '1001' })).toBe('1001')
+    expect(getZhihuishuCourseId({ id: 12 })).toBe('12')
+  })
+
+  test('progress for another term cannot overwrite a task for the same catalog course', () => {
+    const task = { taskId: 'active', courseId: '1001', secret: 'term-a', status: 'running' }
+    expect(applyCourseProgressToTaskRecords([task], {
+      courseId: 'term-b', activeTaskId: 'active', progress: { status: 'completed' },
+    })[0]).toBe(task)
+    expect(applyCourseProgressToTaskRecords([task], {
+      courseId: 'term-a', activeTaskId: 'active', progress: { status: 'completed' },
+    })[0].status).toBe('completed')
+  })
+})
 
 describe('applyCourseProgressToTaskRecords', () => {
   test('updates only the active task when multiple tasks share one course', () => {

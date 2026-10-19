@@ -54,6 +54,8 @@ COURSE_LIST_REFERER = (
 ACTIVE_LIST_URL = "https://mobilelearn.chaoxing.com/v2/apis/active/student/activelist"
 PPT_ACTIVE_INFO_URL = "https://mobilelearn.chaoxing.com/v2/apis/active/getPPTActiveInfo"
 PRE_SIGN_URL = "https://mobilelearn.chaoxing.com/newsign/preSign"
+SIGN_ANALYSIS_URL = "https://mobilelearn.chaoxing.com/pptSign/analysis"
+SIGN_ANALYSIS2_URL = "https://mobilelearn.chaoxing.com/pptSign/analysis2"
 PPT_SIGN_URL = "https://mobilelearn.chaoxing.com/pptSign/stuSignajax"
 PAN_TOKEN_URL = "https://pan-yz.chaoxing.com/api/token/uservalid"
 PAN_UPLOAD_URL = "https://pan-yz.chaoxing.com/upload"
@@ -78,8 +80,17 @@ _FALLBACK_ID_PAIR_GAP = 240
 _FALLBACK_JSON_IDS_GAP = 120
 _FALLBACK_JSON_NAME_GAP_IDS = 180
 _FALLBACK_JSON_NAME_GAP_NAME = 220
-_FALLBACK_HIDDEN_INPUT_BEFORE = 360
-_FALLBACK_HIDDEN_INPUT_AFTER = 1400
+
+
+class SigninSessionExpiredError(requests.RequestException):
+    """The Chaoxing session expired; the application's own login is unaffected."""
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def _utc_now_iso() -> str:
@@ -262,6 +273,50 @@ class ChaoxingSigninClient:
         except Exception:
             return {}
 
+    @staticmethod
+    def _validate_response(resp: requests.Response, operation: str) -> None:
+        url = resp.url if isinstance(resp.url, str) else ""
+        content = resp.text if isinstance(resp.text, str) else ""
+        redirected_urls = [url, str(resp.headers.get("Location") or "")]
+        login_redirect = any(
+            "passport2.chaoxing.com" in value or "passport2-api.chaoxing.com" in value for value in redirected_urls
+        )
+        login_form = re.search(
+            r'<(?:form|input)\b[^>]*(?:fanyalogin|name=["\'](?:uname|password)["\']|id=["\'](?:phone|pwd)["\'])',
+            content,
+            flags=re.IGNORECASE,
+        )
+        login_script = re.search(
+            r'\blocation(?:\s*\.\s*(?:href|replace|assign))?\s*(?:=|\()\s*["\']'
+            r"(?:https?:)?//passport2(?:-api)?\.chaoxing\.com/",
+            html.unescape(content).replace(r"\/", "/"),
+            flags=re.IGNORECASE,
+        )
+        if resp.status_code == 401 or login_redirect or login_form or login_script:
+            raise SigninSessionExpiredError("学习通登录已失效，请重新登录后检测签到")
+        resp.raise_for_status()
+        if isinstance(resp.status_code, int) and 300 <= resp.status_code < 400:
+            raise requests.RequestException(f"{operation} returned an unexpected redirect")
+
+    @staticmethod
+    def _validate_json_payload(data: Any, operation: str) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            raise requests.RequestException(f"{operation} returned an invalid JSON object")
+        if any(data.get(key) in (False, "false", "0") for key in ("result", "status", "success")):
+            message = str(data.get("errorMsg") or data.get("msg") or data.get("message") or "请求失败")[:240]
+            if re.search(r"登录|登陆|未认证|未授权|login|not.?logged|unauthenticated", message, re.IGNORECASE):
+                raise SigninSessionExpiredError("学习通登录已失效，请重新登录后检测签到")
+            raise requests.RequestException(f"{operation} failed: {message}")
+        return data
+
+    def _read_json_response(self, resp: requests.Response, operation: str) -> dict[str, Any]:
+        self._validate_response(resp, operation)
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise requests.RequestException(f"{operation} returned a non-JSON response") from exc
+        return self._validate_json_payload(data, operation)
+
     def login(self, username: str, password: str) -> dict[str, Any]:
         self.username = username
 
@@ -351,22 +406,21 @@ class ChaoxingSigninClient:
                 continue
             seen_folders.add(folder_key)
 
-            try:
-                resp = self.session.post(
-                    COURSE_LIST_URL,
-                    headers={"Referer": COURSE_LIST_REFERER},
-                    data={
-                        "courseType": 1,
-                        "courseFolderId": folder_key,
-                        "query": "",
-                        "superstarClass": 0,
-                    },
-                    timeout=12,
-                )
-            except requests.RequestException:
-                continue
+            resp = self.session.post(
+                COURSE_LIST_URL,
+                headers={"Referer": COURSE_LIST_REFERER},
+                data={
+                    "courseType": 1,
+                    "courseFolderId": folder_key,
+                    "courseFolderSize": 0,
+                    "query": "",
+                    "superstarClass": 0,
+                },
+                timeout=12,
+            )
+            courses = self._validate_course_response(resp)
 
-            for course in self._parse_courses(resp.text):
+            for course in courses:
                 course_id = str(course.get("courseId") or "")
                 class_id = str(course.get("classId") or "")
                 key = (course_id, class_id)
@@ -377,11 +431,31 @@ class ChaoxingSigninClient:
 
         return merged_courses
 
-    def _parse_course_folders(self) -> list[str]:
-        try:
-            resp = self.session.get(INTERACTION_URL, timeout=12)
-        except requests.RequestException:
+    def _validate_course_response(self, resp: requests.Response, *, interaction: bool = False) -> list[dict[str, Any]]:
+        self._validate_response(resp, "课程列表")
+        content = (resp.text or "").lstrip()
+        if content.startswith(("{", "[")):
+            self._read_json_response(resp, "课程列表")
+            raise requests.RequestException("课程列表返回了无法解析的响应，请稍后重试")
+        if not content or "<" not in content:
+            raise requests.RequestException("课程列表返回了空白或无法解析的页面，请稍后重试")
+        soup = BeautifulSoup(content, "lxml")
+        visible_text = soup.get_text(" ", strip=True)
+        if re.search(r"(?:访问|请求|操作).{0,12}频繁|稍后重试|访问受限|系统繁忙|验证码|安全验证", visible_text):
+            raise requests.RequestException("课程列表访问受限或请求频繁，请稍后重试")
+        courses = self._parse_courses(content)
+        if courses or re.search(r"暂无课程|没有课程|暂无相关课程|未找到(?:相关)?课程", visible_text):
+            return courses
+        if interaction and (
+            soup.select_one(".file-list, #file-list, [fileid], [data-fileid]")
+            or re.search(r"courseFolderId|courselistdata|全部课程", content, re.IGNORECASE)
+        ):
             return []
+        raise requests.RequestException("课程列表返回了未知页面，无法确认是否有课程，请稍后重试")
+
+    def _parse_course_folders(self) -> list[str]:
+        resp = self.session.get(INTERACTION_URL, timeout=12)
+        self._validate_course_response(resp, interaction=True)
 
         content = resp.text or ""
         seen: set[str] = set()
@@ -433,6 +507,7 @@ class ChaoxingSigninClient:
             cursor: int,
             preferred_name: str = "",
             preferred_cpi: str = "",
+            scope: str | None = None,
         ) -> None:
             course_id = (course_id or "").strip()
             class_id = (class_id or "").strip()
@@ -452,7 +527,7 @@ class ChaoxingSigninClient:
 
             start = max(0, cursor - _PARSE_SNIPPET_BEFORE)
             end = min(len(content), cursor + _PARSE_SNIPPET_AFTER)
-            snippet = content[start:end]
+            snippet = html.unescape(scope if scope is not None else content[start:end])
 
             cpi_match = re.search(r"(?:[?&]cpi=|\"cpi\"\s*:\s*\"?)(\d+)", snippet)
             cpi = preferred_cpi or (cpi_match.group(1) if cpi_match else "")
@@ -551,7 +626,12 @@ class ChaoxingSigninClient:
                 if course_id and class_id:
                     cursor = content.find(f"{course_id}_{class_id}")
                     append_course(
-                        course_id, class_id, cursor if cursor >= 0 else 0, preferred_name=name, preferred_cpi=cpi
+                        course_id,
+                        class_id,
+                        cursor if cursor >= 0 else 0,
+                        preferred_name=name,
+                        preferred_cpi=cpi,
+                        scope=str(card),
                     )
 
         # Primary parser
@@ -597,35 +677,41 @@ class ChaoxingSigninClient:
                         append_course(match.group(1), match.group(2), match.start(), preferred_name=match.group(3))
 
         def _run_hidden_input_fallback() -> None:
-            """Fallback: paired hidden <input> tags on rendered course cards."""
-            for match in re.finditer(
-                r'<input[^>]*class=["\'][^"\']*courseId[^"\']*["\'][^>]*value=["\'](\d+)["\']',
-                content,
-                flags=re.IGNORECASE,
-            ):
-                near_start = max(0, match.start() - _FALLBACK_HIDDEN_INPUT_BEFORE)
-                near_end = min(len(content), match.end() + _FALLBACK_HIDDEN_INPUT_AFTER)
-                near = content[near_start:near_end]
-                class_match = re.search(
-                    r'<input[^>]*class=["\'][^"\']*(?:clazzId|classId)[^"\']*["\'][^>]*value=["\'](\d+)["\']',
-                    near,
-                    flags=re.IGNORECASE,
-                )
-                if not class_match:
-                    continue
-                cpi_match = re.search(r"(?:[?&]cpi=|\"cpi\"\s*:\s*\"?)(\d+)", near, flags=re.IGNORECASE)
-                cpi = cpi_match.group(1) if cpi_match else ""
-                append_course(
-                    match.group(1),
-                    class_match.group(1),
-                    match.start(),
-                    preferred_name=_extract_name(near, match.group(1)),
-                    preferred_cpi=cpi,
-                )
+            """Keep hidden ids inside their own card instead of pairing adjacent cards."""
+            if soup is None:
+                return
+            course_selector = "input.courseId, input[class*='courseId'], input[name='courseId']"
+            class_selector = "input.clazzId, input.classId, input[name='clazzId'], input[name='classId']"
+            for course_input in soup.select(course_selector):
+                for container in course_input.parents:
+                    # A list/container with several courses cannot supply a reliable pair.
+                    if len(container.select(course_selector)) != 1:
+                        break
+                    class_inputs = container.select(class_selector)
+                    if len(class_inputs) != 1:
+                        continue
+                    course_id = str(course_input.get("value") or "").strip()
+                    class_id = str(class_inputs[0].get("value") or "").strip()
+                    append_course(course_id, class_id, 0, scope=str(container))
+                    break
 
+        _run_hidden_input_fallback()
+        if soup is not None:
+            for link in soup.select("a[href]"):
+                query = parse_qs(urlparse(html.unescape(str(link.get("href") or ""))).query)
+                query = {key.lower(): values for key, values in query.items()}
+                course_id = (query.get("courseid") or [""])[0]
+                class_id = (query.get("clazzid") or query.get("classid") or [""])[0]
+                if course_id and class_id:
+                    append_course(
+                        course_id,
+                        class_id,
+                        0,
+                        preferred_cpi=(query.get("cpi") or [""])[0],
+                        scope=str(link),
+                    )
         _run_id_pair_fallback()
         _run_json_named_fallback()
-        _run_hidden_input_fallback()
 
         return courses
 
@@ -644,9 +730,8 @@ class ChaoxingSigninClient:
         active_filter_set = _as_filter_set(active_id)
 
         tasks: list[dict[str, Any]] = []
-        now_ms = int(time.time() * 1000)
         attempted = 0
-        failed = 0
+        failures: list[requests.RequestException] = []
 
         for course in courses:
             course_id = str(course.get("courseId", ""))
@@ -659,43 +744,39 @@ class ChaoxingSigninClient:
             attempted += 1
             try:
                 payload = self._get_course_activity_list(course_id, class_id)
+            except SigninSessionExpiredError:
+                raise
             except requests.RequestException as exc:
-                # One bad course must not abort the batch — skip it and keep going.
-                failed += 1
+                # Keep useful results from healthy courses, but never report a
+                # successful empty scan when any selected course could not be checked.
+                failures.append(exc)
                 logger.warning("activelist failed for course=%s class=%s: %s", course_id, class_id, exc)
                 continue
             for activity in payload:
-                # Chaoxing routinely sends keys present-but-null; `int(None)` would
-                # raise TypeError and abort the whole batch, so coerce with `or 0`.
-                if int(activity.get("status") or 0) != 1:
+                if _as_int(activity.get("status")) != 1:
                     continue
-                activity_id = str(activity.get("id") or "")
+                # otherId identifies sign-in variants (upstream activity.ts).
+                # Missing/unknown variants must not be submitted as a normal sign-in.
+                if _as_int(activity.get("otherId"), -1) not in (0, 2, 3, 4, 5):
+                    continue
+                activity_id = str(activity.get("id") or activity.get("activeId") or "")
                 if not activity_id:
                     continue
                 if active_filter_set and activity_id not in active_filter_set:
                     continue
-                # The >2h age heuristic only bounds auto-discovered activities.
-                # When the caller explicitly named this active_id, honor it
-                # regardless of how long ago the activity started.
-                explicitly_requested = activity_id in active_filter_set
-                if not explicitly_requested:
-                    start_time = int(activity.get("startTime") or now_ms)
-                    if now_ms - start_time > 2 * 60 * 60 * 1000:
-                        continue
-
+                # Server status is authoritative: a still-active sign-in may
+                # remain open for longer than the upstream's two-hour heuristic.
                 sign_type = self._resolve_sign_type(activity, activity_id)
                 if expected_type != "all" and sign_type != expected_type:
                     continue
 
                 tasks.append(self._activity_to_task(course, activity, sign_type=sign_type))
 
-        # If EVERY course we tried failed to fetch, surface the upstream failure
-        # instead of an empty (== "no active sign-in") result that a caller would
-        # treat as a successful no-op. (Codex P2)
-        if attempted and failed == attempted and not tasks:
+        if failures and not tasks:
             raise requests.RequestException(
-                f"All {attempted} activity-list request(s) failed; " "cannot determine active sign-in tasks"
-            )
+                f"{len(failures)}/{attempted} activity-list request(s) failed; "
+                f"cannot determine active sign-in tasks: {failures[0]}"
+            ) from failures[0]
         return tasks
 
     def get_class_subjects(self) -> list[dict[str, Any]]:
@@ -743,20 +824,11 @@ class ChaoxingSigninClient:
                 continue
             if normalized_raw_course_id and current_course_id != normalized_raw_course_id:
                 continue
-            try:
-                course_activity_list = self._get_course_activity_list(current_course_id, current_class_id)
-            except requests.RequestException as exc:
-                logger.warning(
-                    "activelist failed for course=%s class=%s: %s",
-                    current_course_id,
-                    current_class_id,
-                    exc,
-                )
-                continue
+            course_activity_list = self._get_course_activity_list(current_course_id, current_class_id)
             for activity in course_activity_list:
                 detail = {}
-                active_id = str(activity.get("id") or "").strip()
-                if include_details and active_id:
+                active_id = str(activity.get("id") or activity.get("activeId") or "").strip()
+                if include_details and active_id and _as_int(activity.get("otherId"), -1) in (0, 2, 3, 4, 5):
                     detail = self.get_ppt_active_info(active_id)
                 sign_type = self._resolve_sign_type(activity, active_id, detail)
                 item = self._activity_to_task(course, activity, sign_type=sign_type, detail=detail)
@@ -781,22 +853,14 @@ class ChaoxingSigninClient:
             },
             timeout=12,
         )
-        resp.raise_for_status()  # requests.HTTPError (a RequestException) on 4xx/5xx
-        try:
-            data = resp.json()
-        except ValueError as exc:
-            # Not JSON → an error/redirect page, NOT an empty activeList.
-            raise requests.RequestException("activelist returned a non-JSON response") from exc
-        if not isinstance(data, dict):
-            return []
-        # `data.get("data", {})` does NOT guard an explicit ``"data": null`` (common
-        # when a per-course session/cookie is invalid) — `None.get(...)` would raise
-        # AttributeError and crash discovery; require the expected object envelope.
+        data = self._read_json_response(resp, "activelist")
         envelope = data.get("data")
-        if not isinstance(envelope, dict):
-            return []
-        active_list = envelope.get("activeList", [])
-        return active_list if isinstance(active_list, list) else []
+        if not isinstance(envelope, dict) or not isinstance(envelope.get("activeList"), list):
+            raise requests.RequestException("activelist returned no activity list; 请稍后重试，或重新登录学习通")
+        active_list = envelope["activeList"]
+        if any(not isinstance(activity, dict) for activity in active_list):
+            raise requests.RequestException("activelist returned an invalid activity")
+        return active_list
 
     def _resolve_sign_type(
         self,
@@ -804,9 +868,9 @@ class ChaoxingSigninClient:
         active_id: str,
         info: dict[str, Any] | None = None,
     ) -> str:
-        # `or 0` (not the 2-arg .get default) so a present-but-null field — which
-        # Chaoxing sends routinely — does not raise TypeError on int(None).
-        other_id = int(activity.get("otherId") or 0)
+        other_id = _as_int(activity.get("otherId"), -1)
+        if other_id == -1 and info is not None:
+            other_id = _as_int(info.get("otherId"), -1)
         if other_id == 3:
             return "gesture"
         if other_id == 5:
@@ -816,13 +880,13 @@ class ChaoxingSigninClient:
         if other_id == 2:
             return "qrcode"
         if other_id == 0:
-            if int(activity.get("ifphoto") or 0) == 1:
+            if _as_int(activity.get("ifphoto")) == 1:
                 return "photo"
             info = info if info is not None else self.get_ppt_active_info(active_id)
-            if int((info or {}).get("ifphoto") or 0) == 1:
+            if _as_int((info or {}).get("ifphoto")) == 1:
                 return "photo"
             return "normal"
-        return "normal"
+        return "unknown"
 
     def _activity_to_task(
         self,
@@ -834,9 +898,12 @@ class ChaoxingSigninClient:
         course_id = str(course.get("courseId") or "").strip()
         class_id = str(course.get("classId") or course.get("clazzId") or "").strip()
         active_id = str(activity.get("id") or activity.get("activeId") or "").strip()
-        deadline = activity.get("endTime") or activity.get("startTime")
-        deadline_iso = datetime.fromtimestamp(int(deadline) / 1000, tz=UTC).isoformat() if deadline else None
-        status_code = int(activity.get("status", 0) or 0)
+        deadline = _as_int(activity.get("endTime") or activity.get("startTime"))
+        try:
+            deadline_iso = datetime.fromtimestamp(deadline / 1000, tz=UTC).isoformat() if deadline else None
+        except (ValueError, OverflowError, OSError):
+            deadline_iso = None
+        status_code = _as_int(activity.get("status"))
         course_name = str(course.get("courseName") or course.get("name") or course_id).strip()
         task = {
             "taskId": f"{course_id}:{class_id}:{active_id}",
@@ -853,7 +920,7 @@ class ChaoxingSigninClient:
             "className": str(course.get("className") or course.get("clazzName") or course_name).strip(),
             "name": activity.get("nameOne") or activity.get("name") or "",
             "type": sign_type or self._resolve_sign_type(activity, active_id, detail),
-            "otherId": int(activity.get("otherId") or 0),
+            "otherId": _as_int(activity.get("otherId"), -1),
             "status": "active" if status_code == 1 else "ended" if status_code in (2, 3) else "unknown",
             "statusCode": status_code,
             "deadline": deadline_iso,
@@ -872,17 +939,16 @@ class ChaoxingSigninClient:
         return task
 
     def get_ppt_active_info(self, active_id: str) -> dict[str, Any]:
-        try:
-            resp = self.session.get(
-                PPT_ACTIVE_INFO_URL,
-                params={"activeId": active_id},
-                timeout=10,
-            )
-        except requests.RequestException:
-            return {}
-        data = self._safe_json(resp)
+        resp = self.session.get(
+            PPT_ACTIVE_INFO_URL,
+            params={"activeId": active_id},
+            timeout=10,
+        )
+        data = self._read_json_response(resp, "签到详情")
         detail = data.get("data")
-        return detail if isinstance(detail, dict) else {}
+        if not isinstance(detail, dict):
+            raise requests.RequestException("签到详情返回为空，无法确定签到类型，请稍后重试")
+        return detail
 
     def _pre_sign(self, task: dict[str, Any]) -> None:
         params = {
@@ -897,7 +963,25 @@ class ChaoxingSigninClient:
             "uid": self.uid,
             "ut": "s",
         }
-        self.session.get(PRE_SIGN_URL, params=params, timeout=10)
+        resp = self.session.get(PRE_SIGN_URL, params=params, timeout=10)
+        self._validate_response(resp, "签到预处理")
+        analysis = self.session.get(
+            SIGN_ANALYSIS_URL,
+            params={"vs": 1, "DB_STRATEGY": "RANDOM", "aid": task["activeId"]},
+            timeout=10,
+        )
+        self._validate_response(analysis, "签到校验")
+        code_match = re.search(r"code\s*=\s*['\"]\s*\+\s*['\"]([^'\"]+)['\"]", analysis.text or "")
+        if not code_match:
+            raise requests.RequestException("签到校验未返回有效凭证，请稍后重试")
+        analysis2 = self.session.get(
+            SIGN_ANALYSIS2_URL,
+            params={"DB_STRATEGY": "RANDOM", "code": code_match.group(1)},
+            timeout=10,
+        )
+        self._validate_response(analysis2, "签到校验")
+        # Match the upstream preSign/analysis/analysis2 sequence and settling delay.
+        time.sleep(0.5)
 
     def sign_task(
         self,
@@ -907,20 +991,25 @@ class ChaoxingSigninClient:
     ) -> dict[str, Any]:
         options = options or {}
         sign_type = task["type"] if preferred_type == "all" else preferred_type
-        self._pre_sign(task)
+        try:
+            if sign_type not in ("normal", "location", "qrcode", "photo", "gesture", "code"):
+                raise requests.RequestException("无法确定活动的签到类型，请重新检测")
+            self._pre_sign(task)
 
-        if sign_type == "location":
-            raw_result = self._sign_location(task, options)
-        elif sign_type == "qrcode":
-            raw_result = self._sign_qrcode(task, options)
-        elif sign_type == "photo":
-            raw_result = self._sign_photo(task, options)
-        elif sign_type == "gesture":
-            raw_result = self._sign_gesture(task, options)
-        elif sign_type == "code":
-            raw_result = self._sign_code(task, options)
-        else:
-            raw_result = self._sign_general(task)
+            if sign_type == "location":
+                raw_result = self._sign_location(task, options)
+            elif sign_type == "qrcode":
+                raw_result = self._sign_qrcode(task, options)
+            elif sign_type == "photo":
+                raw_result = self._sign_photo(task, options)
+            elif sign_type == "gesture":
+                raw_result = self._sign_gesture(task, options)
+            elif sign_type == "code":
+                raw_result = self._sign_code(task, options)
+            else:
+                raw_result = self._sign_general(task)
+        except requests.RequestException as exc:
+            raw_result = str(exc)
 
         success = raw_result.strip().lower() == "success"
         return {
@@ -1237,13 +1326,13 @@ class ChaoxingSigninManager:
     def get_courses(self, user_id: str) -> list[dict[str, Any]]:
         client = self._get_client(user_id)
         if not client:
-            return []
+            raise SigninSessionExpiredError("请先登录学习通后检测签到")
         return client.get_courses()
 
     def get_classes(self, user_id: str) -> list[dict[str, Any]]:
         client = self._get_client(user_id)
         if not client:
-            return []
+            raise SigninSessionExpiredError("请先登录学习通后检测签到")
         return client.get_class_subjects()
 
     def get_class_activities(
@@ -1255,7 +1344,7 @@ class ChaoxingSigninManager:
     ) -> list[dict[str, Any]]:
         client = self._get_client(user_id)
         if not client:
-            return []
+            raise SigninSessionExpiredError("请先登录学习通后检测签到")
         return client.get_class_activities(
             class_id=class_id,
             course_id=course_id,
@@ -1287,15 +1376,81 @@ class ChaoxingSigninManager:
         client = self._get_client(user_id)
         live_tasks: list[dict[str, Any]] = []
         if client:
-            try:
-                live_tasks = client.get_active_tasks(expected_type=sign_type)
-            except requests.RequestException as exc:
-                # Dashboard feed: a transient upstream failure should fall back to
-                # the persisted background-task feed rather than 500 the poll.
-                logger.warning("live active-task discovery failed: %s", exc)
+            live_tasks = client.get_active_tasks(expected_type=sign_type)
         if live_tasks:
             return [self._decorate_live_task(task) for task in live_tasks]
-        return self._build_background_task_feed(user_id)
+        background_tasks = self._build_background_task_feed(user_id)
+        if not client and not background_tasks:
+            raise SigninSessionExpiredError("请先登录学习通后检测签到")
+        return background_tasks
+
+    def get_chat_tasks(self, user_id: str, chat_id: str | None = None) -> dict[str, Any]:
+        from .chat_signin import ChaoxingChatSigninService
+
+        client = self._get_client(user_id)
+        if client is None:
+            raise SigninSessionExpiredError("请先登录学习通后检测群聊签到")
+        return ChaoxingChatSigninService(client).get_tasks(chat_id=chat_id)
+
+    def sign_chat_once(
+        self,
+        user_id: str,
+        username: str,
+        password: str,
+        chat_id: str | None = None,
+        active_id: str | None = None,
+        activity_url: str | None = None,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        address: str | None = None,
+    ) -> dict[str, Any]:
+        from .chat_signin import ChaoxingChatSigninService, parse_chat_target
+
+        normalized_chat, normalized_active = parse_chat_target(chat_id, active_id, activity_url)
+        login_result = self.login(user_id, username, password)
+        if not login_result.get("status"):
+            return login_result
+        client = self._get_client(user_id)
+        if client is None:
+            raise SigninSessionExpiredError("请先登录学习通后进行群聊签到")
+        self._ensure_history_loaded_for_user(user_id)
+        try:
+            result = ChaoxingChatSigninService(client).sign_once(
+                normalized_chat,
+                normalized_active,
+                location={"latitude": latitude, "longitude": longitude, "address": address},
+            )
+        except requests.RequestException as exc:
+            self._append_history(
+                user_id,
+                {
+                    "taskId": f"chat:{normalized_chat}:{normalized_active}",
+                    "status": "failed",
+                    "message": str(exc),
+                    "subjectType": "chat",
+                    "subjectId": normalized_chat,
+                    "chatId": normalized_chat,
+                    "activeId": normalized_active,
+                    "type": "normal",
+                    "timestamp": _utc_now_iso(),
+                },
+            )
+            raise
+        self._append_history(
+            user_id,
+            {
+                "taskId": f"chat:{normalized_chat}:{normalized_active}",
+                "status": "success" if result.get("status") else "failed",
+                "message": result.get("message", ""),
+                "subjectType": "chat",
+                "subjectId": normalized_chat,
+                "chatId": normalized_chat,
+                "activeId": normalized_active,
+                "type": (result.get("data") or {}).get("task", {}).get("type", "normal"),
+                "timestamp": _utc_now_iso(),
+            },
+        )
+        return result
 
     def _build_background_task_feed(self, user_id: str) -> list[dict[str, Any]]:
         tasks = self.list_tasks(user_id)

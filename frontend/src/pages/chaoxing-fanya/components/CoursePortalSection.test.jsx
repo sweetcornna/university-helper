@@ -47,7 +47,7 @@ describe('CoursePortalSection', () => {
   test('fetches the course tab through the backend proxy', async () => {
     await act(async () => {
       root.render(
-        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} setError={() => {}} setNotice={() => {}} />
+        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} />
       )
     })
     await flush()
@@ -62,7 +62,7 @@ describe('CoursePortalSection', () => {
   test('never issues a direct browser request to chaoxing.com', async () => {
     await act(async () => {
       root.render(
-        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} setError={() => {}} setNotice={() => {}} />
+        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} />
       )
     })
     await flush()
@@ -74,7 +74,7 @@ describe('CoursePortalSection', () => {
   test('renders proxied items returned by the backend', async () => {
     await act(async () => {
       root.render(
-        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} setError={() => {}} setNotice={() => {}} />
+        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} />
       )
     })
     await flush()
@@ -93,7 +93,7 @@ describe('CoursePortalSection', () => {
     })
     await act(async () => {
       root.render(
-        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} setError={() => {}} setNotice={() => {}} />
+        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} />
       )
     })
     await flush()
@@ -114,7 +114,7 @@ describe('CoursePortalSection', () => {
     })
     await act(async () => {
       root.render(
-        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} setError={() => {}} setNotice={() => {}} />
+        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} />
       )
     })
     await flush()
@@ -132,13 +132,13 @@ describe('CoursePortalSection', () => {
       status: 'success',
       data: {
         items: [],
-        message: 'This Chaoxing tab is opened through the course shell URL.',
+        message: '这个栏目需要在学习通中打开',
         tab: { shellUrl: 'https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse?courseid=200' },
       },
     })
     await act(async () => {
       root.render(
-        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} setError={() => {}} setNotice={() => {}} />
+        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} />
       )
     })
     await flush()
@@ -150,6 +150,23 @@ describe('CoursePortalSection', () => {
     expect(link.getAttribute('href')).toBe(
       'https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse?courseid=200'
     )
+  })
+
+  test('a failed tab keeps the error visible and still offers the official page', async () => {
+    api.mockImplementation(async (endpoint) => {
+      if (String(endpoint).endsWith('/portal-urls')) {
+        return { data: { tabs: [{ key: 'activities', frameUrl: 'https://mobilelearn.chaoxing.com/page/active/stuActiveList?courseid=200' }] } }
+      }
+      throw new Error('学习通课程内容加载失败：无权限的操作！')
+    })
+    await act(async () => {
+      root.render(<CoursePortalSection courses={[COURSE]} selectedCourses={[]} />)
+    })
+    await flush()
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('无权限的操作')
+    const link = Array.from(container.querySelectorAll('a')).find((a) => /在学习通打开/.test(a.textContent || ''))
+    expect(link?.getAttribute('href')).toBe('https://mobilelearn.chaoxing.com/page/active/stuActiveList?courseid=200')
   })
 
   // F66: a stale slow response for a previous tab must not overwrite the newer one.
@@ -169,7 +186,7 @@ describe('CoursePortalSection', () => {
 
     await act(async () => {
       root.render(
-        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} setError={() => {}} setNotice={() => {}} />
+        <CoursePortalSection courses={[COURSE]} selectedCourses={[]} />
       )
     })
     await flush()

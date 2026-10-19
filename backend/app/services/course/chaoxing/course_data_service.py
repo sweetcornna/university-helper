@@ -99,10 +99,15 @@ class ChaoxingCourseDataService:
                 logger.info("该章节未开放")
                 return [], _job_info
 
+            # Tokens such as ktoken/cardid belong to the individual card.
+            # The chapter summary below is overwritten by later cards, so keep
+            # each job's original values for its submission request.
+            for job in _job_list:
+                job["job_info"] = dict(_job_info)
             job_list += _job_list
             job_info.update(_job_info)
 
-        if not job_list:
+        if not job_list and job_info:
             self._study_emptypage(course, point)
         logger.info("章节任务点读取成功...")
 

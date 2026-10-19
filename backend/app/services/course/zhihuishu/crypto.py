@@ -75,13 +75,14 @@ class Cipher:
 
     @staticmethod
     def pad(data: str) -> bytes:
-        padding_len = 16 - len(data) % 16
-        return (data + chr(padding_len) * padding_len).encode()
+        encoded = data.encode("utf-8")
+        padding_len = AES.block_size - len(encoded) % AES.block_size
+        return encoded + bytes([padding_len]) * padding_len
 
     @staticmethod
     def unpad(data: bytes) -> str:
-        data = data.decode()
-        return data[: -ord(data[-1])]
+        padding_len = data[-1]
+        return data[:-padding_len].decode("utf-8")
 
     def encrypt(self, data: str) -> str:
         cipher = AES.new(self.key, AES.MODE_CBC, self.iv)

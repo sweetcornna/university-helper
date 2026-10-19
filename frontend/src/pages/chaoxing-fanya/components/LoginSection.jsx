@@ -11,7 +11,8 @@ export default function LoginSection({
 }) {
   return (
     <section className={CARD}>
-      <h2 className="mb-4 text-xl font-semibold text-text">登录账号</h2>
+      <h2 className="text-lg font-semibold text-text">登录学习通</h2>
+      <p className="mb-4 mt-1 text-sm text-text-muted">密码只在本页使用，不会保存。</p>
 
       <form className="grid gap-4 md:grid-cols-2" onSubmit={handleLogin} noValidate>
         <Input

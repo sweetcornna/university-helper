@@ -255,6 +255,9 @@ def process_job(
     if callable(should_stop_callback) and should_stop_callback():
         return StudyResult.CANCELLED
 
+    # A chapter can contain multiple cards with different submission tokens.
+    job_info = job.get("job_info", job_info)
+
     # 视频任务
     if job["type"] == "video":
         logger.trace(f"识别到视频任务, 任务章节: {course['title']} 任务ID: {job['jobid']}")

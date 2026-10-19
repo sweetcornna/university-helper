@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, ClipboardList, ExternalLink, FileText, ListChecks, Loader2, MessageSquare, RefreshCw } from 'lucide-react'
 import { api, ApiError } from '../../../utils/api'
 import { safeHref } from '../../../utils/safeUrl'
-import { CARD, getCourseId, getCourseName } from '../utils'
+import { getCourseId, getCourseName } from '../utils'
 
 // Chaoxing course portal tabs.
 //
@@ -42,7 +42,7 @@ const tabLabel = (key) => TABS.find((tab) => tab.key === key)?.label || key
 const itemTitle = (item) =>
   item?.title || item?.name || item?.text || item?.label || (item?.id ? `#${item.id}` : '未命名')
 
-export default function CoursePortalSection({ courses, selectedCourses, setError, setNotice }) {
+export default function CoursePortalSection({ courses, selectedCourses }) {
   const courseOptions = useMemo(
     () =>
       (courses || [])
@@ -89,10 +89,9 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
       }
       setLoading(true)
       setLoadError('')
+      const tabPath = `/course/chaoxing/course/${encodeURIComponent(courseId)}`
       try {
-        const payload = await api(
-          `/course/chaoxing/course/${encodeURIComponent(courseId)}/tabs/${encodeURIComponent(tabKey)}`
-        )
+        const payload = await api(`${tabPath}/tabs/${encodeURIComponent(tabKey)}`)
         if (!isCurrent()) return
         const data = payload?.data || payload || {}
         const items = Array.isArray(data.items) ? data.items : []
@@ -109,7 +108,6 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
           remoteUrl,
           message: data.message || '',
         })
-        setNotice?.(`已加载学习通「${tabLabel(tabKey)}」：${items.length} 条`)
       } catch (err) {
         if (!isCurrent()) return
         const message =
@@ -118,12 +116,21 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
             : err?.message || '加载学习通课程数据失败。'
         setResult(null)
         setLoadError(message)
-        setError?.(message)
+        // Keep a way forward: the official page usually still opens in the browser.
+        try {
+          const urls = await api(`${tabPath}/portal-urls`)
+          if (!isCurrent()) return
+          const tab = (urls?.data?.tabs || urls?.tabs || []).find((entry) => entry?.key === tabKey)
+          const remoteUrl = safeHref(tab?.frameUrl || tab?.shellUrl || '')
+          if (remoteUrl) setResult({ tabKey, items: [], remoteUrl, message: '' })
+        } catch (_) {
+          // The inline error already explains the failure.
+        }
       } finally {
         if (isCurrent()) setLoading(false)
       }
     },
-    [setError, setNotice]
+    []
   )
 
   useEffect(() => {
@@ -136,13 +143,11 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
   const items = result?.items || []
 
   return (
-    <section className={CARD}>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold text-text">学习通课程</h2>
-        <div className="flex flex-wrap items-center gap-2">
+    <section>
+      <div className="mb-3 flex items-center gap-2">
           <select
             aria-label="选择学习通课程"
-            className="min-h-[44px] rounded-lg border border-border bg-surface px-3 text-sm text-text/80"
+            className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-border bg-surface px-3 text-sm text-text"
             value={activeCourseId}
             onChange={(event) => setActiveCourseId(event.target.value)}
           >
@@ -164,10 +169,9 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}
           </button>
-        </div>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-2">
+      <div className="scrollbar-none flex gap-1.5 overflow-x-auto pb-1" role="group" aria-label="课程内容栏目">
         {TABS.map((tab) => {
           const Icon = TAB_ICONS[tab.key] || FileText
           const selected = tab.key === activeTab
@@ -176,24 +180,24 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
               key={tab.key}
               type="button"
               className={[
-                'inline-flex min-h-[44px] min-w-[72px] shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-sm transition-colors',
-                selected ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border bg-surface text-text/70'
+                'inline-flex min-h-[40px] shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-full px-3 text-sm transition-colors',
+                selected ? 'bg-primary/10 font-semibold text-primary' : 'text-text-muted hover:bg-surface-hover hover:text-text'
               ].join(' ')}
               onClick={() => setActiveTab(tab.key)}
-              title={tab.label}
+              aria-pressed={selected}
             >
-              <Icon className="h-4 w-4" />
+              <Icon className="h-4 w-4" aria-hidden="true" />
               <span>{tab.label}</span>
             </button>
           )
         })}
       </div>
 
-      <div className="mt-4 rounded-xl border border-border bg-surface p-4">
+      <div className="mt-3 rounded-xl border border-border p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <p className="font-semibold text-text">
             {tabLabel(activeTab)}
-            {!loading && result ? <span className="ml-2 text-xs font-normal text-text-muted">{items.length} 条</span> : null}
+            {!loading && !loadError && result ? <span className="ml-2 text-xs font-normal text-text-muted">{items.length} 条</span> : null}
           </p>
           {result?.remoteUrl && (
             <a
@@ -214,11 +218,11 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
             加载中
           </div>
         ) : loadError ? (
-          <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-600">
+          <div role="alert" className="rounded-lg border border-danger/30 bg-danger-surface px-3 py-3 text-sm text-danger">
             {loadError}
           </div>
         ) : items.length > 0 ? (
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-border">
             {items.map((item, index) => (
               <li key={item?.id ?? index} className="flex items-start justify-between gap-3 py-2.5">
                 <div className="min-w-0">
@@ -254,7 +258,7 @@ export default function CoursePortalSection({ courses, selectedCourses, setError
             ))}
           </ul>
         ) : (
-          <div className="rounded-lg border border-border-subtle bg-surface-hover px-3 py-8 text-center text-sm text-text-muted">
+          <div role="status" className="rounded-lg border border-border-subtle bg-surface-hover px-3 py-8 text-center text-sm text-text-muted">
             {result?.message || '该标签暂无内容。'}
           </div>
         )}

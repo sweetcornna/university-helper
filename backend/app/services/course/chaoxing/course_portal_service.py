@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode, urljoin
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -20,6 +20,13 @@ CHAPTER_LIST_URL = "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcou
 RESOURCE_LIST_URL = "https://mooc2-ans.chaoxing.com/mooc2-ans/coursedata/stu-datalist"
 HOMEWORK_LIST_URL = "https://mooc1.chaoxing.com/mooc2/work/list"
 EXAM_LIST_URL = "https://mooc1.chaoxing.com/exam-ans/mooc2/exam/exam-list"
+STUDENT_NAV_URL = "https://mooc2-ans.chaoxing.com/mooc2-ans/coursemanagev3/stu-base-info"
+# Path fragment that identifies each HTML tab inside the student course navigation.
+_NAV_PATHS = {"resources": "/coursedata/stu-datalist", "homework": "/work/list", "tests": "/exam/exam-list"}
+
+
+class ChaoxingPortalDeniedError(RuntimeError):
+    """Chaoxing answered with its "invalid parameter / no permission" placeholder page."""
 
 
 @dataclass(frozen=True)
@@ -146,6 +153,46 @@ def _safe_json(response: Any) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _read_html_response(response: Any, tab_key: str) -> str:
+    status_code = getattr(response, "status_code", 200)
+    html_text = str(getattr(response, "text", "") or "")
+    response_url = getattr(response, "url", "")
+    headers = getattr(response, "headers", {}) or {}
+    location = headers.get("Location", "")
+    login_redirect = any(
+        isinstance(value, str) and urlsplit(value).hostname in {"passport2.chaoxing.com", "passport2-api.chaoxing.com"}
+        for value in (response_url, location)
+    )
+    login_form = re.search(
+        r'<(?:form|input)\b[^>]*(?:fanyalogin|name=["\']uname["\']|id=["\']phone["\'])',
+        html_text,
+        flags=re.IGNORECASE,
+    )
+    if status_code == 401 or login_redirect or login_form:
+        raise RuntimeError("学习通登录已失效，请重新登录后加载课程内容")
+    if status_code != 200:
+        raise RuntimeError(f"Fetch {tab_key} failed: {status_code}")
+    soup = BeautifulSoup(html_text, "lxml")
+    error_node = soup.select_one(".nullMain .word_null")
+    error_message = _clean_text(error_node.get_text(" ", strip=True)) if error_node else ""
+    if re.search(r"无效|无权限|没有权限|参数错误|访问失败", error_message):
+        raise ChaoxingPortalDeniedError(f"学习通课程内容加载失败：{error_message}")
+    return html_text
+
+
+def _empty_state_message(html_text: str) -> str:
+    soup = BeautifulSoup(html_text, "lxml")
+    for node in soup.select(".nodata, .null-data, .no-data, .noData, .dataBody > .NoResult"):
+        if node.find_parent(class_="maskDiv") is None:
+            message = _clean_text(node.get_text(" ", strip=True))
+            if re.search(
+                r"(?:暂无|没有).*(?:章节|资料|文件|作业|考试|数据|内容)|无(?:章节|资料|作业|考试)|全部章节.*隐藏",
+                message,
+            ):
+                return message
+    return ""
 
 
 def _request_url(base_url: str, params: dict[str, Any]) -> str:
@@ -397,22 +444,48 @@ class ChaoxingCoursePortalService:
                 "course": context.as_dict(),
                 "tab": tab.as_dict(self, context),
                 "items": [],
-                "message": "This Chaoxing tab is opened through the course shell URL.",
+                "message": "这个栏目需要在学习通中打开",
             }
 
         frame_url = tab.frame_builder(self, context)
         response = session.get(frame_url, timeout=12)
-        if getattr(response, "status_code", 200) != 200:
-            raise RuntimeError(f"Fetch {tab.key} failed: {getattr(response, 'status_code', 'unknown')}")
-        html_text = str(getattr(response, "text", "") or "")
+        try:
+            html_text = _read_html_response(response, tab.key)
+        except ChaoxingPortalDeniedError:
+            # Teachers can hide a tab from students; the course navigation is the
+            # source of truth for which tabs exist and the URL (with tokens) to use.
+            navigation = self._student_navigation_urls(session, context)
+            if navigation is None:
+                raise
+            nav_url = navigation.get(tab.key)
+            if nav_url is None:
+                return {
+                    "course": context.as_dict(),
+                    "tab": tab.as_dict(self, context),
+                    "url": frame_url,
+                    "items": [],
+                    tab.item_key: [],
+                    "unavailable": True,
+                    "message": f"这门课没有向学生开放「{tab.label}」栏目",
+                }
+            if nav_url == frame_url:
+                raise
+            frame_url = nav_url
+            html_text = _read_html_response(session.get(frame_url, timeout=12), tab.key)
         items = self.parse_html_tab(tab.key, html_text, frame_url)
-        return {
+        payload = {
             "course": context.as_dict(),
             "tab": tab.as_dict(self, context),
             "url": frame_url,
             "items": items,
             tab.item_key: items,
         }
+        if not items:
+            message = _empty_state_message(html_text)
+            if not message:
+                raise RuntimeError("学习通返回的不是可识别的课程列表，请检查访问权限或页面验证后重试")
+            payload["message"] = message
+        return payload
 
     def fetch_activities(self, session: Any, context: ChaoxingCourseContext) -> dict[str, Any]:
         tab = self._get_tab("activities")
@@ -426,9 +499,11 @@ class ChaoxingCoursePortalService:
             },
             timeout=12,
         )
-        if getattr(response, "status_code", 200) != 200:
-            raise RuntimeError(f"Fetch activities failed: {getattr(response, 'status_code', 'unknown')}")
+        _read_html_response(response, "activities")
         data = _safe_json(response)
+        active_data = data.get("data")
+        if not isinstance(active_data, dict) or not isinstance(active_data.get("activeList"), list):
+            raise RuntimeError("学习通返回的不是可识别的活动列表，请检查登录状态或页面验证后重试")
         activities = self.parse_activities(data)
         return {
             "course": context.as_dict(),
@@ -444,13 +519,12 @@ class ChaoxingCoursePortalService:
         tab = self._get_tab("chapters")
         frame_url = self.build_chapters_url(context)
         response = session.get(frame_url, timeout=12)
-        if getattr(response, "status_code", 200) != 200:
-            raise RuntimeError(f"Fetch chapters failed: {getattr(response, 'status_code', 'unknown')}")
+        html_text = _read_html_response(response, "chapters")
         from app.services.course.chaoxing.decode import decode_course_point
 
-        parsed = decode_course_point(str(getattr(response, "text", "") or ""))
+        parsed = decode_course_point(html_text)
         chapters = parsed.get("points", []) if isinstance(parsed, dict) else []
-        return {
+        payload = {
             "course": context.as_dict(),
             "tab": tab.as_dict(self, context),
             "url": frame_url,
@@ -458,6 +532,57 @@ class ChaoxingCoursePortalService:
             "chapters": chapters,
             "raw": parsed,
         }
+        if not chapters:
+            message = _empty_state_message(html_text)
+            if not message:
+                # Units without task points have no `cur<id>` rows; list their titles.
+                soup = BeautifulSoup(html_text, "lxml")
+                titles = [
+                    _first_text(node.get("title"), node.get_text(" ", strip=True))
+                    for node in soup.select(".chapter_unit .catalog_name .clicktitle span[title]")
+                ]
+                titles = [title for title in titles if title]
+                if not titles:
+                    raise RuntimeError("学习通返回的不是可识别的章节列表，请检查访问权限或页面验证后重试")
+                chapters = [
+                    {"id": str(index), "title": title, "jobCount": 0, "has_finished": False, "need_unlock": False}
+                    for index, title in enumerate(titles, start=1)
+                ]
+                payload["items"] = payload["chapters"] = chapters
+                message = "这门课的章节没有任务点"
+            payload["message"] = message
+        return payload
+
+    def _student_navigation_urls(self, session: Any, context: ChaoxingCourseContext) -> dict[str, str] | None:
+        """Map tab key → URL from the student's course navigation; None when it cannot be read."""
+        try:
+            response = session.get(
+                STUDENT_NAV_URL,
+                params={"courseId": context.course_id, "clazzId": context.class_id, "cpi": context.cpi},
+                timeout=12,
+            )
+            data = response.json()
+        except Exception:
+            return None
+        if not isinstance(data, dict) or not isinstance(data.get("navigationList"), list):
+            return None
+
+        urls: dict[str, str] = {}
+        pending = list(data["navigationList"])
+        while pending:
+            item = pending.pop(0)
+            if not isinstance(item, dict):
+                continue
+            pending.extend(item.get("children") or [])
+            link = _clean_text(item.get("linkUrl"))
+            if not link:
+                continue
+            absolute = urljoin("https://mooc2-ans.chaoxing.com/", link)
+            path = urlsplit(absolute).path
+            for tab_key, fragment in _NAV_PATHS.items():
+                if fragment in path:
+                    urls.setdefault(tab_key, absolute)
+        return urls
 
     def parse_activities(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         active_list = payload.get("data", {}).get("activeList", []) if isinstance(payload.get("data"), dict) else []
@@ -469,13 +594,11 @@ class ChaoxingCoursePortalService:
         if not html_text:
             return []
         soup = BeautifulSoup(html_text, "lxml")
-        if tab_key == "resources":
-            return self._parse_link_items(soup, base_url, status_tokens=())
-        if tab_key in {"homework", "tests"}:
-            return self._parse_link_items(
-                soup, base_url, status_tokens=("未开始", "未提交", "已提交", "待批阅", "已完成", "已结束")
-            )
-        return self._parse_link_items(soup, base_url, status_tokens=())
+        if tab_key == "resources" and soup.select(".dataBody .dataBody_td"):
+            return self._parse_resource_rows(soup, base_url)
+        if tab_key == "tests" and soup.select(".bottomList ul li"):
+            return self._parse_exam_rows(soup, base_url)
+        return self._parse_link_items(soup, base_url, tab_key)
 
     def _normalize_activity(self, activity: dict[str, Any]) -> dict[str, Any]:
         status_code = int(activity.get("status") or 0)
@@ -503,22 +626,130 @@ class ChaoxingCoursePortalService:
             "raw": activity,
         }
 
+    def _parse_resource_rows(self, soup: BeautifulSoup, base_url: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for row in soup.select(".dataBody .dataBody_td"):
+            if row.find_parent(class_="maskDiv") is not None:
+                continue
+            title_node = row.select_one(".rename_title")
+            title = _first_text(
+                row.get("dataname"),
+                title_node.get("title") if title_node else "",
+                title_node.get_text(" ", strip=True) if title_node else "",
+            )
+            if not title:
+                continue
+            # The preview is a JavaScript action; use the supplied download
+            # link when permitted, otherwise leave navigation to the list.
+            item_url = base_url
+            for link in row.select(".operate_down a[href]"):
+                content_url = self._content_link_url("resources", _clean_text(link.get("href")), base_url)
+                if content_url:
+                    item_url = content_url
+                    break
+            details = [title]
+            for selector in (".dataBody_size_stu", ".dataBody_creater_stu", ".dataBody_time_stu"):
+                detail = row.select_one(selector)
+                if detail:
+                    details.append(_clean_text(detail.get_text(" ", strip=True)))
+            item = {
+                "id": _first_text(row.get("id"), str(len(items) + 1)),
+                "title": title,
+                "text": " ".join(part for part in details if part)[:300],
+                "url": item_url,
+                "status": "unknown",
+            }
+            file_type = _clean_text(row.get("type")).lower()
+            if re.fullmatch(r"[a-z0-9]{2,8}", file_type):
+                item["fileType"] = file_type
+            items.append(item)
+        return items
+
+    def _parse_exam_rows(self, soup: BeautifulSoup, base_url: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for row in soup.select(".bottomList ul li"):
+            title_node = row.select_one(".right-content p:first-child")
+            if title_node is None:
+                continue
+            title = _first_text(title_node.get("title"), title_node.get_text(" ", strip=True))
+            if not title:
+                continue
+            status_node = row.select_one(".status")
+            row_text = _clean_text(row.get_text(" ", strip=True))
+            status_text = status_node.get_text(" ", strip=True) if status_node else row_text
+            # The list uses JavaScript actions that can start or reset an exam.
+            # Keep the official list URL unless the row supplies a real link.
+            item_url = base_url
+            for link in row.select("a[href], [data]"):
+                content_url = self._content_link_url("tests", _first_text(link.get("href"), link.get("data")), base_url)
+                if content_url:
+                    item_url = content_url
+                    break
+            items.append(
+                {
+                    "id": _first_text(row.get("id"), str(len(items) + 1)),
+                    "title": title,
+                    "text": row_text[:300],
+                    "url": item_url,
+                    "status": _status_from_text(status_text),
+                }
+            )
+        return items
+
+    @staticmethod
+    def _content_link_url(tab_key: str, href: str, base_url: str) -> str:
+        if not href or href.startswith("#"):
+            return ""
+        try:
+            absolute_url = urljoin(base_url, href)
+            parsed = urlsplit(absolute_url)
+        except ValueError:
+            return ""
+        if parsed.scheme not in {"http", "https"}:
+            return ""
+        path = parsed.path.lower()
+        query = {key.lower(): values for key, values in parse_qs(parsed.query).items()}
+        if tab_key == "resources":
+            if path.endswith("/coursedata/downloaddata") and query.get("dataid"):
+                return absolute_url
+            if re.search(r"/(?:file|resource)/(?:download|preview|view)(?:/|$)", path) or re.search(
+                r"\.(?:pdf|docx?|pptx?|xlsx?|txt|csv|zip|rar|7z|mp[34]|jpe?g|png)$", path
+            ):
+                return absolute_url
+        elif tab_key == "homework":
+            if (
+                "/work/" in path
+                and not path.endswith("/list")
+                and any(query.get(key) for key in ("workid", "workanswerid"))
+            ):
+                return absolute_url
+        elif tab_key == "tests" and "/exam/" in path and not path.endswith("/exam-list") and query.get("examid"):
+            return absolute_url
+        return ""
+
     def _parse_link_items(
         self,
         soup: BeautifulSoup,
         base_url: str,
-        status_tokens: Iterable[str],
+        tab_key: str,
     ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
 
         for link in soup.select("a[href]"):
+            if (
+                link.find_parent(class_="maskDiv") is not None
+                or link.find_parent(attrs={"role": "alertdialog"}) is not None
+            ):
+                continue
             href = _clean_text(link.get("href"))
             title = _first_text(link.get("title"), link.get("aria-label"), link.get_text(" ", strip=True))
             if _skip_link_text(title):
                 continue
 
-            absolute_url = "" if href.startswith("javascript:") else urljoin(base_url, href)
+            absolute_url = self._content_link_url(tab_key, href, base_url)
+            if not absolute_url:
+                continue
             container = link.find_parent(["li", "tr", "dd", "div"]) or link
             row_text = _clean_text(container.get_text(" ", strip=True))
             if not row_text:
@@ -529,13 +760,7 @@ class ChaoxingCoursePortalService:
                 continue
             seen.add(key)
 
-            status = "unknown"
-            for token in status_tokens:
-                if token in row_text:
-                    status = _status_from_text(row_text)
-                    break
-            if status == "unknown":
-                status = _status_from_text(row_text)
+            status = _status_from_text(row_text)
 
             item = {
                 "id": str(len(items) + 1),
@@ -544,7 +769,7 @@ class ChaoxingCoursePortalService:
                 "url": absolute_url,
                 "status": status,
             }
-            suffix_match = re.search(r"\.([a-zA-Z0-9]{2,8})(?:[?#].*)?$", href)
+            suffix_match = re.search(r"\.([a-zA-Z0-9]{2,8})$", urlsplit(absolute_url).path)
             if suffix_match:
                 item["fileType"] = suffix_match.group(1).lower()
             items.append(item)

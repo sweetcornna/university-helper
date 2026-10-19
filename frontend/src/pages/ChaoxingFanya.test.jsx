@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { MemoryRouter } from 'react-router-dom'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -16,7 +17,8 @@ const mocks = vi.hoisted(() => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }))
 
-vi.mock('../components', () => ({
+vi.mock('../components', async (importOriginal) => ({
+  ...(await importOriginal()),
   useToast: () => mocks.toast,
 }))
 
@@ -73,7 +75,7 @@ vi.mock('./chaoxing-fanya/components/LoginSection', () => ({
 }))
 vi.mock('./chaoxing-fanya/components/CoursePortalSection', () => ({ default: () => null }))
 vi.mock('./chaoxing-fanya/components/ConfigSection', () => ({ default: () => null }))
-vi.mock('./chaoxing-fanya/components/TaskHistorySection', () => ({ default: () => null }))
+vi.mock('./chaoxing-fanya/components/TaskHistorySection', () => ({ default: () => <p>历史任务列表</p> }))
 vi.mock('./chaoxing-fanya/components/LogSection', () => ({ default: () => null }))
 vi.mock('./chaoxing-fanya/components/CourseListSection', () => ({
   default: ({ courses, selectedCourses, setSelectedCourses, chapterLimits, setChapterLimit, toggleExpand }) => (
@@ -107,10 +109,17 @@ vi.mock('./chaoxing-fanya/components/CourseListSection', () => ({
 
 import ChaoxingFanya from './ChaoxingFanya'
 
+const renderPage = (entry = '/chaoxing-fanya') => render(
+  <MemoryRouter initialEntries={[entry]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <ChaoxingFanya />
+  </MemoryRouter>
+)
+
 const selectCourseAndStart = async () => {
   const user = userEvent.setup()
-  render(<ChaoxingFanya />)
+  renderPage()
   await user.click(screen.getByRole('button', { name: '选择课程' }))
+  await user.click(screen.getByRole('tab', { name: '执行与日志' }))
   const startButton = screen.getByRole('button', { name: '开始刷课' })
   await user.click(startButton)
 }
@@ -184,13 +193,14 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.callApi.mockResolvedValue({ task_id: 'task-refresh', status: 'pending' })
 
     const user = userEvent.setup()
-    render(<ChaoxingFanya />)
+    renderPage()
     await user.click(screen.getByRole('button', { name: '选择课程' }))
     await user.click(screen.getByRole('button', { name: '刷新课程' }))
 
     await waitFor(() => expect(screen.getByTestId('selected-courses')).toHaveTextContent(expectedSelection))
 
     if (expectedSelection) {
+      await user.click(screen.getByRole('tab', { name: '执行与日志' }))
       await user.click(screen.getByRole('button', { name: '开始刷课' }))
       await waitFor(() => expect(mocks.auth.callApi).toHaveBeenCalledWith(
         '/course/start',
@@ -202,6 +212,7 @@ describe('ChaoxingFanya start task loading state', () => {
       expect(startBody.course_ids).toEqual([expectedSelection])
       expect(startBody.course_ids).not.toContain('course-a')
     } else {
+      await user.click(screen.getByRole('tab', { name: '执行与日志' }))
       await user.click(screen.getByRole('button', { name: '开始刷课' }))
       expect(mocks.auth.callApi).not.toHaveBeenCalledWith('/course/start', expect.anything())
     }
@@ -211,11 +222,12 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.callApi.mockResolvedValue({ task_id: 'task-limit', status: 'pending' })
 
     const user = userEvent.setup()
-    render(<ChaoxingFanya />)
+    renderPage()
     await user.click(screen.getByRole('button', { name: '设置章节终点' }))
 
     expect(screen.getByTestId('selected-courses')).toHaveTextContent('course-1')
 
+    await user.click(screen.getByRole('tab', { name: '执行与日志' }))
     await user.click(screen.getByRole('button', { name: '开始刷课' }))
 
     await waitFor(() => expect(mocks.auth.callApi).toHaveBeenCalledWith('/course/start', expect.anything()))
@@ -228,13 +240,14 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.callApi.mockResolvedValue({ task_id: 'task-all', status: 'pending' })
 
     const user = userEvent.setup()
-    render(<ChaoxingFanya />)
+    renderPage()
     await user.click(screen.getByRole('button', { name: '设置章节终点' }))
     await user.click(screen.getByRole('button', { name: '学全部章节' }))
 
     expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{}')
     expect(screen.getByTestId('selected-courses')).toHaveTextContent('course-1')
 
+    await user.click(screen.getByRole('tab', { name: '执行与日志' }))
     await user.click(screen.getByRole('button', { name: '开始刷课' }))
 
     await waitFor(() => expect(mocks.auth.callApi).toHaveBeenCalledWith('/course/start', expect.anything()))
@@ -250,7 +263,7 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.callApi.mockResolvedValue({ task_id: 'task-stale', status: 'pending' })
 
     const user = userEvent.setup()
-    render(<ChaoxingFanya />)
+    renderPage()
     await user.click(screen.getByRole('button', { name: '设置章节终点' }))
     expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{"course-a":"chapter-9"}')
 
@@ -258,6 +271,7 @@ describe('ChaoxingFanya start task loading state', () => {
     await waitFor(() => expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{}'))
 
     await user.click(screen.getByRole('button', { name: '选择课程' }))
+    await user.click(screen.getByRole('tab', { name: '执行与日志' }))
     await user.click(screen.getByRole('button', { name: '开始刷课' }))
 
     await waitFor(() => expect(mocks.auth.callApi).toHaveBeenCalledWith('/course/start', expect.anything()))
@@ -270,7 +284,7 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.callApi.mockResolvedValue({ chapters: [{ id: 'chapter-2', title: '1.2' }] })
 
     const user = userEvent.setup()
-    render(<ChaoxingFanya />)
+    renderPage()
     const toggle = screen.getByRole('button', { name: '展开或收起章节' })
     await user.click(toggle)
     await user.click(toggle)
@@ -284,7 +298,7 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.callApi.mockResolvedValue({ chapters: [{ id: 'chapter-1', title: '1.1' }] })
 
     const user = userEvent.setup()
-    render(<ChaoxingFanya />)
+    renderPage()
     await user.click(screen.getByRole('button', { name: '设置章节终点' }))
     expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{"course-1":"chapter-2"}')
 
@@ -298,7 +312,7 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.callApi.mockResolvedValue({ chapters: [{ id: 'chapter-1' }, { id: 'chapter-2' }] })
 
     const user = userEvent.setup()
-    render(<ChaoxingFanya />)
+    renderPage()
     await user.click(screen.getByRole('button', { name: '设置章节终点' }))
     await user.click(screen.getByRole('button', { name: '展开或收起章节' }))
 
@@ -313,11 +327,32 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.auth.loadCourses.mockResolvedValue(null)
 
     const user = userEvent.setup()
-    render(<ChaoxingFanya />)
+    renderPage()
     await user.click(screen.getByRole('button', { name: '选择课程' }))
     await user.click(screen.getByRole('button', { name: '刷新课程' }))
 
     expect(screen.getByTestId('selected-courses')).toHaveTextContent('course-a')
+  })
+
+  test('task history is reachable with no courses or platform credentials', () => {
+    mocks.auth.courses = []
+    renderPage('/chaoxing-fanya?tab=history')
+    expect(screen.getByText('历史任务列表')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '恢复课程' })).not.toBeInTheDocument()
+  })
+
+  test('switching workspaces keeps course selection and chapter scope', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(screen.getByRole('button', { name: '设置章节终点' }))
+    await user.click(screen.getByRole('tab', { name: '学习配置' }))
+    expect(screen.queryByTestId('selected-courses')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '开始刷课' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: '任务记录' }))
+    expect(screen.getByText('历史任务列表')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: '选择课程' }))
+    expect(screen.getByTestId('selected-courses')).toHaveTextContent('course-1')
+    expect(screen.getByTestId('chapter-limits')).toHaveTextContent('{"course-1":"chapter-2"}')
   })
 
   test('an empty successful refresh clears selection before later courses are shown', async () => {
@@ -327,7 +362,7 @@ describe('ChaoxingFanya start task loading state', () => {
     mocks.nextCoursesAfterEmpty = [{ courseId: 'course-c' }]
 
     const user = userEvent.setup()
-    render(<ChaoxingFanya />)
+    renderPage()
     await user.click(screen.getByRole('button', { name: '选择课程' }))
     await user.click(screen.getByRole('button', { name: '刷新课程' }))
     await user.click(await screen.findByRole('button', { name: '恢复课程' }))
