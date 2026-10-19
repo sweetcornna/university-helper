@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-18
+
 ### Changed
 - Each service is now its own workspace with tabs instead of one long page:
   学习通 › 课程学习 (选择课程 / 学习配置 / 执行与日志 / 任务记录 / 账号),
