@@ -486,6 +486,7 @@ open-source projects below, and in places adapts it. Thanks to their authors.
 
 **Question banks, font de-obfuscation and OCR (used directly)**
 - [SocialSisterYi/xuexiaoyi-to-xuexitong-tampermonkey-proxy](https://github.com/SocialSisterYi/xuexiaoyi-to-xuexitong-tampermonkey-proxy): Chaoxing encrypted-font de-obfuscation and answer proxy (see `backend/app/services/course/chaoxing/cxsecret_font.py`, `answer_cache.py`).
+- Server images fetch a pinned `resource/font_map_table.json` from [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing) during the Docker build and verify its SHA-256. The data file is not vendored in this repository; its upstream repository is GPL-3.0 licensed.
 - [DokiDoki1103/tikuAdapter](https://github.com/DokiDoki1103/tikuAdapter): pluggable question-bank adapter (see `answer_providers/adapter.py`).
 - [sml2h3/ddddocr](https://github.com/sml2h3/ddddocr): captcha OCR (see `captcha.py`).
 

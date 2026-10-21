@@ -118,16 +118,11 @@ class FontHashDAO:
 
 # 初始化字体哈希DAO单例
 #
-# NOTE (audit F14): the data file resource/font_map_table.json (the font-hash ->
-# original-character mapping table) is NOT shipped in this repository and is not
-# generated/downloaded at build or startup. When it is absent, FontHashDAO falls
-# back to EMPTY char_map/hash_map below, which means decrypt() cannot reverse
-# Chaoxing's encrypted (anti-scrape) fonts and instead passes the garbled
-# characters through unchanged. This is a documented, known limitation rather
-# than a crash: encrypted-font question stems will appear garbled.
-#
-# To enable encrypted-font decoding, place a valid font_map_table.json under a
-# "resource/" directory resolvable from the process CWD (see resource_path()).
+# The mapping table is intentionally not vendored in this repository. Server
+# images fetch a pinned copy during Dockerfile.server builds and place it under
+# /srv/backend/resource/. Source/desktop runs can provide the same file under a
+# resource/ directory resolved by resource_path(). If it is genuinely absent,
+# degrade gracefully to passthrough text instead of crashing.
 try:
     fonthash_dao = FontHashDAO()
 except Exception as e:

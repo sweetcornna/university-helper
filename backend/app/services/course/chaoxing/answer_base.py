@@ -93,8 +93,8 @@ class Tiku:
         true_raw = conf.get("true_list")
         false_raw = conf.get("false_list")
 
-        default_true = ["正确", "对", "T", "True", "true"]
-        default_false = ["错误", "错", "F", "False", "false"]
+        default_true = ["正确", "对", "是", "√", "T", "True", "true"]
+        default_false = ["错误", "错", "否", "×", "F", "False", "false"]
 
         if true_raw:
             self.true_list = [s for s in true_raw.split(",") if s] or default_true
