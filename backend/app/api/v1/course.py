@@ -72,6 +72,8 @@ class CourseStatusResponse(BaseModel):
     progress: dict | None = None
     task_id: str | None = None
     current_task: str | None = None
+    # Chapters that were given up on: {course, chapter, reason, hint, timestamp}.
+    failures: list[dict] | None = None
 
 
 class ZhihuishuQRLoginResponse(BaseModel):
@@ -263,6 +265,7 @@ async def get_course_status(task_id: str, current_user: dict = Depends(get_curre
             progress=chaoxing_task.get("progress"),
             task_id=task_id,
             current_task=chaoxing_task.get("current_task"),
+            failures=list(chaoxing_task.get("failures") or []),
         )
 
     task = _get_course_task(task_id)

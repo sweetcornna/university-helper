@@ -34,3 +34,18 @@ def test_normalize_tiku_config_disables_token_provider_without_token():
     assert "tokens" not in normalized
     assert normalized["cover_rate"] == 0.75
     assert normalized["submit"] == "false"
+
+
+def test_normalize_tiku_config_drops_tokenless_provider_from_fallback_chain():
+    # The web UI defaults to "TikuYanxi,TikuGo"; without a token the Yanxi link
+    # used to log "初始化题库 言溪题库 失败 ... 'tokens'" on every task.
+    normalized = normalize_tiku_config({"provider": "TikuYanxi,TikuGo", "token": ""})
+
+    assert normalized["provider"] == "TikuGo"
+
+
+def test_normalize_tiku_config_keeps_token_providers_when_token_given():
+    normalized = normalize_tiku_config({"provider": "TikuYanxi,TikuGo", "token": "t1"})
+
+    assert normalized["provider"] == "TikuYanxi,TikuGo"
+    assert normalized["tokens"] == "t1"

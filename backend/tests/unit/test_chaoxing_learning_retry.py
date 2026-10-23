@@ -259,3 +259,38 @@ def test_process_chapter_runs_jobs_inline_when_executor_cannot_start(monkeypatch
 
     assert result == ChapterResult.SUCCESS
     assert processed_jobs == ["job-1", "job-2"]
+
+
+def test_crashing_chapter_reports_reason_once_retrying_and_once_given_up(monkeypatch):
+    """A crash must reach the caller with its reason instead of retrying silently."""
+    monkeypatch.setattr(learning.time, "sleep", lambda *_: None)
+
+    def fake_process_chapter(chaoxing, course, point, speed, config=None):
+        raise ValueError("Invalid Chaoxing task card mArg object")
+
+    monkeypatch.setattr(learning, "process_chapter", fake_process_chapter)
+    reports = []
+
+    def on_failure(course, task, *, final, max_tries):
+        reports.append((task.point["title"], final, task.tries, max_tries, task.error, task.error_type))
+
+    task = ChapterTask(point={"title": "2.1 第一节", "has_finished": False}, index=0)
+    processor = JobProcessor(
+        chaoxing=object(),
+        course={"title": "c"},
+        tasks=[task],
+        config=_base_config(chapter_failure_callback=on_failure),
+    )
+
+    assert _run_with_timeout(processor, timeout=15.0)
+    assert processor.failed_tasks == [task]
+    assert reports == [
+        ("2.1 第一节", False, 1, 5, "ValueError: Invalid Chaoxing task card mArg object", "ValueError"),
+        ("2.1 第一节", True, 5, 5, "ValueError: Invalid Chaoxing task card mArg object", "ValueError"),
+    ]
+
+
+def test_describe_exception_drops_url_queries():
+    exc = RuntimeError("GET https://tk.example/query?token=SECRET&q=1 failed")
+
+    assert learning.describe_exception(exc) == "RuntimeError: GET https://tk.example/query failed"

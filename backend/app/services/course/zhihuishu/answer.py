@@ -10,6 +10,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 
+from .auth import build_cookie_jar
+
 
 class ZhihuishuAnswer:
     """智慧树 AI 答题服务"""
@@ -18,7 +20,7 @@ class ZhihuishuAnswer:
         self.cookies = cookies
         self.proxies = proxies or {}
         self.session = requests.Session()
-        self.session.cookies.update(cookies)
+        self.session.cookies.update(build_cookie_jar(cookies))
 
         self.ai_enabled = ai_config.get("enabled", False)
         self.use_zhidao_ai = ai_config.get("use_zhidao_ai", True)

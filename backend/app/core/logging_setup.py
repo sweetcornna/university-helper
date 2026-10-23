@@ -102,10 +102,14 @@ def _bridge_loguru() -> None:
     )
 
 
-class _StdlibSink:  # pragma: no cover
+class _StdlibSink:
     """Treat loguru records as stdlib log records."""
 
     def __call__(self, message) -> None:
         record = message.record
         logger = logging.getLogger(record["name"] or "loguru")
-        logger.log(record["level"].no, record["message"])
+        # Forward the exception too: without it `logger.exception(...)` from
+        # loguru callers reaches stdout as a bare message with no traceback.
+        exception = record["exception"]
+        exc_info = (exception.type, exception.value, exception.traceback) if exception else None
+        logger.log(record["level"].no, record["message"], exc_info=exc_info)

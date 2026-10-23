@@ -133,3 +133,70 @@ def test_unparsed_task_cards_do_not_trigger_empty_page_study():
     assert service.get_job_list({"clazzId": "22", "courseId": "11", "cpi": "33"}, {"id": "123"}) == ([], {})
 
     study_empty.assert_not_called()
+
+
+def _real_cards_page(data):
+    """Shape of the live mooc1 knowledge/cards page: mArg is declared as "" first."""
+    return f"""
+    <script type="text/javascript">
+        var clickArray = [];
+        var mArg = "";
+        var courseid = "";
+        var knowledgeid = "";
+        try{{
+            mArg = {json.dumps(data, ensure_ascii=False)};
+            courseid = 255665643;
+            knowledgeid = 1026884511;
+        }}catch(e){{
+            console.log(e)
+        }}
+        var  attachments = mArg.attachments;
+    </script>
+    """
+
+
+_REAL_CARD = {
+    "hiddenConfig": False,
+    "attachments": [
+        {
+            "type": "video",
+            "job": True,
+            "jobid": "1756474100488340",
+            "mid": "mid-1",
+            "objectId": "obj-1",
+            "otherInfo": "nodeId_1026884511-cpi_492936718-rt_d&courseId=255665643",
+            "property": {"name": "2.1 第一节.mp4", "type": ".mp4"},
+        }
+    ],
+    "defaults": {"knowledgeid": 1026884511, "ktoken": "kt", "cardid": 1000302623, "cpi": 492936718},
+}
+
+
+def test_task_card_page_that_declares_mArg_as_empty_string_first():
+    # Regression for v1.6.0: the decoder took the first `mArg = ""` and raised
+    # "Invalid Chaoxing task card mArg object" on every real chapter page.
+    jobs, info = decode_course_card(_real_cards_page(_REAL_CARD))
+
+    assert [job["jobid"] for job in jobs] == ["1756474100488340"]
+    assert jobs[0]["name"] == "2.1 第一节.mp4"
+    assert info["knowledgeid"] == 1026884511
+    assert info["ktoken"] == "kt"
+
+
+def test_task_card_page_with_only_the_empty_declaration_is_not_a_crash():
+    jobs, info = decode_course_card('<script>var mArg = "";</script>')
+
+    assert (jobs, info) == ([], {})
+
+
+def test_chapter_job_list_reads_real_cards_pages():
+    session = Mock()
+    session.get.return_value = SimpleNamespace(status_code=200, text=_real_cards_page(_REAL_CARD))
+    service = ChaoxingCourseDataService(
+        Mock(), Mock(), Mock(), session_manager=SimpleNamespace(get_session=lambda: session)
+    )
+
+    jobs, info = service.get_job_list({"clazzId": "22", "courseId": "11", "cpi": "33"}, {"id": "123"})
+
+    assert jobs and all(job["jobid"] == "1756474100488340" for job in jobs)
+    assert info["cardid"] == 1000302623

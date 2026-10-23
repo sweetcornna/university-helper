@@ -148,3 +148,40 @@ def test_most_specific_limit_wins_when_selectors_overlap(worker):
     )
 
     assert processed == {"100": ["p1", "p2", "p3"]}
+
+
+def test_given_up_chapters_are_explained_in_logs_and_task_failures(monkeypatch, worker):
+    from app.services.course.chaoxing.learning import ChapterResult
+
+    class FailingProcessor:
+        def __init__(self, chaoxing, course, tasks, config):
+            del chaoxing
+            self.course = course
+            self.tasks = tasks
+            self.config = config
+            self.failed_tasks = []
+
+        def run(self):
+            crashed, locked = self.tasks[1], self.tasks[2]
+            crashed.result, crashed.tries = ChapterResult.ERROR, 1
+            crashed.error = "ValueError: Invalid Chaoxing task card mArg object"
+            self.config["chapter_failure_callback"](self.course, crashed, final=False, max_tries=5)
+            crashed.tries = 5
+            self.config["chapter_failure_callback"](self.course, crashed, final=True, max_tries=5)
+            locked.result, locked.tries = ChapterResult.NOT_OPEN, 5
+            self.config["chapter_failure_callback"](self.course, locked, final=True, max_tries=5)
+            self.failed_tasks = [crashed, locked]
+
+    monkeypatch.setattr(lm, "JobProcessor", FailingProcessor)
+
+    task, _ = worker(course_ids=["100_200_300"])
+
+    assert task["status"] == "failed"
+    failures = task["failures"]
+    assert [(f["course"], f["chapter"]) for f in failures] == [("Course A", "1.2 Basics"), ("Course A", "2.1 Advanced")]
+    assert "Invalid Chaoxing task card mArg object" in failures[0]["reason"]
+    assert failures[0]["hint"]
+    assert "没开放" in failures[1]["reason"] and "跳过" in failures[1]["hint"]
+    messages = _log_messages(task)
+    assert any("1.2 Basics" in m and "正在自动重试" in m for m in messages)
+    assert sum("已跳过" in m for m in messages) == 2

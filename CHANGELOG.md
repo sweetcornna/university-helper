@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 学习通刷课: since 1.6.0 every chapter failed with 「Chapter processing
+  crashed」 and was retried five times before being skipped. The chapter page
+  declares `mArg = ""` before it assigns the task list, and the new parser read
+  the empty value. Only the object assignment is read now.
+- 智慧树: since 1.6.0 loading a course's videos (and starting a task) always
+  failed. The new login callback leaves a session cookie for another 知到
+  host, which was sent to the video service and made it refuse every request.
+  That cookie now stays on its own host, and signed requests use whole-second
+  timestamps again.
+- Errors logged with a traceback now include it in the container log; before,
+  only the message line was written.
+- 学习通刷课: without a 言溪 token the default 题库 chain no longer logs an
+  initialisation error on every task; the token-less provider is left out.
+
+### Changed
+- A failed chapter is no longer retried silently. The task log says why it
+  failed on the first attempt and again when it is skipped, with a suggested
+  next step, and `GET /course/status/{task_id}` returns the skipped chapters
+  as `failures` (course, chapter, reason, hint).
+
 ## [1.6.0] - 2026-10-18
 
 ### Changed

@@ -11,7 +11,7 @@ from app.services.notification.providers import validate_notification_url
 
 from ..task_store import task_store
 from .endpoint_security import validate_tiku_config
-from .learning import ChapterTask, JobProcessor, init_chaoxing
+from .learning import ChapterResult, ChapterTask, JobProcessor, init_chaoxing
 from .payload_mapper import normalize_tiku_config
 from .task_admission import (
     MAX_ACTIVE_TASKS,
@@ -93,6 +93,23 @@ def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(minimum, min(maximum, parsed))
+
+
+MAX_TASK_FAILURES = 50
+_RETRY_HINT = "稍后重新开始任务；如果每次都失败，请把任务 ID 发给管理员。"
+_NOT_OPEN_REASON = "章节还没开放（通常要先完成上一节的章节测验，也可能已过截止时间）"
+_NOT_OPEN_HINT = "在学习通完成上一节的测验后重试，或在「学习配置」把「未开放章节策略」改成「跳过」。"
+_JOB_FAILED_REASON = "有任务点没能完成（视频、文档或章节测验提交失败）"
+_JOB_FAILED_HINT = "稍后重试；章节测验需要在「学习配置」里配置可用的题库。"
+
+
+def _describe_chapter_failure(task: ChapterTask) -> tuple[str, str]:
+    """Plain-language reason and next step for a failed chapter attempt."""
+    if task.result == ChapterResult.NOT_OPEN:
+        return _NOT_OPEN_REASON, _NOT_OPEN_HINT
+    if task.error:
+        return f"处理时出错：{task.error}", _RETRY_HINT
+    return _JOB_FAILED_REASON, _JOB_FAILED_HINT
 
 
 def _parse_course_selector(raw: str) -> tuple[str, str | None, str | None]:
@@ -588,10 +605,37 @@ class ChaoxingLearningManager:
                     },
                 )
 
+            def chapter_failure_callback(
+                _: dict[str, Any],
+                task: ChapterTask,
+                *,
+                final: bool,
+                max_tries: int,
+            ) -> None:
+                chapter_title = str(task.point.get("title") or "")
+                reason, hint = _describe_chapter_failure(task)
+                if not final:
+                    self._append_task_log(
+                        task_id,
+                        f"章节「{chapter_title}」处理失败，正在自动重试（最多 {max_tries} 次）。原因：{reason}",
+                        "warning",
+                    )
+                    return
+                self._append_task_log(
+                    task_id,
+                    f"章节「{chapter_title}」重试 {max_tries} 次仍失败，已跳过。原因：{reason}。建议：{hint}",
+                    "error",
+                )
+                self._record_failure(
+                    task_id,
+                    {"course": course_name, "chapter": chapter_title, "reason": reason, "hint": hint},
+                )
+
             chapter_tasks = [ChapterTask(point=point, index=i) for i, point in enumerate(points)]
             run_config = dict(common_config)
             run_config["chapter_start_callback"] = chapter_start_callback
             run_config["chapter_done_callback"] = chapter_done_callback
+            run_config["chapter_failure_callback"] = chapter_failure_callback
             run_config["video_progress_callback"] = video_progress_callback
             run_config["should_stop"] = stop_event.is_set
 
@@ -844,6 +888,21 @@ class ChaoxingLearningManager:
             # forced write (status change / terminal) carries the latest
             # progress, so the final state is never lost. (F31)
             persist_request = self._prepare_persist_locked(task, force=False)
+        if persist_request:
+            self._persist_task_state(*persist_request)
+
+    def _record_failure(self, task_id: str, failure: dict[str, str]) -> None:
+        """Keep the latest chapter failures on the task so the UI can explain them."""
+        persist_request: tuple[dict[str, Any], _TaskPersistSequencer, int] | None = None
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            failures = list(task.get("failures") or [])
+            failures.append(dict(failure, timestamp=_utc_now_iso()))
+            task["failures"] = failures[-MAX_TASK_FAILURES:]
+            task["updated_at"] = _utc_now_iso()
+            persist_request = self._prepare_persist_locked(task)
         if persist_request:
             self._persist_task_state(*persist_request)
 
