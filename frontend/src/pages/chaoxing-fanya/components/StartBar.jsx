@@ -31,12 +31,13 @@ export default function StartBar({
       {startError && (
         <AttentionPanel id="fanya-start-error" role="alert" attention={{ tone: 'danger', ...startError, summary: startError.detail }} onAction={onAction} />
       )}
-      <div className={`${CARD} flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${sticky ? 'shadow-lg' : ''}`}>
+      {/* Sticky on phones: one row (count + button) so the course list stays visible. */}
+      <div className={`${CARD} flex gap-3 sm:flex-row sm:items-center sm:justify-between ${sticky ? 'flex-row items-center shadow-lg' : 'flex-col'}`}>
         <div className="min-w-0 text-sm">
           <p className="font-semibold text-text">
             已选 {selectedCount} 门课程{limitCount > 0 ? `（${limitCount} 门设了终点）` : ''}
           </p>
-          <p className="mt-0.5 break-words text-text-muted">
+          <p className={`mt-0.5 break-words text-text-muted ${sticky ? 'hidden sm:block' : ''}`}>
             {summary}
             {onEditSettings && (
               <>
@@ -55,7 +56,7 @@ export default function StartBar({
           disabled={disabled}
           aria-busy={loading || undefined}
           aria-describedby={reason ? 'fanya-start-reason' : undefined}
-          className="clay-button-primary min-h-[48px] shrink-0 gap-2 px-6"
+          className={`clay-button-primary min-h-[48px] shrink-0 gap-2 ${sticky ? 'px-4 sm:px-6' : 'px-6'}`}
         >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
           {loading ? '启动中...' : '开始刷课'}
