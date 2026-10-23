@@ -149,8 +149,8 @@ describe('ChaoxingFanya start task loading state', () => {
 
     await selectCourseAndStart()
 
-    const startButton = screen.getByRole('button', { name: '开始刷课' })
-    await waitFor(() => expect(startButton).toBeDisabled())
+    // An active task replaces the start bar on 执行与日志, so it can't be started twice.
+    await waitFor(() => expect(screen.queryByRole('button', { name: '开始刷课' })).not.toBeInTheDocument())
     expect(screen.queryByText('启动中...')).not.toBeInTheDocument()
   })
 
@@ -170,7 +170,11 @@ describe('ChaoxingFanya start task loading state', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: '开始刷课' })).toBeEnabled())
     expect(screen.queryByText('启动中...')).not.toBeInTheDocument()
-    expect(mocks.auth.setError).toHaveBeenCalledWith('network failure')
+    // Explained next to the start button with a next step, not as a page error.
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('没能开始刷课')
+    expect(alert).toHaveTextContent('network failure')
+    expect(screen.getByRole('button', { name: '重新开始' })).toBeInTheDocument()
   })
 
   test.each([
@@ -347,7 +351,8 @@ describe('ChaoxingFanya start task loading state', () => {
     await user.click(screen.getByRole('button', { name: '设置章节终点' }))
     await user.click(screen.getByRole('tab', { name: '学习配置' }))
     expect(screen.queryByTestId('selected-courses')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '开始刷课' })).not.toBeInTheDocument()
+    // 学习配置 can start the task directly; it reflects the kept selection.
+    expect(screen.getByText(/已选 1 门课程（1 门设了终点）/)).toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: '任务记录' }))
     expect(screen.getByText('历史任务列表')).toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: '选择课程' }))

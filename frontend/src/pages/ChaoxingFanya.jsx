@@ -1,21 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { BookOpen, Loader2, RefreshCw } from 'lucide-react'
 
-import { AccountChip, PageHeader, useToast } from '../components'
+import { AccountChip, EmptyState, PageHeader, useToast } from '../components'
 import WorkspaceTabs from '../components/WorkspaceTabs'
 import useWorkspaceTab from '../components/useWorkspaceTab'
+import { translateTaskMessage } from '../utils/taskMessages'
 
-import { CARD, getChapterId, getCourseId, mergeTaskHistory } from './chaoxing-fanya/utils'
-
+import { CARD, RESTORE_STATUSES, getChapterId, getCourseId, mergeTaskHistory } from './chaoxing-fanya/utils'
+import { configSummary } from './chaoxing-fanya/configOptions'
+import { describeStartError, describeTask } from './chaoxing-fanya/taskInsights'
 
 import useTaskConfig from './chaoxing-fanya/hooks/useTaskConfig'
 import useTaskExecution from './chaoxing-fanya/hooks/useTaskExecution'
 import useAuthentication from './chaoxing-fanya/hooks/useAuthentication'
 
-
+import AttentionPanel from './chaoxing-fanya/components/AttentionPanel'
 import LoginSection from './chaoxing-fanya/components/LoginSection'
 import CourseListSection from './chaoxing-fanya/components/CourseListSection'
 import CoursePortalSection from './chaoxing-fanya/components/CoursePortalSection'
 import ConfigSection from './chaoxing-fanya/components/ConfigSection'
+import StartBar from './chaoxing-fanya/components/StartBar'
 import TaskControlSection from './chaoxing-fanya/components/TaskControlSection'
 import TaskHistorySection from './chaoxing-fanya/components/TaskHistorySection'
 import LogSection from './chaoxing-fanya/components/LogSection'
@@ -29,6 +33,8 @@ const FANYA_TABS = [
   { id: 'account', label: '账号' },
 ]
 
+const splitList = (value) => value.split(',').map((item) => item.trim()).filter(Boolean)
+
 export default function ChaoxingFanya() {
   const [activeTab, setActiveTab] = useWorkspaceTab(FANYA_TABS, 'courses')
   const [selectedCourses, setSelectedCourses] = useState([])
@@ -39,7 +45,11 @@ export default function ChaoxingFanya() {
     chapterLimitsRef.current = chapterLimits
   }, [chapterLimits])
   const [chapters, setChapters] = useState({})
+  // courseId -> { loading, error } for the chapter picker.
+  const [chapterStatus, setChapterStatus] = useState({})
   const [expanded, setExpanded] = useState(new Set())
+  // Why the last start attempt did not go through: { title, detail, actions }.
+  const [startError, setStartError] = useState(null)
 
 
   // Shared pollRef lives in parent to break circular dependency between hooks.
@@ -57,7 +67,6 @@ export default function ChaoxingFanya() {
   const toast = useToast()
 
   const taskConfig = useTaskConfig()
-
 
   const auth = useAuthentication({ stopPolling })
 
@@ -91,14 +100,18 @@ export default function ChaoxingFanya() {
 
   // Surface auth errors / notices through the shared toast and immediately
   // clear the source so the same message can be re-announced if it recurs.
-  const { error: authError, notice: authNotice, setError: authSetError, setNotice: authSetNotice } =
-    auth
+  // Login and course-list failures are already explained inline, so they are
+  // not repeated as a toast.
+  const {
+    error: authError, notice: authNotice, setError: authSetError, setNotice: authSetNotice,
+    loginError = '', coursesError = '',
+  } = auth
   useEffect(() => {
     if (authError) {
-      toast.error(authError)
+      if (authError !== loginError && authError !== coursesError) toast.error(translateTaskMessage(authError))
       authSetError('')
     }
-  }, [authError, authSetError, toast])
+  }, [authError, authSetError, coursesError, loginError, toast])
 
   useEffect(() => {
     if (authNotice) {
@@ -118,57 +131,70 @@ export default function ChaoxingFanya() {
 
 
   const toggleExpand = useCallback(
-    async (course) => {
+    async (course, options = {}) => {
       const courseId = getCourseId(course)
       if (!courseId) return
 
-
-      const opening = !expanded.has(courseId)
-      setExpanded((prev) => {
-        const next = new Set(prev)
-        if (next.has(courseId)) next.delete(courseId)
-        else next.add(courseId)
-        return next
-      })
-
+      const reload = Boolean(options.reload)
+      const opening = reload || !expanded.has(courseId)
+      if (!reload) {
+        setExpanded((prev) => {
+          const next = new Set(prev)
+          if (next.has(courseId)) next.delete(courseId)
+          else next.add(courseId)
+          return next
+        })
+      }
 
       // Refetch on every open: 已完成 / 待解锁 change as tasks run, and this
       // list is where the user decides how far to study.
       if (!opening) return
 
-
+      setChapterStatus((prev) => ({ ...prev, [courseId]: { loading: true, error: '' } }))
       try {
         const resp = await auth.callApi(`/course/chapters/${courseId}`)
-        if (!resp) return
+        if (!resp) {
+          setChapterStatus((prev) => ({ ...prev, [courseId]: { loading: false, error: '' } }))
+          return
+        }
         const nextChapters = resp.chapters || []
         setChapters((prev) => ({ ...prev, [courseId]: nextChapters }))
+        setChapterStatus((prev) => ({ ...prev, [courseId]: { loading: false, error: '' } }))
         const chosen = chapterLimitsRef.current[courseId]
         if (chosen && !nextChapters.some((chapter) => getChapterId(chapter) === chosen)) {
           setChapterLimit(courseId, '')
           toast.info('之前选的最后一节已不在这门课里，已改回「全部章节」，请重新选择。')
         }
       } catch (err) {
-        auth.setError(err?.message || '获取章节失败。')
+        const message = translateTaskMessage(err?.message) || '获取章节失败。'
+        setChapterStatus((prev) => ({ ...prev, [courseId]: { loading: false, error: message } }))
       }
     },
     [auth, expanded, setChapterLimit, toast]
   )
 
 
+  const hasCredentials = Boolean(auth.username.trim() && auth.password.trim())
+  const statusText = String(taskExec.taskStatus?.status || '').toLowerCase()
+  const isRunning = ['started', 'running', 'pending', 'paused', 'cancelling'].includes(statusText)
+  const limitCount = Object.keys(chapterLimits).filter((id) => selectedCourses.includes(id)).length
+
+
   const startTask = useCallback(async () => {
     auth.setError('')
     auth.setNotice('')
+    setStartError(null)
 
     const availableCourseIds = new Set(auth.courses.map(getCourseId).filter(Boolean))
     const validSelectedCourses = selectedCourses.filter((courseId) => availableCourseIds.has(courseId))
 
 
     if (!auth.username.trim() || !auth.password.trim()) {
-      auth.setError('请先填写账号和密码。')
+      setStartError({ title: '还没有登录学习通', detail: '先在「账号」里登录学习通，再开始刷课。', actions: ['relogin'] })
       return
     }
     if (validSelectedCourses.length === 0) {
-      auth.setError('请至少选择一门课程。')
+      setStartError({ title: '还没有选择课程', detail: '在「选择课程」里勾选至少一门课程。', actions: ['courses'] })
       return
     }
 
@@ -204,14 +230,8 @@ export default function ChaoxingFanya() {
             token: taskConfig.tikuToken.trim(),
             coverage_threshold: taskConfig.coverageThreshold,
             judge_mapping: {
-              correct: taskConfig.correctOptions
-                .split(',')
-                .map((item) => item.trim())
-                .filter(Boolean),
-              wrong: taskConfig.wrongOptions
-                .split(',')
-                .map((item) => item.trim())
-                .filter(Boolean)
+              correct: splitList(taskConfig.correctOptions),
+              wrong: splitList(taskConfig.wrongOptions),
             },
             submit_mode: taskConfig.submitMode
           },
@@ -244,10 +264,11 @@ export default function ChaoxingFanya() {
           true
         )
       )
-      taskExec.appendLogs([{ timestamp: new Date().toISOString(), level: 'success', message: `任务已创建：${resp.task_id}` }])
+      taskExec.appendLogs([{ timestamp: new Date().toISOString(), level: 'success', message: '任务已创建，正在准备' }])
       setActiveTab('tasks')
     } catch (err) {
-      auth.setError(err?.message || '启动任务失败。')
+      // Explained next to the start button with a way forward, not as a toast.
+      setStartError(describeStartError(err))
     } finally {
       taskExec.setLoading(false)
     }
@@ -261,9 +282,51 @@ export default function ChaoxingFanya() {
   ])
 
 
-  const statusText = String(taskExec.taskStatus?.status || '').toLowerCase()
-  const isRunning = ['started', 'running', 'pending', 'paused', 'cancelling'].includes(statusText)
+  const showActiveTask = useCallback(async () => {
+    setStartError(null)
+    setActiveTab('tasks')
+    const list = await taskExec.reloadHistory?.()
+    const active = Array.isArray(list) ? list.find((task) => RESTORE_STATUSES.has(task.status)) : null
+    if (active?.task_id) taskExec.selectTaskFromHistory(active.task_id)
+  }, [setActiveTab, taskExec])
 
+  const handleAction = useCallback((action) => {
+    if (action === 'relogin') setActiveTab('account')
+    else if (action === 'settings') setActiveTab('settings')
+    else if (action === 'courses') setActiveTab('courses')
+    else if (action === 'tasks') void showActiveTask()
+    else if (action === 'retry') {
+      if (!hasCredentials) setActiveTab('account')
+      else if (selectedCourses.length === 0) setActiveTab('courses')
+      else void startTask()
+    }
+  }, [hasCredentials, selectedCourses.length, setActiveTab, showActiveTask, startTask])
+
+  const handleLogin = useCallback(async (event) => {
+    const ok = await auth.handleLogin(event)
+    if (ok) {
+      setStartError(null)
+      setActiveTab('courses')
+    }
+  }, [auth, setActiveTab])
+
+  const view = useMemo(() => describeTask(taskExec.taskStatus, taskExec.logs), [taskExec.taskStatus, taskExec.logs])
+
+  const startBar = (props = {}) => (
+    <StartBar
+      selectedCount={selectedCourses.length}
+      limitCount={limitCount}
+      summary={configSummary(taskConfig)}
+      loading={taskExec.loading}
+      isRunning={isRunning}
+      canStart={hasCredentials}
+      blockedReason={hasCredentials ? '' : '先在「账号」里登录学习通。'}
+      startError={startError}
+      onStart={startTask}
+      onAction={handleAction}
+      {...props}
+    />
+  )
 
   const loginSection = (
     <LoginSection
@@ -272,7 +335,8 @@ export default function ChaoxingFanya() {
       password={auth.password}
       setPassword={auth.setPassword}
       loginLoading={auth.loginLoading}
-      handleLogin={auth.handleLogin}
+      handleLogin={handleLogin}
+      loginError={loginError}
     />
   )
 
@@ -283,8 +347,8 @@ export default function ChaoxingFanya() {
         title="课程学习"
         actions={(
           <>
-            {isRunning && (
-              <button type="button" onClick={() => setActiveTab('tasks')} className="min-h-[40px] rounded-full bg-primary/10 px-4 text-sm font-semibold text-primary">
+            {isRunning && activeTab !== 'tasks' && (
+              <button type="button" onClick={() => setActiveTab('tasks')} className="min-h-[44px] rounded-full bg-primary/10 px-4 text-sm font-semibold text-primary">
                 查看运行中的任务
               </button>
             )}
@@ -299,10 +363,30 @@ export default function ChaoxingFanya() {
         <section id="fanya-panel-courses" role="tabpanel" aria-labelledby="fanya-tab-courses" tabIndex="0" className="space-y-4">
           {auth.courses.length === 0 ? (
             auth.loggedIn ? (
-              <div className={`${CARD} flex flex-wrap items-center justify-between gap-3`}>
-                <p role="status" className="text-sm text-text-muted">{auth.coursesLoading ? '正在获取课程...' : '这个账号暂无课程；在学习通加入课程后可重新获取。'}</p>
-                <button type="button" onClick={auth.loadCourses} disabled={auth.coursesLoading || auth.loginLoading} className="min-h-[44px] rounded-xl border border-border px-4 text-sm font-semibold disabled:opacity-60">重新获取课程</button>
-              </div>
+              auth.coursesLoading ? (
+                <p role="status" className={`${CARD} flex items-center gap-2 text-sm text-text-muted`}>
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />正在获取课程…
+                </p>
+              ) : coursesError ? (
+                <AttentionPanel
+                  id="fanya-courses-error"
+                  role="alert"
+                  attention={{ tone: 'danger', title: '课程没有加载出来', summary: `${translateTaskMessage(coursesError)}。可以重试；如果提示登录失效，请重新登录学习通。`, actions: ['retry', 'relogin'] }}
+                  labels={{ retry: '重新获取课程' }}
+                  onAction={(action) => (action === 'retry' ? void auth.loadCourses() : setActiveTab('account'))}
+                />
+              ) : (
+                <EmptyState
+                  icon={BookOpen}
+                  title="这个账号暂无课程"
+                  hint="在学习通 App 里加入课程后，回来点「重新获取课程」。"
+                  action={(
+                    <button type="button" onClick={auth.loadCourses} disabled={auth.loginLoading} className="clay-button-secondary min-h-[44px] gap-1.5 px-4 text-sm">
+                      <RefreshCw className="h-4 w-4" aria-hidden="true" />重新获取课程
+                    </button>
+                  )}
+                />
+              )
             ) : (
               <div className="max-w-2xl">{loginSection}</div>
             )
@@ -313,18 +397,17 @@ export default function ChaoxingFanya() {
                 selectedCourses={selectedCourses}
                 setSelectedCourses={setSelectedCourses}
                 chapters={chapters}
+                chapterStatus={chapterStatus}
                 expanded={expanded}
                 toggleExpand={toggleExpand}
                 loadCourses={auth.loadCourses}
                 chapterLimits={chapterLimits}
                 setChapterLimit={setChapterLimit}
+                loadError={coursesError ? translateTaskMessage(coursesError) : ''}
               />
-              <div className={`${CARD} flex flex-wrap items-center justify-between gap-4`}>
-                <p className="text-sm text-text-muted">已选 <strong className="text-text">{selectedCourses.length}</strong> 门课程</p>
-                <button type="button" onClick={() => setActiveTab('settings')} disabled={selectedCourses.length === 0} className="min-h-[44px] rounded-xl bg-primary px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">下一步：学习配置</button>
-              </div>
+              {startBar({ sticky: true, onEditSettings: () => setActiveTab('settings') })}
               <details className={CARD}>
-                <summary className="cursor-pointer font-semibold text-text">查看课程内容（活动、章节、资料、作业…）</summary>
+                <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-text">查看课程内容（活动、章节、资料、作业…）</summary>
                 <div className="mt-4"><CoursePortalSection courses={auth.courses} selectedCourses={selectedCourses} /></div>
               </details>
             </>
@@ -335,34 +418,57 @@ export default function ChaoxingFanya() {
       {activeTab === 'settings' && (
         <section id="fanya-panel-settings" role="tabpanel" aria-labelledby="fanya-tab-settings" tabIndex="0" className="space-y-4">
           <ConfigSection {...taskConfig} />
-          <div className={`${CARD} flex flex-wrap items-center justify-between gap-3`}>
-            <p className="text-sm text-text-muted">配置自动保存在本机 · 已选 {selectedCourses.length} 门课程</p>
-            <button type="button" onClick={() => setActiveTab('tasks')} className="min-h-[44px] rounded-xl bg-primary px-5 text-sm font-semibold text-white">下一步：确认并执行</button>
-          </div>
+          {startBar()}
         </section>
       )}
 
       {activeTab === 'tasks' && (
         <section id="fanya-panel-tasks" role="tabpanel" aria-labelledby="fanya-tab-tasks" tabIndex="0" className="space-y-4">
-          <div className={`${CARD} flex flex-wrap items-center justify-between gap-3`}>
-            <div>
-              <h2 className="font-semibold text-text">本次学习任务</h2>
-              <p className="mt-1 text-sm text-text-muted">{selectedCourses.length} 门课程 · {taskConfig.speed.toFixed(1)} 倍速 · {taskConfig.concurrency} 个并发章节 · {Object.keys(chapterLimits).filter((id) => selectedCourses.includes(id)).length} 门设了章节终点</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {(!auth.username.trim() || !auth.password.trim())
-                ? <button type="button" onClick={() => setActiveTab('account')} className="min-h-[44px] rounded-xl border border-border px-4 text-sm font-semibold">先登录学习通</button>
-                : <button type="button" onClick={() => setActiveTab('courses')} className="min-h-[44px] rounded-xl border border-border px-4 text-sm font-semibold">修改课程</button>}
-            </div>
-          </div>
-          <TaskControlSection taskId={taskExec.taskId} taskStatus={taskExec.taskStatus} loading={taskExec.loading} controlLoading={taskExec.controlLoading} isRunning={isRunning} statusText={statusText} startTask={startTask} controlTask={taskExec.controlTask} />
-          <LogSection logs={taskExec.logs} />
+          {taskExec.taskId ? (
+            <>
+              <TaskControlSection
+                taskId={taskExec.taskId}
+                taskStatus={taskExec.taskStatus}
+                logs={taskExec.logs}
+                view={view}
+                statusText={statusText}
+                controlTask={taskExec.controlTask}
+                controlLoading={taskExec.controlLoading}
+                pollError={taskExec.pollError}
+                onRefresh={taskExec.refreshTask}
+              />
+              <AttentionPanel id="fanya-task-attention" attention={view.attention} onAction={handleAction} />
+              {!isRunning && startBar({ onEditSettings: () => setActiveTab('settings') })}
+              <LogSection logs={taskExec.logs} />
+            </>
+          ) : taskExec.historyLoading ? (
+            <p role="status" className={`${CARD} flex items-center gap-2 text-sm text-text-muted`}>
+              <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />正在读取任务…
+            </p>
+          ) : (
+            <>
+              <EmptyState
+                icon={BookOpen}
+                title="还没有开始任务"
+                hint={auth.courses.length > 0 ? '选好课程后点「开始刷课」，进度和日志会显示在这里。' : '先登录学习通并选择课程，开始后进度和日志会显示在这里。'}
+              />
+              {startBar({ onEditSettings: () => setActiveTab('settings') })}
+            </>
+          )}
         </section>
       )}
 
       {activeTab === 'history' && (
         <section id="fanya-panel-history" role="tabpanel" aria-labelledby="fanya-tab-history" tabIndex="0">
-          <TaskHistorySection taskHistory={taskExec.taskHistory} taskId={taskExec.taskId} selectTaskFromHistory={async (task) => { setActiveTab('tasks'); await taskExec.selectTaskFromHistory(task) }} />
+          <TaskHistorySection
+            taskHistory={taskExec.taskHistory}
+            taskId={taskExec.taskId}
+            loading={taskExec.historyLoading}
+            error={taskExec.historyError}
+            onRetry={taskExec.reloadHistory}
+            onStartNew={() => setActiveTab('courses')}
+            selectTaskFromHistory={async (task) => { setActiveTab('tasks'); await taskExec.selectTaskFromHistory(task) }}
+          />
         </section>
       )}
 
@@ -372,7 +478,7 @@ export default function ChaoxingFanya() {
           {auth.loggedIn && (
             <div className={`${CARD} flex flex-wrap items-center justify-between gap-3`}>
               <p className="text-sm text-text-muted">已加载 {auth.courses.length} 门课程</p>
-              <button type="button" onClick={() => setActiveTab('courses')} className="min-h-[44px] rounded-xl border border-border px-4 text-sm font-semibold">前往选择课程</button>
+              <button type="button" onClick={() => setActiveTab('courses')} className="clay-button-secondary min-h-[44px] px-4 text-sm">前往选择课程</button>
             </div>
           )}
         </section>

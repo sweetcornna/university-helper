@@ -34,6 +34,11 @@ export default function useAuthentication({ stopPolling }) {
 
   const [notice, setNotice] = useState('')
 
+  // Kept separately from `error` (which the page turns into a toast) so the
+  // login form and the course list can explain their own failure inline.
+  const [loginError, setLoginError] = useState('')
+  const [coursesError, setCoursesError] = useState('')
+
 
   const mountedRef = useRef(true)
   const courseRequestIdRef = useRef(0)
@@ -153,6 +158,7 @@ export default function useAuthentication({ stopPolling }) {
 
     setError('')
     setNotice('')
+    setCoursesError('')
     setCoursesLoading(true)
 
     try {
@@ -166,7 +172,11 @@ export default function useAuthentication({ stopPolling }) {
       setCourses(list)
       setNotice(list.length > 0 ? `已获取 ${list.length} 门课程。` : '未查询到课程。')
     } catch (err) {
-      if (isCurrentRequest()) setError(err?.message || '获取课程失败。')
+      if (isCurrentRequest()) {
+        const message = err?.message || '获取课程失败。'
+        setCoursesError(message)
+        setError(message)
+      }
     } finally {
       if (isCurrentRequest()) setCoursesLoading(false)
     }
@@ -182,7 +192,7 @@ export default function useAuthentication({ stopPolling }) {
       event.preventDefault()
 
 
-      if (!mountedRef.current) return
+      if (!mountedRef.current) return false
 
 
       const loginUsername = username.trim()
@@ -195,13 +205,17 @@ export default function useAuthentication({ stopPolling }) {
       setNotice('')
 
 
+      setLoginError('')
+
       if (!loginUsername || !loginPassword.trim()) {
 
 
-        setError('请输入超星账号和密码。')
+        setLoginError('请输入学习通账号和密码。')
+
+        setError('请输入学习通账号和密码。')
 
 
-        return
+        return false
 
 
       }
@@ -225,19 +239,25 @@ export default function useAuthentication({ stopPolling }) {
         })
 
 
-        if (!loginResp || !mountedRef.current) return
+        if (!loginResp || !mountedRef.current) return false
 
 
         setUsername(loginUsername)
         setPassword(loginPassword)
         setLoggedIn(true)
         await loadCourses()
+        return true
 
 
       } catch (err) {
 
 
-        if (mountedRef.current) setError(err?.message || '登录失败。')
+        if (mountedRef.current) {
+          const message = err?.message || '登录失败。'
+          setLoginError(message)
+          setError(message)
+        }
+        return false
 
 
       } finally {
@@ -267,6 +287,8 @@ export default function useAuthentication({ stopPolling }) {
     courses, setCourses,
     error, setError,
     notice, setNotice,
+    loginError,
+    coursesError,
     callApi,
     handleLogin,
     loadCourses,

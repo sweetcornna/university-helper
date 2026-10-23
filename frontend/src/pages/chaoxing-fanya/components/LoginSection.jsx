@@ -1,4 +1,5 @@
 import { Input } from '../../../components'
+import { translateTaskMessage } from '../../../utils/taskMessages'
 import { CARD } from '../utils'
 
 export default function LoginSection({
@@ -8,11 +9,12 @@ export default function LoginSection({
   setPassword,
   loginLoading,
   handleLogin,
+  loginError = '',
 }) {
   return (
-    <section className={CARD}>
-      <h2 className="text-lg font-semibold text-text">登录学习通</h2>
-      <p className="mb-4 mt-1 text-sm text-text-muted">密码只在本页使用，不会保存。</p>
+    <section aria-labelledby="fanya-login-title" className={CARD}>
+      <h2 id="fanya-login-title" className="text-lg font-semibold text-text">登录学习通</h2>
+      <p className="mb-4 mt-1 text-sm text-text-muted">登录后会自动读取课程。密码只在本页使用，不会保存。</p>
 
       <form className="grid gap-4 md:grid-cols-2" onSubmit={handleLogin} noValidate>
         <Input
@@ -38,11 +40,17 @@ export default function LoginSection({
           required
         />
 
+        {loginError && (
+          <p role="alert" className="rounded-xl border border-danger/30 bg-danger-surface px-3 py-2.5 text-sm text-danger md:col-span-2">
+            {translateTaskMessage(loginError)}。请检查账号和密码；如果学习通要求验证码，先在学习通 App 里登录一次再试。
+          </p>
+        )}
+
         <button
           type="submit"
           disabled={loginLoading}
           aria-busy={loginLoading}
-          className="min-h-[44px] cursor-pointer rounded-xl bg-primary px-6 py-3 font-medium text-white transition duration-200 hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-text-muted md:col-span-2"
+          className="clay-button-primary min-h-[48px] md:col-span-2"
         >
           {loginLoading ? '登录中...' : '登录并获取课程'}
         </button>
