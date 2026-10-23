@@ -1,30 +1,15 @@
+import { AlertTriangle } from 'lucide-react'
+
 import { CARD, toNum } from '../utils'
+import { ENDPOINT_PROVIDERS, SUBMIT_MODES, TIKU_PROVIDERS, UNOPENED_STRATEGIES, providerLabel } from '../configOptions'
 
-const UNOPENED_STRATEGIES = [
-  { value: 'retry', label: '重试' },
-  { value: 'continue', label: '跳过' },
-  { value: 'ask', label: '手动处理' },
-]
-
-const SUBMIT_MODES = [
-  { value: 'submit', label: '自动提交' },
-  { value: 'save', label: '仅保存' },
-]
-
-const TIKU_PROVIDERS = [
-  { value: 'TikuYanxi', label: '言溪题库', hint: '通用题库（需 Token）' },
-  { value: 'TikuGo', label: 'GO 题库', hint: '免费搜题源' },
-  { value: 'TikuLike', label: 'Like 题库', hint: '备用题库（需 Token）' },
-  { value: 'TikuAdapter', label: '题库适配器', hint: '自定义适配' },
-  { value: 'AI', label: 'AI 智能答题', hint: '无匹配时由 AI 作答' },
-  { value: 'SiliconFlow', label: '硅基流动', hint: 'AI 服务（需 Token）' },
-  { value: 'LocalCache', label: '本地缓存', hint: '仅用已缓存答案' },
-]
+const FIELD = 'clay-input'
+const LABEL = 'mb-1 block text-sm font-medium text-text'
 
 function PillGroup({ label, options, value, onChange }) {
   return (
     <div role="group" aria-label={label}>
-      <span className="mb-2 block text-sm font-medium text-text/80">{label}</span>
+      <span className="mb-2 block text-sm font-medium text-text">{label}</span>
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => {
           const active = value === opt.value
@@ -34,17 +19,17 @@ function PillGroup({ label, options, value, onChange }) {
               type="button"
               aria-pressed={active}
               onClick={() => onChange(opt.value)}
-              className={`flex flex-col items-start rounded-xl border px-4 py-2 text-sm font-medium transition-all duration-200 cursor-pointer ${
+              className={`flex min-h-[44px] flex-col items-start justify-center rounded-xl border px-4 py-2 text-sm font-medium transition-all duration-200 cursor-pointer ${
                 active
                   ? 'border-transparent bg-primary text-white shadow-md'
-                  : 'border-border bg-surface text-text/70 hover:border-border hover:bg-surface-hover'
+                  : 'border-border bg-surface text-text hover:border-primary/40 hover:bg-surface-hover'
               }`}
             >
               <span className="flex items-center gap-1.5">
                 {opt.label}
               </span>
               {opt.hint && (
-                <span className={`text-[11px] ${active ? 'text-white/70' : 'text-text-muted'}`}>
+                <span className={`text-[11px] ${active ? 'text-white/85' : 'text-text-muted'}`}>
                   {opt.hint}
                 </span>
               )}
@@ -66,7 +51,7 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
   }
   return (
     <div role="group" aria-label={label}>
-      <span className="mb-2 block text-sm font-medium text-text/80">{label}</span>
+      <span className="mb-2 block text-sm font-medium text-text">{label}</span>
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => {
           const order = value.indexOf(opt.value)
@@ -78,10 +63,10 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
               aria-pressed={active}
               aria-label={`${opt.label}${active ? `，回退顺序 ${order + 1}` : ''}`}
               onClick={() => toggle(opt.value)}
-              className={`flex flex-col items-start rounded-xl border px-4 py-2 text-sm font-medium transition-all duration-200 cursor-pointer ${
+              className={`flex min-h-[44px] flex-col items-start justify-center rounded-xl border px-4 py-2 text-sm font-medium transition-all duration-200 cursor-pointer ${
                 active
                   ? 'border-transparent bg-primary text-white shadow-md'
-                  : 'border-border bg-surface text-text/70 hover:border-border hover:bg-surface-hover'
+                  : 'border-border bg-surface text-text hover:border-primary/40 hover:bg-surface-hover'
               }`}
             >
               <span className="flex items-center gap-1.5">
@@ -96,7 +81,7 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
                 {opt.label}
               </span>
               {opt.hint && (
-                <span className={`text-[11px] ${active ? 'text-white/70' : 'text-text-muted'}`}>
+                <span className={`text-[11px] ${active ? 'text-white/85' : 'text-text-muted'}`}>
                   {opt.hint}
                 </span>
               )}
@@ -132,13 +117,35 @@ export default function ConfigSection({
   setNotifyService,
   notifyUrl,
   setNotifyUrl,
+  resetToDefaults,
 }) {
+  const endpointProviders = (Array.isArray(tikuProvider) ? tikuProvider : [tikuProvider]).filter((value) => ENDPOINT_PROVIDERS.has(value))
+
   return (
-    <section className={`${CARD} space-y-6`}>
+    <section aria-labelledby="fanya-config-title" className={`${CARD} space-y-6`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="fanya-config-title" className="text-lg font-semibold text-text">学习配置</h2>
+          <p className="mt-1 text-sm text-text-muted">不改也能直接开始，默认值适合大多数课程。设置会记在这台设备上（题库 Token 和通知地址除外）。</p>
+        </div>
+        {resetToDefaults && (
+          <button type="button" onClick={resetToDefaults} className="clay-button-secondary min-h-[44px] px-4 text-sm">恢复默认</button>
+        )}
+      </div>
+
+      {endpointProviders.length > 0 && (
+        <p role="alert" className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning-surface px-3 py-2.5 text-sm text-text">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+          <span>
+            {endpointProviders.map((value) => `「${providerLabel(value)}」`).join('、')}需要一个公网可访问的服务地址，网页里还不能填写，选上后任务会启动失败。请在下方「答题与题库设置」里取消。
+          </span>
+        </p>
+      )}
+
       {/* Everyday playback settings */}
       <div className="grid gap-5 md:grid-cols-2">
         <div className="space-y-2">
-          <label htmlFor="fanya-speed" className="text-sm font-medium text-text/80">
+          <label htmlFor="fanya-speed" className="text-sm font-medium text-text">
             播放速度：{speed.toFixed(1)}x
           </label>
           <input
@@ -154,7 +161,7 @@ export default function ConfigSection({
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="fanya-concurrency" className="text-sm font-medium text-text/80">
+          <label htmlFor="fanya-concurrency" className="text-sm font-medium text-text">
             并发章节：{concurrency}
           </label>
           <input
@@ -186,8 +193,8 @@ export default function ConfigSection({
       </div>
 
       {/* Answer-source & advanced settings — collapsed by default */}
-      <details className="rounded-xl border border-border bg-surface-hover/60 p-4">
-        <summary className="cursor-pointer text-sm font-medium text-text/80">
+      <details className="rounded-xl border border-border bg-surface-hover/60 p-4" open={endpointProviders.length > 0 || undefined}>
+        <summary className="flex min-h-[44px] cursor-pointer items-center text-sm font-medium text-text">
           答题与题库设置（高级）
         </summary>
 
@@ -201,20 +208,23 @@ export default function ConfigSection({
           />
 
           <div>
-            <label htmlFor="fanya-tiku-token" className="mb-1 block text-sm font-medium text-text/80">
+            <label htmlFor="fanya-tiku-token" className={LABEL}>
               题库 Token（可选）
             </label>
             <input
               id="fanya-tiku-token"
-              className="w-full rounded-xl border border-border bg-surface px-4 py-3"
+              className={FIELD}
               placeholder="部分题库 / AI 服务需要填写"
+              autoComplete="off"
+              aria-describedby="fanya-tiku-token-hint"
               value={tikuToken}
               onChange={(event) => setTikuToken(event.target.value)}
             />
+            <p id="fanya-tiku-token-hint" className="mt-1.5 text-xs text-text-muted">只在本页使用，刷新页面后需要重新填写。不填时，需要 Token 的题库会被跳过，由其余题库作答。</p>
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="fanya-coverage" className="text-sm font-medium text-text/80">
+            <label htmlFor="fanya-coverage" className="text-sm font-medium text-text">
               题库覆盖阈值：{coverageThreshold.toFixed(2)}
             </label>
             <input
@@ -232,12 +242,12 @@ export default function ConfigSection({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="fanya-correct" className="mb-1 block text-sm font-medium text-text/80">
+              <label htmlFor="fanya-correct" className={LABEL}>
                 判断题「正确」映射
               </label>
               <input
                 id="fanya-correct"
-                className="w-full rounded-xl border border-border bg-surface px-4 py-3"
+                className={FIELD}
                 placeholder="例如：对,正确,是"
                 value={correctOptions}
                 onChange={(event) => setCorrectOptions(event.target.value)}
@@ -245,12 +255,12 @@ export default function ConfigSection({
             </div>
 
             <div>
-              <label htmlFor="fanya-wrong" className="mb-1 block text-sm font-medium text-text/80">
+              <label htmlFor="fanya-wrong" className={LABEL}>
                 判断题「错误」映射
               </label>
               <input
                 id="fanya-wrong"
-                className="w-full rounded-xl border border-border bg-surface px-4 py-3"
+                className={FIELD}
                 placeholder="例如：错,错误,否"
                 value={wrongOptions}
                 onChange={(event) => setWrongOptions(event.target.value)}
@@ -260,12 +270,12 @@ export default function ConfigSection({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="fanya-notify-service" className="mb-1 block text-sm font-medium text-text/80">
+              <label htmlFor="fanya-notify-service" className={LABEL}>
                 通知服务（可选）
               </label>
               <input
                 id="fanya-notify-service"
-                className="w-full rounded-xl border border-border bg-surface px-4 py-3"
+                className={FIELD}
                 placeholder="如 bark / server酱"
                 value={notifyService}
                 onChange={(event) => setNotifyService(event.target.value)}
@@ -273,12 +283,12 @@ export default function ConfigSection({
             </div>
 
             <div>
-              <label htmlFor="fanya-notify-url" className="mb-1 block text-sm font-medium text-text/80">
+              <label htmlFor="fanya-notify-url" className={LABEL}>
                 通知地址（可选）
               </label>
               <input
                 id="fanya-notify-url"
-                className="w-full rounded-xl border border-border bg-surface px-4 py-3"
+                className={FIELD}
                 placeholder="任务完成后推送到此地址"
                 value={notifyUrl}
                 onChange={(event) => setNotifyUrl(event.target.value)}

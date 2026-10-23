@@ -47,6 +47,15 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
 
   const [controlLoading, setControlLoading] = useState({})
 
+  // Last snapshot failure for the selected task ({ message, missing }), shown
+  // inline next to the status. The toast fires once per distinct message per
+  // task so a failing poll does not repeat it every POLL_MS.
+  const [pollError, setPollError] = useState(null)
+  const reportedPollErrorRef = useRef('')
+
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyError, setHistoryError] = useState('')
+
 
   const isCurrentGeneration = useCallback((generation) => generation === taskGenerationRef.current, [])
 
@@ -66,6 +75,8 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       taskGenerationRef.current += 1
       taskIdRef.current = normalizedId
       setTaskStatus(null)
+      setPollError(null)
+      reportedPollErrorRef.current = ''
       setLogs([])
       setLogCursor(0)
       logCursorRef.current = 0
@@ -301,9 +312,21 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
       pollInFlightRef.current = inFlight
       try {
         await loadTaskSnapshot(targetId, options)
+        if (isCurrentTask(generation, targetId)) {
+          setPollError(null)
+          reportedPollErrorRef.current = ''
+        }
       } catch (err) {
         if (isCurrentTask(generation, targetId)) {
-          setError(err?.message || fallbackError)
+          const message = err?.message || fallbackError
+          // 404: the record expired or was cleaned up; polling cannot recover.
+          const missing = Number(err?.status) === 404
+          if (missing) stopPolling()
+          setPollError({ message, missing })
+          if (reportedPollErrorRef.current !== message) {
+            reportedPollErrorRef.current = message
+            setError(message)
+          }
         }
       } finally {
         if (pollInFlightRef.current === inFlight) {
@@ -311,93 +334,64 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
         }
       }
     },
-    [isCurrentTask, loadTaskSnapshot, setError]
+    [isCurrentTask, loadTaskSnapshot, setError, stopPolling]
   )
 
+  const refreshTask = useCallback(() => {
+    reportedPollErrorRef.current = ''
+    void runTaskSnapshot(taskIdRef.current)
+  }, [runTaskSnapshot])
+
+
+  // Load the task list. On mount it also selects the task to show (an active
+  // one first, else the newest); a manual reload only refreshes the list.
+  const loadHistory = useCallback(async ({ restore = false, isActive = () => true } = {}) => {
+    const restoreGeneration = taskGenerationRef.current
+    const canWrite = () => isActive() && (!restore || isCurrentGeneration(restoreGeneration))
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      const resp = await callApi('/course/tasks')
+      if (!resp || !canWrite()) return
+
+      const rawTasks = Array.isArray(resp) ? resp : resp?.tasks || resp?.data || []
+      const normalizedTasks = rawTasks
+        .map(normalizeTaskItem)
+        .filter(Boolean)
+        .sort((a, b) => toTimestamp(b.updated_at) - toTimestamp(a.updated_at))
+
+      if (!canWrite()) return normalizedTasks
+      if (!restore) {
+        setTaskHistory((prev) => mergeTaskHistory(prev, normalizedTasks))
+        return normalizedTasks
+      }
+      setTaskHistory(normalizedTasks)
+      if (normalizedTasks.length === 0) return normalizedTasks
+
+      const restoringTask = normalizedTasks.find((item) => RESTORE_STATUSES.has(item.status)) || normalizedTasks[0]
+      if (restoringTask?.task_id) setTaskId(restoringTask.task_id)
+      return normalizedTasks
+    } catch (err) {
+      if (!canWrite()) return null
+      const message = err?.message || '恢复任务状态失败。'
+      setHistoryError(message)
+      if (restore) setError((prev) => prev || message)
+      return null
+    } finally {
+      if (isActive()) setHistoryLoading(false)
+    }
+  }, [callApi, isCurrentGeneration, setError, setTaskId])
 
   // Restore tasks on mount
   useEffect(() => {
-
-
     let active = true
-    const restoreGeneration = taskGenerationRef.current
-
-
-    const restoreTasks = async () => {
-
-
-      try {
-
-
-        const resp = await callApi('/course/tasks')
-
-
-        if (!resp || !active || !isCurrentGeneration(restoreGeneration)) return
-
-
-        const rawTasks = Array.isArray(resp) ? resp : resp?.tasks || resp?.data || []
-
-
-        const normalizedTasks = rawTasks
-
-
-          .map(normalizeTaskItem)
-
-
-          .filter(Boolean)
-
-
-          .sort((a, b) => toTimestamp(b.updated_at) - toTimestamp(a.updated_at))
-
-
-        if (!active || !isCurrentGeneration(restoreGeneration)) return
-
-
-        setTaskHistory(normalizedTasks)
-
-
-        if (normalizedTasks.length === 0) return
-
-
-        const restoringTask = normalizedTasks.find((item) => RESTORE_STATUSES.has(item.status)) || normalizedTasks[0]
-
-
-        if (!restoringTask?.task_id) return
-
-
-        setTaskId(restoringTask.task_id)
-
-
-
-
-      } catch (err) {
-
-
-        if (!active || !isCurrentGeneration(restoreGeneration)) return
-
-
-        setError((prev) => prev || err?.message || '恢复任务状态失败。')
-
-
-      }
-
-
-    }
-
-
-    void restoreTasks()
-
-
+    void loadHistory({ restore: true, isActive: () => active })
     return () => {
-
-
       active = false
-
-
     }
+  }, [loadHistory])
 
-
-  }, [callApi, isCurrentGeneration, setError, setTaskId])
+  const reloadHistory = useCallback(() => loadHistory(), [loadHistory])
 
 
   const selectTaskFromHistory = useCallback(
@@ -567,6 +561,11 @@ export default function useTaskExecution({ callApi, setError, setNotice, pollRef
     taskHistory, setTaskHistory,
     loading, setLoading,
     controlLoading,
+    pollError,
+    refreshTask,
+    historyLoading,
+    historyError,
+    reloadHistory,
     appendLogs,
     loadTaskSnapshot,
     selectTaskFromHistory,
