@@ -7,6 +7,7 @@ from base64 import b64encode
 
 import requests
 
+from .auth import build_cookie_jar
 from .crypto import HOME_KEY, VIDEO_KEY, WatchPoint, encrypt_secret_str, get_ev, hms
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ class ZhihuishuLearning:
         self.proxies = proxies or {}
         self.uuid = uuid or ""
         self.session = requests.Session()
-        self.session.cookies.update(cookies)
+        self.session.cookies.update(build_cookie_jar(cookies))
 
     def _signed_post(self, url: str, payload: dict, key: bytes, site: str | None = None):
         """统一的 AES 签名 POST（对齐参考实现 zhidaoQuery）。
@@ -87,7 +88,9 @@ class ZhihuishuLearning:
         ``dateFormate`` 作为顶层明文字段一起发；可按需带 Origin/Referer。
         """
         data = dict(payload)
-        ts = int(time.time() * 1000)
+        # Whole seconds in milliseconds, exactly like the reference client and
+        # the pre-1.6.0 code that the studyservice gateway accepted.
+        ts = int(time.time()) * 1000
         data["dateFormate"] = ts
         form = {"secretStr": encrypt_secret_str(data, key=key), "dateFormate": ts}
         headers = {"Origin": site, "Referer": site + "/"} if site else None

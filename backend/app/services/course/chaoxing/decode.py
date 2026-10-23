@@ -963,6 +963,9 @@ def _extract_points_from_chapter(chapter_unit) -> list[dict[str, Any]]:
     return point_list
 
 
+_CARD_ARG_ASSIGNMENT = re.compile(r"\bmArg\s*=\s*(?=\{)")
+
+
 def decode_course_card(html_text: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     解析任务点列表页面，提取任务点信息
@@ -981,7 +984,9 @@ def decode_course_card(html_text: str) -> tuple[list[dict[str, Any]], dict[str, 
 
     # Decode the JSON value directly: regex cannot delimit nested JSON or a
     # string containing "};", and stripping spaces corrupts attachment names.
-    assignment = re.search(r"\bmArg\s*=\s*", html_text)
+    # The real page declares `var mArg = "";` first and assigns the object
+    # later inside `try{ mArg = {...}; }`, so only match an object assignment.
+    assignment = _CARD_ARG_ASSIGNMENT.search(html_text)
     if assignment is None:
         return [], {}
     try:

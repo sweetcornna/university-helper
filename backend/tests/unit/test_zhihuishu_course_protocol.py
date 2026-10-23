@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from app.services.course.zhihuishu.adapter import ZhihuishuAdapter
+from app.services.course.zhihuishu.answer import ZhihuishuAnswer
 from app.services.course.zhihuishu.auth import ZhihuishuAuth
 from app.services.course.zhihuishu.crypto import VIDEO_KEY, Cipher, get_ev
 from app.services.course.zhihuishu.learning import ZhihuishuLearning
@@ -332,3 +333,34 @@ def test_video_cipher_pads_utf8_bytes():
     cipher = Cipher(VIDEO_KEY)
 
     assert cipher.decrypt(cipher.encrypt(value)) == value
+
+
+def _cookie_header(session, url):
+    import requests
+
+    prepared = session.prepare_request(requests.Request("POST", url))
+    return sorted(part.split("=")[0] for part in prepared.headers.get("Cookie", "").split("; ") if part)
+
+
+def test_onlineservice_session_cookie_is_not_sent_to_studyservice():
+    # Regression for v1.6.0: the current login callback leaves a host-only
+    # onlineservice SESSION. Sent to studyservice, gologin keeps it instead of
+    # issuing a studyservice session and every videolist call returns 401.
+    cookies = {"CASLOGC": "caslogc", "SESSION": "onlineservice-session", "acw_tc": "x"}
+
+    for session in (ZhihuishuLearning(cookies).session, ZhihuishuAnswer(cookies, {}).session):
+        assert "SESSION" not in _cookie_header(session, "https://studyservice-api.zhihuishu.com/gateway/t/v1/x")
+        assert "CASLOGC" in _cookie_header(session, "https://studyservice-api.zhihuishu.com/gateway/t/v1/x")
+        assert "SESSION" in _cookie_header(session, "https://onlineservice-api.zhihuishu.com/gateway/t/v1/x")
+
+
+def test_signed_requests_use_whole_second_timestamps(monkeypatch):
+    monkeypatch.setattr("app.services.course.zhihuishu.learning.time.time", lambda: 1760000000.987)
+    learning = ZhihuishuLearning({})
+    learning.session = Mock()
+
+    learning._signed_post("https://studyservice-api.zhihuishu.com/x", {"a": 1}, key=VIDEO_KEY)
+
+    form = learning.session.post.call_args.kwargs["data"]
+    assert form["dateFormate"] == 1760000000000
+    assert json.loads(Cipher(VIDEO_KEY).decrypt(form["secretStr"]))["dateFormate"] == 1760000000000

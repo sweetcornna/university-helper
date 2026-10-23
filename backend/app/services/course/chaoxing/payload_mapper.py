@@ -46,10 +46,16 @@ def normalize_tiku_config(raw_config: Any) -> dict[str, Any]:
         if submit_mode:
             config["submit"] = "true" if submit_mode in {"submit", "auto", "direct"} else "false"
 
-    provider = str(config.get("provider") or "").strip()
+    providers = [name.strip() for name in str(config.get("provider") or "").split(",") if name.strip()]
     token_required_providers = {"TikuYanxi", "TikuLike"}
-    if provider in token_required_providers and not token_text:
-        # Disable token-based tiku provider when no token is supplied.
+    if not token_text:
+        # Drop token-based providers when no token is supplied, including from a
+        # fallback chain such as the default "TikuYanxi,TikuGo"; otherwise every
+        # task logs an init ERROR ("'tokens'") for a provider that cannot work.
+        providers = [name for name in providers if name not in token_required_providers]
+    if providers:
+        config["provider"] = ",".join(providers)
+    else:
         config.pop("provider", None)
 
     return config

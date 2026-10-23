@@ -14,6 +14,20 @@ LOGIN_SERVICE = (
     "https://onlineservice-api.zhihuishu.com/gateway/f/v1/login/gologin"
     "?fromurl=https%3A%2F%2Fonlineweb.zhihuishu.com%2F"
 )
+# The login callback above leaves a host-only ``SESSION`` cookie for
+# onlineservice-api. Login cookies are kept as a flat dict, so without a domain
+# that cookie would also go to studyservice-api, which then keeps the foreign
+# session instead of issuing its own on gologin and answers every video request
+# with 401. Scope such cookies back to the host that set them.
+HOST_ONLY_COOKIES = {"SESSION": "onlineservice-api.zhihuishu.com"}
+
+
+def build_cookie_jar(cookies: dict | None) -> requests.cookies.RequestsCookieJar:
+    """Cookie jar for API sessions with host-only cookies scoped to their host."""
+    jar = requests.cookies.RequestsCookieJar()
+    for name, value in (cookies or {}).items():
+        jar.set(name, value, domain=HOST_ONLY_COOKIES.get(name, ""))
+    return jar
 
 
 class ZhihuishuAuth:

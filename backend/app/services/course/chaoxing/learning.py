@@ -3,12 +3,13 @@ import asyncio
 import configparser
 import enum
 import operator
+import re
 import sys
 import threading
 import time
 import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from queue import Empty, PriorityQueue
 
 try:
@@ -367,12 +368,30 @@ def _process_jobs_inline(
     return None
 
 
+_URL_QUERY = re.compile(r"(https?://[^\s?#'\"]+)[?#][^\s'\"]*")
+
+
+def describe_exception(exc: BaseException, limit: int = 200) -> str:
+    """One-line ``Type: message`` summary that is safe to show to the user.
+
+    URL query strings are dropped because request errors can echo tokens.
+    """
+    text = _URL_QUERY.sub(r"\1", " ".join(str(exc).split()))
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    name = type(exc).__name__
+    return f"{name}: {text}" if text else name
+
+
 @dataclass(order=True)
 class ChapterTask:
     index: int
     point: dict[str, Any]
     result: ChapterResult = ChapterResult.PENDING
     tries: int = 0
+    # Summary of the exception from the latest attempt ("" if it did not raise).
+    error: str = field(default="", compare=False)
+    error_type: str = field(default="", compare=False)
 
 
 class JobProcessor:
@@ -427,6 +446,34 @@ class JobProcessor:
         with self._retry_lock:
             pending = self._pending_retries
         return self.task_queue.unfinished_tasks > 0 or pending > 0
+
+    def _process_task(self, task: ChapterTask) -> None:
+        """Run one attempt of a chapter and remember why it crashed, if it did."""
+        task.error = ""
+        task.error_type = ""
+        try:
+            task.result = process_chapter(self.chaoxing, self.course, task.point, self.speed, self.config)
+        except Exception as exc:
+            task.error = describe_exception(exc)
+            task.error_type = type(exc).__name__
+            logger.exception("Chapter processing crashed: {} ({})", task.point.get("title", "unknown"), task.error)
+            task.result = ChapterResult.ERROR
+
+    def _report_failure(self, task: ChapterTask, final: bool) -> None:
+        """Tell the caller about a failed attempt so the user sees why it is retried or skipped."""
+        callback = self.config.get("chapter_failure_callback")
+        if not callable(callback):
+            return
+        try:
+            callback(self.course, task, final=final, max_tries=self.max_tries)
+        except Exception:
+            logger.opt(exception=True).warning(
+                "chapter_failure_callback failed for {}", task.point.get("title", "unknown")
+            )
+
+    def _give_up(self, task: ChapterTask) -> None:
+        self.failed_tasks.append(task)
+        self._report_failure(task, final=True)
 
     def run(self):
         """Process this batch and always shut down the threads it starts.
@@ -606,11 +653,7 @@ class JobProcessor:
                     self._drain_pending_tasks()
                     return
 
-                try:
-                    task.result = process_chapter(self.chaoxing, self.course, task.point, self.speed, self.config)
-                except Exception:
-                    logger.exception("Chapter processing crashed: {}", task.point.get("title", "unknown"))
-                    task.result = ChapterResult.ERROR
+                self._process_task(task)
 
                 match task.result:
                     case ChapterResult.SUCCESS:
@@ -629,8 +672,10 @@ class JobProcessor:
                                 "请手动检查完成并提交再重试。或者在配置中配置(自动跳过关闭章节/开启题库并启用提交)",
                                 task.point["title"],
                             )
-                            self.failed_tasks.append(task)
+                            self._give_up(task)
                             break
+                        if task.tries == 1:
+                            self._report_failure(task, final=False)
                         time.sleep(1)
 
                     case ChapterResult.ERROR:
@@ -643,8 +688,10 @@ class JobProcessor:
                         )
                         if task.tries >= self.max_tries:
                             logger.error("Max retries reached for task: {}", task.point["title"])
-                            self.failed_tasks.append(task)
+                            self._give_up(task)
                             break
+                        if task.tries == 1:
+                            self._report_failure(task, final=False)
                         time.sleep(1)
 
                     case ChapterResult.CANCELLED:
@@ -654,7 +701,7 @@ class JobProcessor:
 
                     case _:
                         logger.error("Invalid task state {} for task {}", task.result, task.point["title"])
-                        self.failed_tasks.append(task)
+                        self._give_up(task)
                         break
 
     def _drain_pending_tasks(self):
@@ -704,11 +751,7 @@ class JobProcessor:
                     return
 
                 # 处理单个章节，并在需要时通过 config 中的回调上报章节完成进度
-                try:
-                    task.result = process_chapter(self.chaoxing, self.course, task.point, self.speed, self.config)
-                except Exception:
-                    logger.exception("Chapter processing crashed: {}", task.point.get("title", "unknown"))
-                    task.result = ChapterResult.ERROR
+                self._process_task(task)
 
                 # A run-level stop can be requested while process_chapter is in
                 # flight.  Do not create a fresh retry after shutdown starts.
@@ -732,9 +775,11 @@ class JobProcessor:
                                 "请手动检查完成并提交再重试。或者在配置中配置(自动跳过关闭章节/开启题库并启用提交)",
                                 task.point["title"],
                             )
-                            self.failed_tasks.append(task)
+                            self._give_up(task)
                             continue
 
+                        if task.tries == 1:
+                            self._report_failure(task, final=False)
                         # Hand the task to the retry pipeline and mark THIS
                         # processing pass done in the finally block below.
                         self._enqueue_retry(task, stop_event)
@@ -746,8 +791,10 @@ class JobProcessor:
                         )
                         if task.tries >= self.max_tries:
                             logger.error("Max retries reached for task: {}", task.point["title"])
-                            self.failed_tasks.append(task)
+                            self._give_up(task)
                             continue
+                        if task.tries == 1:
+                            self._report_failure(task, final=False)
                         # See NOT_OPEN branch: retry_thread re-puts the task,
                         # while this pass is balanced in finally below.
                         self._enqueue_retry(task, stop_event)
@@ -759,7 +806,7 @@ class JobProcessor:
 
                     case _:
                         logger.error("Invalid task state {} for task {}", task.result, task.point["title"])
-                        self.failed_tasks.append(task)
+                        self._give_up(task)
             finally:
                 self.task_queue.task_done()
 
