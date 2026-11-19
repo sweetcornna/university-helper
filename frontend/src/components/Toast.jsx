@@ -5,10 +5,12 @@ import { ToastContext } from './toastContext'
 const DURATIONS = { success: 4500, info: 4000, error: 7000 }
 
 const STYLES = {
-  success: 'border-success/30 bg-success-surface text-success',
-  error: 'border-danger/30 bg-danger-surface text-danger',
-  info: 'border-primary/30 bg-surface text-text',
+  success: 'border-success/40 bg-success-surface text-success',
+  error: 'border-danger/40 bg-danger-surface text-danger',
+  info: 'border-border bg-surface text-text',
 }
+
+const LABELS = { success: '完成', error: '出错', info: '提示' }
 
 const ICONS = { success: CheckCircle2, error: AlertCircle, info: Info }
 const MAX_VISIBLE = 4
@@ -77,15 +79,18 @@ export function ToastProvider({ children }) {
             <div
               key={toast.id}
               role={toast.type === 'error' ? 'alert' : 'status'}
-              className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-xl animate-fade-in ${STYLES[toast.type] || STYLES.info}`}
+              className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-lg border-l-4 border px-3.5 py-3 text-sm shadow-[0_16px_32px_-18px_rgb(0_0_0/0.5)] motion-safe:animate-status-in ${STYLES[toast.type] || STYLES.info}`}
             >
               <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              <span className="flex-1 whitespace-pre-line break-words leading-5">{toast.message}</span>
+              <span className="flex-1 whitespace-pre-line break-words leading-5">
+                <span className="sr-only">{LABELS[toast.type] || LABELS.info}：</span>
+                <span>{toast.message}</span>
+              </span>
               <button
                 type="button"
                 onClick={() => dismiss(toast.id)}
                 aria-label="关闭通知"
-                className="shrink-0 rounded-md p-1 opacity-70 hover:bg-black/5 hover:opacity-100 focus-visible:ring-offset-0 dark:hover:bg-white/10"
+                className="-m-1 grid h-8 w-8 shrink-0 place-items-center rounded-md opacity-70 hover:bg-black/5 hover:opacity-100 focus-visible:ring-offset-0 dark:hover:bg-white/10"
               >
                 <X className="h-4 w-4" aria-hidden="true" />
               </button>

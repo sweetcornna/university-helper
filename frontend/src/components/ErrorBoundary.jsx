@@ -23,25 +23,17 @@ export default class ErrorBoundary extends Component {
     if (!error) return this.props.children
 
     return (
-      <div role="alert" className="min-h-screen flex items-center justify-center p-6 bg-background">
-        <div className="max-w-md w-full text-center space-y-4">
-          <h1 className="text-2xl font-bold text-text">页面出现了一点意外</h1>
-          <p className="text-sm text-text-muted break-words">
+      <div role="alert" className="flex min-h-screen items-center justify-center bg-background p-6">
+        <div className="ui-index-card w-full max-w-md space-y-4 p-6">
+          <h1 className="font-display text-xl font-bold text-text">页面出现了一点意外</h1>
+          <p className="ui-well break-words px-3 py-2 font-code text-xs text-text-muted">
             {error?.message || '未知错误'}
           </p>
-          <div className="flex gap-3 justify-center pt-2">
-            <button
-              type="button"
-              onClick={this.reset}
-              className="px-4 py-2 rounded-lg bg-primary text-white hover:opacity-90"
-            >
+          <div className="flex flex-wrap gap-2 pt-1">
+            <button type="button" onClick={this.reset} className="ui-btn-primary">
               重试
             </button>
-            <button
-              type="button"
-              onClick={() => window.location.assign('/login')}
-              className="px-4 py-2 rounded-lg border border-border hover:bg-surface-hover"
-            >
+            <button type="button" onClick={() => window.location.assign('/login')} className="ui-btn-secondary">
               回到登录
             </button>
           </div>

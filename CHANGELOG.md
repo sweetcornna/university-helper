@@ -6,7 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-18
+
 ### Fixed
+- Sign-in history shows processed, successful, and failed counts separately.
+  It distinguishes an unconfirmed sign-in from a result that was not saved.
+- A rejected background task start no longer clears the existing task and its
+  logs. The countdown no longer announces every tick to screen readers.
+- Read-only sign-in activities point to the 学习通 confirmation page instead of
+  offering a submission action.
 - 学习通刷课: since 1.6.0 every chapter failed with 「Chapter processing
   crashed」 and was retried five times before being skipped. The chapter page
   declares `mArg = ""` before it assigns the task list, and the new parser read
@@ -22,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   initialisation error on every task; the token-less provider is left out.
 
 ### Changed
+- Redesigned the web and desktop interfaces with simpler navigation and copy,
+  responsive task views, and consistent light and dark themes.
+- The 学习通 course workspace shows start blockers and chapter failures with
+  suggested next steps.
 - A failed chapter is no longer retried silently. The task log says why it
   failed on the first attempt and again when it is skipped, with a suggested
   next step, and `GET /course/status/{task_id}` returns the skipped chapters

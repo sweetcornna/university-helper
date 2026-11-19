@@ -41,7 +41,7 @@ export default function ThemeToggle({ className = '' }) {
     <div
       role="radiogroup"
       aria-label="主题"
-      className={`inline-flex items-center gap-0.5 rounded-full border border-border/60 bg-surface/70 p-0.5 backdrop-blur-sm ${className}`}
+      className={`inline-flex items-center gap-0.5 rounded-lg border border-border bg-surface p-0.5 ${className}`}
     >
       {OPTIONS.map(({ value, label, Icon }, index) => {
         const active = theme === value
@@ -59,8 +59,8 @@ export default function ThemeToggle({ className = '' }) {
             tabIndex={active ? 0 : -1}
             onClick={() => setTheme(value)}
             onKeyDown={(event) => handleKeyDown(event, index)}
-            className={`flex h-11 w-11 items-center justify-center rounded-full transition-colors sm:h-8 sm:w-8 ${
-              active ? 'bg-primary text-white' : 'text-text-muted hover:bg-surface-hover'
+            className={`flex h-10 w-10 items-center justify-center rounded-md transition-colors sm:h-8 sm:w-8 ${
+              active ? 'bg-primary text-on-primary' : 'text-text-muted hover:bg-surface-hover hover:text-text'
             }`}
           >
             <Icon className="h-4 w-4" aria-hidden="true" />

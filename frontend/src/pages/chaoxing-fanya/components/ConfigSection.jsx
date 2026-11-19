@@ -3,13 +3,13 @@ import { AlertTriangle } from 'lucide-react'
 import { CARD, toNum } from '../utils'
 import { ENDPOINT_PROVIDERS, SUBMIT_MODES, TIKU_PROVIDERS, UNOPENED_STRATEGIES, providerLabel } from '../configOptions'
 
-const FIELD = 'clay-input'
-const LABEL = 'mb-1 block text-sm font-medium text-text'
+const FIELD = 'ui-field'
+const LABEL = 'ui-label'
 
 function PillGroup({ label, options, value, onChange }) {
   return (
     <div role="group" aria-label={label}>
-      <span className="mb-2 block text-sm font-medium text-text">{label}</span>
+      <span className="ui-label">{label}</span>
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => {
           const active = value === opt.value
@@ -19,9 +19,9 @@ function PillGroup({ label, options, value, onChange }) {
               type="button"
               aria-pressed={active}
               onClick={() => onChange(opt.value)}
-              className={`flex min-h-[44px] flex-col items-start justify-center rounded-xl border px-4 py-2 text-sm font-medium transition-all duration-200 cursor-pointer ${
+              className={`flex min-h-[44px] cursor-pointer flex-col items-start justify-center rounded-lg border px-3 py-1.5 text-sm font-semibold ${
                 active
-                  ? 'border-transparent bg-primary text-white shadow-md'
+                  ? 'border-primary bg-primary text-on-primary'
                   : 'border-border bg-surface text-text hover:border-primary/40 hover:bg-surface-hover'
               }`}
             >
@@ -29,7 +29,7 @@ function PillGroup({ label, options, value, onChange }) {
                 {opt.label}
               </span>
               {opt.hint && (
-                <span className={`text-[11px] ${active ? 'text-white/85' : 'text-text-muted'}`}>
+                <span className={`text-[11px] ${active ? 'opacity-80' : 'text-text-muted'}`}>
                   {opt.hint}
                 </span>
               )}
@@ -51,7 +51,7 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
   }
   return (
     <div role="group" aria-label={label}>
-      <span className="mb-2 block text-sm font-medium text-text">{label}</span>
+      <span className="ui-label">{label}</span>
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => {
           const order = value.indexOf(opt.value)
@@ -63,9 +63,9 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
               aria-pressed={active}
               aria-label={`${opt.label}${active ? `，回退顺序 ${order + 1}` : ''}`}
               onClick={() => toggle(opt.value)}
-              className={`flex min-h-[44px] flex-col items-start justify-center rounded-xl border px-4 py-2 text-sm font-medium transition-all duration-200 cursor-pointer ${
+              className={`flex min-h-[44px] cursor-pointer flex-col items-start justify-center rounded-lg border px-3 py-1.5 text-sm font-semibold ${
                 active
-                  ? 'border-transparent bg-primary text-white shadow-md'
+                  ? 'border-primary bg-primary text-on-primary'
                   : 'border-border bg-surface text-text hover:border-primary/40 hover:bg-surface-hover'
               }`}
             >
@@ -73,7 +73,7 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
                 {active && (
                   <span
                     aria-hidden="true"
-                    className="inline-grid min-w-5 place-items-center rounded-full border border-current/40 px-1 text-[11px] leading-4"
+                    className="font-code inline-grid min-w-5 place-items-center rounded border border-current px-1 text-[11px] leading-4"
                   >
                     {order + 1}
                   </span>
@@ -81,7 +81,7 @@ function MultiPillGroup({ label, options, value, onChange, hint }) {
                 {opt.label}
               </span>
               {opt.hint && (
-                <span className={`text-[11px] ${active ? 'text-white/85' : 'text-text-muted'}`}>
+                <span className={`text-[11px] ${active ? 'opacity-80' : 'text-text-muted'}`}>
                   {opt.hint}
                 </span>
               )}
@@ -125,11 +125,11 @@ export default function ConfigSection({
     <section aria-labelledby="fanya-config-title" className={`${CARD} space-y-6`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="fanya-config-title" className="text-lg font-semibold text-text">学习配置</h2>
-          <p className="mt-1 text-sm text-text-muted">不改也能直接开始，默认值适合大多数课程。设置会记在这台设备上（题库 Token 和通知地址除外）。</p>
+          <h2 id="fanya-config-title" className="font-display text-base font-bold text-text">播放与答题</h2>
+          <p className="mt-1 text-sm text-text-muted">设置自动保存（题库 Token 和通知地址除外）。</p>
         </div>
         {resetToDefaults && (
-          <button type="button" onClick={resetToDefaults} className="clay-button-secondary min-h-[44px] px-4 text-sm">恢复默认</button>
+          <button type="button" onClick={resetToDefaults} className="ui-btn-secondary min-h-[44px] px-4 text-sm">恢复默认</button>
         )}
       </div>
 
@@ -145,7 +145,7 @@ export default function ConfigSection({
       {/* Everyday playback settings */}
       <div className="grid gap-5 md:grid-cols-2">
         <div className="space-y-2">
-          <label htmlFor="fanya-speed" className="text-sm font-medium text-text">
+          <label htmlFor="fanya-speed" className="ui-label">
             播放速度：{speed.toFixed(1)}x
           </label>
           <input
@@ -156,12 +156,12 @@ export default function ConfigSection({
             step="0.1"
             value={speed}
             onChange={(event) => setSpeed(toNum(event.target.value, 1.5))}
-            className="w-full"
+            className="ui-range"
           />
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="fanya-concurrency" className="text-sm font-medium text-text">
+          <label htmlFor="fanya-concurrency" className="ui-label">
             并发章节：{concurrency}
           </label>
           <input
@@ -172,7 +172,7 @@ export default function ConfigSection({
             step="1"
             value={concurrency}
             onChange={(event) => setConcurrency(toNum(event.target.value, 4))}
-            className="w-full"
+            className="ui-range"
           />
           <p className="text-xs text-text-muted">并发越高越快，但过高可能触发风控，建议 3–6。</p>
         </div>
@@ -193,9 +193,11 @@ export default function ConfigSection({
       </div>
 
       {/* Answer-source & advanced settings — collapsed by default */}
-      <details className="rounded-xl border border-border bg-surface-hover/60 p-4" open={endpointProviders.length > 0 || undefined}>
-        <summary className="flex min-h-[44px] cursor-pointer items-center text-sm font-medium text-text">
+      <details className="ui-panel group p-3.5" open={endpointProviders.length > 0 || undefined}>
+        <summary className="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 text-sm font-semibold text-text [&::-webkit-details-marker]:hidden">
           答题与题库设置（高级）
+          <span aria-hidden="true" className="text-xs font-normal text-text-muted group-open:hidden">展开</span>
+          <span aria-hidden="true" className="hidden text-xs font-normal text-text-muted group-open:inline">收起</span>
         </summary>
 
         <div className="mt-4 space-y-4">
@@ -224,7 +226,7 @@ export default function ConfigSection({
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="fanya-coverage" className="text-sm font-medium text-text">
+            <label htmlFor="fanya-coverage" className="ui-label">
               题库覆盖阈值：{coverageThreshold.toFixed(2)}
             </label>
             <input
@@ -235,7 +237,7 @@ export default function ConfigSection({
               step="0.05"
               value={coverageThreshold}
               onChange={(event) => setCoverageThreshold(toNum(event.target.value, 0.9))}
-              className="w-full"
+              className="ui-range"
             />
             <p className="text-xs text-text-muted">命中率低于此阈值的题目视为题库未覆盖。</p>
           </div>

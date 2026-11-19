@@ -36,9 +36,9 @@ export const BACKGROUND_RUNNING_STATUS_SET = new Set(['running', 'pending', 'pro
 
 export const TOKEN_ERROR_PATTERN = /(invalid token|token has expired|token validation failed|missing token)/i
 
-export const GLASS_CARD_CLASS = 'rounded-2xl border border-border bg-surface p-5 shadow-sm sm:p-6'
+export const GLASS_CARD_CLASS = 'ui-card p-4 sm:p-5'
 
-export const GLASS_PANEL_CLASS = 'rounded-xl border border-border bg-surface-hover/40 p-4'
+export const GLASS_PANEL_CLASS = 'ui-panel p-3.5'
 
 export const SIGN_TYPE_FALLBACK_MAP = {
 

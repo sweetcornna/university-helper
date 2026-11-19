@@ -1,6 +1,6 @@
 import { Clock } from 'lucide-react'
 
-import { Input, Select } from '../../../components'
+import { Input, Select, Toggle } from '../../../components'
 import {
   MAX_CHECK_INTERVAL_MINUTES,
   GLASS_CARD_CLASS,
@@ -23,32 +23,36 @@ export default function ConfigTab({
   nextCheckCountdown,
   paused = false,
 }) {
+  const stateText = paused
+    ? '等待验证账号'
+      : nextCheckCountdown > 0
+        ? `下次检查 ${formatCountdown(nextCheckCountdown)}`
+        : '检查中'
+  // Screen readers hear only state changes (on / waiting for the account),
+  // never the per-second countdown, which stays readable on demand.
+  const announcement = autoSignin ? (paused ? '自动签到等待验证账号' : '自动签到运行中') : ''
+
   return (
-    <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-      <div className="flex items-center justify-between gap-4">
+    <section className={`${GLASS_CARD_CLASS} space-y-4`} aria-labelledby="cx-auto-heading">
+      <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h2 className="text-lg font-bold text-text">自动签到</h2>
-          <p className="mt-1 text-sm text-text-muted">
-            {autoSignin && paused ? '验证账号后开始检查；需保持本页打开。' : '按间隔检测并签到，需保持本页打开。'}
-          </p>
+          <h2 id="cx-auto-heading" className="font-display text-base font-bold text-text">自动签到</h2>
+          <p className="mt-1 text-sm text-text-muted">需保持本页打开。</p>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={autoSignin}
-          aria-label="自动签到"
-          onClick={() => setAutoSignin(!autoSignin)}
-          className={`relative inline-flex h-11 w-20 min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center rounded-full px-1 transition-colors duration-200 ${
-            autoSignin ? 'bg-primary' : 'bg-border'
+        <Toggle label="自动签到" checked={autoSignin} onChange={setAutoSignin} />
+      </div>
+
+      <p role="status" className="sr-only">{announcement}</p>
+      {autoSignin && (
+        <p
+          className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-semibold ${
+            paused ? 'border-border bg-surface-hover text-text-muted' : 'border-primary/35 bg-primary/10 text-primary'
           }`}
         >
-          <span
-            className={`inline-block h-8 w-8 transform rounded-full bg-surface transition-transform duration-200 ${
-              autoSignin ? 'translate-x-10' : 'translate-x-1'
-            }`}
-          />
-        </button>
-      </div>
+          <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+          {stateText}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Input
@@ -76,13 +80,7 @@ export default function ConfigTab({
           <option value="code">签到码签到（兼容普通）</option>
         </Select>
       </div>
-
-      {autoSignin && nextCheckCountdown > 0 && (
-        <p className="flex items-center gap-2 text-sm text-text-muted">
-          <Clock className="h-4 w-4" aria-hidden="true" />
-          下次检查：{formatCountdown(nextCheckCountdown)}
-        </p>
-      )}
-    </div>
+      <p className="ui-hint mt-0">需在学习通完成的活动会跳过。</p>
+    </section>
   )
 }

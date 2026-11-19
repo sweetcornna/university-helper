@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="学道">
-  <rect width="64" height="64" rx="15" fill="#172033" />
-  <path d="M14 18h27c5 0 9 4 9 9v22H23c-5 0-9-4-9-9V18Z" fill="#F4F6F1" />
-  <path d="M23 25h19M23 32h19M23 39h11" stroke="#167C80" stroke-width="3" stroke-linecap="round" />
-  <path d="M40 39h10v10H40z" fill="#FF7A45" />
+  <rect width="64" height="64" rx="14" fill="#182744" />
+  <path d="M14 18h27c5 0 9 4 9 9v22H23c-5 0-9-4-9-9V18Z" fill="#F8FAFB" />
+  <path d="M14 22h36" stroke="#A73A2C" stroke-width="2.5" />
+  <path d="M23 30h19M23 36h19M23 42h11" stroke="#264685" stroke-width="3" stroke-linecap="round" />
 </svg>

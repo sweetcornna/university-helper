@@ -2,51 +2,94 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * 学道 · 校园课程索引视觉体系
+ *
+ * 纸面：雾蓝色的目录桌面（background）上放着卡片纸（surface）。
+ * 墨色：正文是蓝黑墨（text），强调用钢笔蓝（primary），印章朱砂（cta）只用于
+ *       少量“需要你动手”的提示和目录卡的红色标线。
+ * 书脊：每个平台一种布面颜色（--spine-*），只出现在导航书脊、页眉索书号和卡片色条上。
+ *
+ * 字号（紧凑）：12 说明 / 14 正文 / 16 区块标题 / 22–24 页面标题。
+ * 状态色同时搭配图标和文字，不单靠颜色区分。
+ */
+
 @layer base {
   :root {
-    --color-primary: 22 124 128;          /* 校园青 #167C80 */
-    --color-secondary: 23 32 51;          /* 墨蓝 #172033 */
-    --color-cta: 255 122 69;              /* 荧光橙 #FF7A45 */
-    --color-background: 244 246 241;      /* 讲义纸 #F4F6F1 */
-    --color-surface: 255 255 255;          /* 纸白 #FFFFFF */
-    --color-surface-hover: 235 239 232;
-    --color-text: 23 32 51;
-    --color-text-muted: 96 108 122;
-    --color-border: 211 219 210;
-    --color-border-subtle: 232 236 229;
-    --color-success: 46 125 91;           /* 松绿 #2E7D5B */
-    --color-success-surface: 232 244 237;
-    --color-danger: 190 61 61;
-    --color-danger-surface: 253 237 235;
-    --color-warning: 190 87 38;
-    --color-warning-surface: 255 240 230;
+    color-scheme: light;
+    --color-background: 230 236 241;      /* 雾蓝纸面 #E6ECF1 */
+    --color-surface: 248 250 251;         /* 卡片纸 #F8FAFB */
+    --color-surface-hover: 237 242 246;   /* #EDF2F6 */
+    --color-sunken: 222 229 236;          /* 凹槽 / 日志底 #DEE5EC */
+    --color-text: 24 39 68;               /* 蓝黑墨 #182744 */
+    --color-text-muted: 78 94 120;        /* 淡墨 #4E5E78 */
+    --color-border: 192 204 217;          /* #C0CCD9 */
+    --color-border-subtle: 216 224 233;   /* #D8E0E9 */
+    --color-primary: 38 70 133;           /* 钢笔蓝 #264685 */
+    --color-on-primary: 255 255 255;
+    --color-secondary: 24 39 68;
+    --color-cta: 167 58 44;               /* 朱砂 #A73A2C */
+    --color-on-cta: 255 255 255;
+    --color-rule: 196 86 70;              /* 目录卡红线 */
+    --color-success: 37 105 74;           /* #25694A */
+    --color-success-surface: 223 239 230;
+    --color-danger: 163 45 37;            /* #A32D25 */
+    --color-danger-surface: 248 228 225;
+    --color-warning: 133 82 10;           /* #85520A */
+    --color-warning-surface: 246 236 214;
+
+    --spine-home: 24 39 68;               /* 墨蓝布面 */
+    --spine-fanya: 38 70 133;             /* 学习通 · 钢笔蓝布面 */
+    --spine-signin: 132 50 40;            /* 学习通签到 · 牛血红布面 */
+    --spine-zhihuishu: 33 90 69;          /* 智慧树 · 松绿布面 */
+    --on-spine: 241 245 249;
+
+    --font-display: 'Songti SC', 'Noto Serif SC', 'Source Han Serif SC', 'Source Han Serif CN',
+      'STZhongsong', 'Microsoft YaHei', serif;
+    --font-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, ui-monospace, monospace;
+    --shadow-card: 0 1px 0 rgb(var(--color-border-subtle)), 0 10px 24px -20px rgb(24 39 68 / 0.45);
   }
 
   .dark {
-    --color-primary: 79 181 183;
-    --color-secondary: 23 32 51;
-    --color-cta: 255 139 91;
-    --color-background: 15 22 36;
-    --color-surface: 23 32 51;
-    --color-surface-hover: 32 44 66;
-    --color-text: 237 241 233;
-    --color-text-muted: 168 179 191;
-    --color-border: 53 67 91;
-    --color-border-subtle: 37 49 70;
-    --color-success: 104 183 138;
-    --color-success-surface: 26 69 54;
-    --color-danger: 244 132 126;
-    --color-danger-surface: 86 39 43;
-    --color-warning: 255 163 112;
-    --color-warning-surface: 91 51 33;
+    color-scheme: dark;
+    --color-background: 14 20 30;         /* 夜间书库 #0E141E */
+    --color-surface: 22 30 43;            /* #161E2B */
+    --color-surface-hover: 31 41 57;      /* #1F2939 */
+    --color-sunken: 11 16 24;             /* #0B1018 */
+    --color-text: 222 230 240;            /* #DEE6F0 */
+    --color-text-muted: 155 169 189;      /* #9BA9BD */
+    --color-border: 52 66 87;             /* #344257 */
+    --color-border-subtle: 37 48 65;
+    --color-primary: 145 176 233;         /* #91B0E9 */
+    --color-on-primary: 13 21 37;
+    --color-secondary: 205 216 231;
+    --color-cta: 234 144 122;             /* #EA907A */
+    --color-on-cta: 32 14 10;
+    --color-rule: 210 112 96;
+    --color-success: 120 198 158;
+    --color-success-surface: 20 47 36;
+    --color-danger: 241 152 140;
+    --color-danger-surface: 60 28 26;
+    --color-warning: 228 184 104;
+    --color-warning-surface: 54 41 16;
+
+    --spine-home: 51 68 99;
+    --spine-fanya: 48 80 138;
+    --spine-signin: 124 54 45;
+    --spine-zhihuishu: 37 92 72;
+    --on-spine: 232 238 245;
+    --shadow-card: 0 1px 0 rgb(0 0 0 / 0.35), 0 12px 28px -22px rgb(0 0 0 / 0.9);
   }
 
   html {
-    @apply scroll-smooth bg-background;
+    @apply bg-background;
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
-    @apply min-h-screen bg-background font-sans text-text antialiased;
+    @apply min-h-screen bg-background font-sans text-sm text-text antialiased;
+    font-feature-settings: 'tnum' 1;
   }
 
   ::selection {
@@ -58,54 +101,233 @@
   input,
   textarea,
   select,
+  summary,
   [role='button'],
   [role='link'],
   [role='tab'] {
-    @apply transition-colors duration-200;
+    @apply transition-colors duration-150;
   }
 
   :focus-visible {
     @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
   }
+
+  summary {
+    @apply cursor-pointer;
+  }
 }
 
 @layer components {
-  .clay-card {
-    @apply rounded-2xl border border-border/80 bg-surface shadow-[0_12px_32px_-24px_rgba(23,32,51,0.45)];
+  /* ── 字体 ─────────────────────────────────────────────── */
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: 0.01em;
   }
 
-  .clay-button {
-    @apply inline-flex min-h-[44px] cursor-pointer items-center justify-center rounded-xl px-5 py-2.5 font-semibold
-           transition-[color,background-color,border-color,box-shadow,transform] duration-200
-           hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-55
-           disabled:hover:translate-y-0 focus-visible:outline-none focus-visible:ring-2
-           focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  .font-code {
+    font-family: var(--font-mono);
+    font-feature-settings: 'tnum' 1, 'zero' 1;
   }
 
-  .clay-button-primary {
-    @apply clay-button bg-primary text-white shadow-[0_8px_20px_-12px_rgb(var(--color-primary))] hover:bg-primary/90;
+  /* 索书号式小标签：目录卡左上角的分类号 */
+  .catalog-label {
+    @apply text-xs font-semibold tracking-[0.12em] text-text-muted;
   }
 
-  .clay-button-secondary {
-    @apply clay-button border border-border bg-surface text-text hover:border-primary/40 hover:bg-surface-hover;
+  /* ── 卡片 ─────────────────────────────────────────────── */
+  .ui-card {
+    @apply rounded-[10px] border border-border bg-surface;
+    box-shadow: var(--shadow-card);
   }
 
-  .clay-button-cta {
-    @apply clay-button bg-cta text-[#172033] shadow-[0_8px_20px_-12px_rgb(var(--color-cta))] hover:bg-cta/90;
+  /* 目录卡：顶部一条红线，像图书馆卡片目录里的索引卡 */
+  .ui-index-card {
+    @apply ui-card relative overflow-hidden;
   }
 
-  .clay-input {
-    @apply min-h-[44px] w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-text shadow-sm
+  .ui-index-card::before {
+    content: '';
+    @apply pointer-events-none absolute inset-x-0 top-0 h-[3px];
+    background: rgb(var(--color-rule));
+  }
+
+  .ui-panel {
+    @apply rounded-lg border border-border-subtle bg-surface-hover/60;
+  }
+
+  .ui-well {
+    @apply rounded-lg border border-border-subtle;
+    background-color: rgb(var(--color-sunken) / 0.7);
+  }
+
+  /* 横格纸，用在空状态与日志 */
+  .ruled-paper {
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 27px,
+      rgb(var(--color-border-subtle) / 0.9) 27px,
+      rgb(var(--color-border-subtle) / 0.9) 28px
+    );
+  }
+
+  /* ── 按钮 ─────────────────────────────────────────────── */
+  .ui-btn {
+    @apply inline-flex min-h-[40px] cursor-pointer select-none items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold
+           leading-none transition-[color,background-color,border-color,box-shadow] duration-150
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2
+           focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .ui-btn-primary {
+    @apply ui-btn bg-primary hover:bg-primary/90;
+    color: rgb(var(--color-on-primary));
+  }
+
+  .ui-btn-secondary {
+    @apply ui-btn border border-border bg-surface text-text hover:border-primary/50 hover:bg-surface-hover;
+  }
+
+  .ui-btn-ghost {
+    @apply ui-btn text-text-muted hover:bg-surface-hover hover:text-text;
+  }
+
+  .ui-btn-danger {
+    @apply ui-btn border border-danger/40 bg-surface text-danger hover:bg-danger-surface;
+  }
+
+  .ui-btn-cta {
+    @apply ui-btn bg-cta hover:bg-cta/90;
+    color: rgb(var(--color-on-cta));
+  }
+
+  .ui-btn-sm {
+    @apply min-h-[34px] rounded-md px-3 text-xs;
+  }
+
+  .ui-btn-lg {
+    @apply min-h-[46px] px-5 text-[0.9375rem];
+  }
+
+  .ui-btn-icon {
+    @apply h-10 w-10 shrink-0 px-0;
+  }
+
+  /* ── 表单 ─────────────────────────────────────────────── */
+  .ui-field {
+    @apply min-h-[40px] w-full min-w-0 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text
            placeholder:text-text-muted/70 hover:border-primary/50 focus:border-primary focus:outline-none
-           focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:opacity-70;
+           focus:ring-2 focus:ring-primary/25 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:opacity-70;
   }
 
-  .schedule-paper {
-    background-image:
-      linear-gradient(to right, rgb(var(--color-border-subtle) / 0.52) 1px, transparent 1px),
-      linear-gradient(to bottom, rgb(var(--color-border-subtle) / 0.52) 1px, transparent 1px);
-    background-size: 28px 28px;
+  .ui-label {
+    @apply mb-1.5 block text-xs font-semibold tracking-[0.04em] text-text;
   }
+
+  .ui-hint {
+    @apply mt-1.5 text-xs leading-5 text-text-muted;
+  }
+
+  input[type='range'].ui-range {
+    @apply h-2 w-full cursor-pointer rounded-full;
+    accent-color: rgb(var(--color-primary));
+  }
+
+  input[type='checkbox'].ui-check,
+  input[type='radio'].ui-check {
+    @apply h-4 w-4 shrink-0 cursor-pointer;
+    accent-color: rgb(var(--color-primary));
+  }
+
+  /* ── 书脊导航 ─────────────────────────────────────────── */
+  .spine {
+    --spine: var(--spine-home);
+    @apply relative flex w-11 shrink-0 flex-col items-center justify-between rounded-t-[5px] px-1 pb-2 pt-3
+           transition-[transform,box-shadow,filter] duration-200;
+    background:
+      linear-gradient(90deg, rgb(0 0 0 / 0.18), transparent 22%, transparent 78%, rgb(0 0 0 / 0.22)),
+      rgb(var(--spine));
+    color: rgb(var(--on-spine));
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  }
+
+  .spine:hover {
+    transform: translateY(-4px);
+    filter: brightness(1.06);
+  }
+
+  .spine[aria-current='page'] {
+    transform: translateY(-14px);
+    box-shadow:
+      inset 0 0 0 1px rgb(255 255 255 / 0.12),
+      0 14px 18px -12px rgb(0 0 0 / 0.55);
+  }
+
+  .spine-title {
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+    @apply text-[0.8125rem] font-semibold tracking-[0.28em];
+  }
+
+  .spine-band {
+    @apply block h-[3px] w-7 rounded-full;
+    background: rgb(var(--on-spine) / 0.55);
+  }
+
+  .spine-ribbon {
+    @apply pointer-events-none absolute -bottom-3 left-1/2 h-5 w-2 -translate-x-1/2;
+    background: rgb(var(--color-cta));
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%);
+  }
+
+  .spine-fanya { --spine: var(--spine-fanya); }
+  .spine-signin { --spine: var(--spine-signin); }
+  .spine-zhihuishu { --spine: var(--spine-zhihuishu); }
+  .spine-home { --spine: var(--spine-home); }
+
+  /* 页眉与卡片上的书脊色条 */
+  .spine-chip {
+    @apply inline-block h-3 w-1.5 rounded-[2px];
+    background: rgb(var(--spine, var(--spine-home)));
+  }
+
+  /* ── 索引卡分隔标签（工作区标签） ───────────────────────── */
+  .index-tabs {
+    @apply flex gap-1 overflow-x-auto px-1;
+    box-shadow: inset 0 -1px 0 rgb(var(--color-border));
+  }
+
+  .index-tab {
+    @apply relative inline-flex min-h-[40px] shrink-0 items-center gap-2 rounded-t-lg border border-transparent px-3 text-sm
+           font-semibold text-text-muted hover:bg-surface-hover hover:text-text sm:px-4;
+  }
+
+  .index-tab[aria-selected='true'] {
+    @apply -mb-px border-border border-b-transparent bg-surface text-text;
+  }
+
+  .index-tab[aria-selected='true']::before {
+    content: '';
+    @apply absolute inset-x-2 top-0 h-[3px] rounded-b-sm;
+    background: rgb(var(--spine, var(--color-primary)));
+  }
+
+  /* ── 日志 ─────────────────────────────────────────────── */
+  .log-pane {
+    @apply ui-well font-code max-h-72 overflow-y-auto px-3 py-2 text-xs leading-7 text-text;
+    /* 横线落在每行底部，并随日志内容一起滚动 */
+    background-origin: content-box;
+    background-attachment: local;
+  }
+
+  /* 兼容旧类名：仍可能被未改动的文件引用 */
+  .clay-card { @apply ui-card; }
+  .clay-button { @apply ui-btn; }
+  .clay-button-primary { @apply ui-btn-primary; }
+  .clay-button-secondary { @apply ui-btn-secondary; }
+  .clay-button-cta { @apply ui-btn-cta; }
+  .clay-input { @apply ui-field; }
+  .schedule-paper { @apply ruled-paper; }
 
   .skip-link {
     transform: translateY(-6rem);
@@ -129,9 +351,26 @@
   .scrollbar-none::-webkit-scrollbar {
     display: none;
   }
+
+  .bg-sunken {
+    background-color: rgb(var(--color-sunken));
+  }
+  .bg-sunken\/70 {
+    background-color: rgb(var(--color-sunken) / 0.7);
+  }
+  .text-on-primary {
+    color: rgb(var(--color-on-primary));
+  }
+  .text-on-spine {
+    color: rgb(var(--on-spine));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
   *,
   *::before,
   *::after {
@@ -139,5 +378,24 @@
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .spine:hover,
+  .spine[aria-current='page'] {
+    transform: none;
+  }
+
+  .spine[aria-current='page'] {
+    outline: 2px solid rgb(var(--color-cta));
+    outline-offset: 2px;
+  }
+}
+
+@media (forced-colors: active) {
+  .spine,
+  .ui-card,
+  .ui-panel,
+  .index-tab[aria-selected='true'] {
+    border: 1px solid CanvasText;
   }
 }

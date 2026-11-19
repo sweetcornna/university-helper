@@ -20,25 +20,26 @@ export default function LogSection({ logs = [] }) {
   const boxRef = useRef(null)
   const stickRef = useRef(true)
 
-  const problemCount = useMemo(() => logs.filter((item) => item.level === 'warning' || item.level === 'error').length, [logs])
-  const visible = problemsOnly ? logs.filter((item) => item.level === 'warning' || item.level === 'error') : logs
+  const problems = useMemo(() => logs.filter((item) => ['warning', 'error'].includes(item.level)), [logs])
+  const problemCount = problems.length
+  const visible = problemsOnly && problemCount > 0 ? problems : logs
 
   // Follow new lines only while the reader is already at the bottom.
   useEffect(() => {
     const box = boxRef.current
     if (box && stickRef.current) box.scrollTop = box.scrollHeight
-  }, [visible.length])
+  }, [visible])
 
   return (
     <section aria-labelledby="fanya-log-title" className={CARD}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 id="fanya-log-title" className="text-lg font-semibold text-text">任务日志</h2>
+        <h2 id="fanya-log-title" className="font-display text-base font-bold text-text">任务日志</h2>
         {problemCount > 0 && (
           <button
             type="button"
             aria-pressed={problemsOnly}
             onClick={() => setProblemsOnly((value) => !value)}
-            className={`min-h-[44px] rounded-xl border px-3 text-sm font-semibold ${
+            className={`ui-btn-secondary min-h-[44px] px-3 ${
               problemsOnly ? 'border-primary bg-primary/10 text-primary' : 'border-border text-text-muted hover:text-text'
             }`}
           >
@@ -47,32 +48,31 @@ export default function LogSection({ logs = [] }) {
         )}
       </div>
 
-      {/* Not aria-live: the task headline above announces status changes; a
-          live log would read every line aloud. It scrolls, so it must be
-          keyboard-focusable (WCAG 2.1.1). */}
+      {/* The task headline announces status changes; don't announce every log line. */}
       <div
         ref={boxRef}
         role="log"
         aria-label="任务日志"
+        aria-live="off"
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
         tabIndex="0"
         onScroll={(event) => {
           const box = event.currentTarget
           stickRef.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24
         }}
-        className="max-h-80 overflow-y-auto rounded-xl border border-border bg-background/60 p-2 sm:p-3"
+        className="log-pane ruled-paper max-h-[28rem]"
       >
         {visible.length === 0 ? (
-          <p className="px-2 py-4 text-sm text-text-muted">{logs.length === 0 ? '还没有日志。任务开始后，每一步都会记在这里。' : '没有警告或错误。'}</p>
+          <p className="px-2 py-4 text-sm text-text-muted">暂无日志</p>
         ) : (
-          <ol className="space-y-1">
+          <ol className="divide-y divide-border-subtle">
             {visible.map((item, index) => {
               const level = LEVELS[item.level] || LEVELS.info
               return (
-                <li key={`${item.timestamp}-${index}`} className="flex items-start gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-surface">
-                  <time dateTime={item.timestamp} className="w-[4.5rem] shrink-0 pt-0.5 font-mono text-xs tabular-nums text-text-muted">{timeOf(item.timestamp)}</time>
+                <li key={`${item.timestamp}-${index}`} className="flex items-start gap-2 px-1 py-1.5 text-xs hover:bg-surface">
+                  <time dateTime={item.timestamp} className="w-[4.5rem] shrink-0 pt-0.5 font-code text-xs tabular-nums text-text-muted">{timeOf(item.timestamp)}</time>
                   <span className={`shrink-0 rounded-md border px-1.5 text-xs font-semibold leading-5 ${level.className}`}>{level.label}</span>
-                  <span className="min-w-0 flex-1 break-words leading-6 text-text">{translateTaskMessage(item.message)}</span>
+                  <span className="min-w-0 flex-1 break-words leading-5 text-text">{translateTaskMessage(item.message)}</span>
                 </li>
               )
             })}

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { ChevronDown, Loader2, RefreshCw } from 'lucide-react'
 
 import { CARD, getChapterId, getChapterTitle, getCourseId, getCourseName } from '../utils'
 
 
-const BADGE = 'shrink-0 rounded-full px-2 py-0.5 text-xs'
+const BADGE = 'shrink-0 rounded px-1.5 py-0.5 text-[0.6875rem] font-semibold'
 
 
 // Radio list for "study this course up to which chapter". The chosen chapter is
@@ -13,45 +13,47 @@ function ChapterLimitPicker({ courseId, courseName, chapterList, limitId, limitI
   const radioName = `chapter-limit-${courseId}`
 
   return (
-    <fieldset className="mt-2 text-sm">
+    <fieldset className="mt-3 border-t border-border-subtle pt-3 text-sm">
       <legend className="sr-only">{courseName} 学到哪一节</legend>
-      <p className="mb-2 text-xs text-text-muted">选一节作为终点：只学到这一节（含），后面的章节不学。</p>
-      <div className="max-h-72 space-y-1 overflow-y-auto pr-1">
-        <label className="flex min-h-[44px] cursor-pointer items-center gap-3 rounded-lg bg-surface px-3 py-2">
+      <p className="mb-2 text-xs text-text-muted">只学到所选一节（含）。</p>
+      <div className="max-h-72 divide-y divide-border-subtle overflow-y-auto rounded-md border border-border-subtle bg-surface">
+        <label className="flex min-h-[44px] cursor-pointer items-center gap-3 px-3 py-2 hover:bg-surface-hover">
           <input
             type="radio"
-            className="h-4 w-4 shrink-0"
+            className="ui-check"
             name={radioName}
             checked={!limitId}
             onChange={() => onChange(courseId, '')}
           />
-          <span className="flex-1 font-medium text-text">全部章节</span>
+          <span className="flex-1 font-semibold text-text">全部章节</span>
         </label>
         {chapterList.map((chapter, index) => {
           const chapterId = getChapterId(chapter)
           const skipped = limitIndex >= 0 && index > limitIndex
+          const chosen = Boolean(chapterId) && chapterId === limitId
           return (
             <label
               key={`${courseId}-${chapterId || index}`}
               className={[
-                'flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2',
-                chapterId ? 'cursor-pointer' : 'cursor-not-allowed',
-                chapterId && chapterId === limitId ? 'bg-cta/10 ring-1 ring-cta/40' : 'bg-surface',
-                skipped ? 'opacity-60' : '',
+                'flex min-h-[44px] items-center gap-3 px-3 py-2',
+                chapterId ? 'cursor-pointer hover:bg-surface-hover' : 'cursor-not-allowed',
+                chosen ? 'bg-primary/10' : '',
+                skipped ? 'text-text-muted' : '',
               ].join(' ')}
             >
               <input
                 type="radio"
-                className="h-4 w-4 shrink-0"
+                className="ui-check"
                 name={radioName}
                 disabled={!chapterId}
-                checked={Boolean(chapterId) && chapterId === limitId}
+                checked={chosen}
                 onChange={() => onChange(courseId, chapterId)}
               />
-              <span className="w-7 shrink-0 text-right text-xs tabular-nums text-text-muted">{index + 1}.</span>
-              <span className="min-w-0 flex-1 text-text">{getChapterTitle(chapter)}</span>
+              <span className="font-code w-7 shrink-0 text-right text-xs text-text-muted">{index + 1}.</span>
+              <span className={`min-w-0 flex-1 ${skipped ? 'line-through decoration-border' : 'text-text'}`}>{getChapterTitle(chapter)}</span>
               {chapter?.has_finished && <span className={`${BADGE} bg-success-surface text-success`}>已完成</span>}
               {chapter?.need_unlock && <span className={`${BADGE} bg-warning-surface text-warning`}>待解锁</span>}
+              {chosen && <span className={`${BADGE} bg-primary text-on-primary`}>终点</span>}
               {skipped && <span className={`${BADGE} bg-surface-hover text-text-muted`}>不学</span>}
             </label>
           )
@@ -61,24 +63,22 @@ function ChapterLimitPicker({ courseId, courseName, chapterList, limitId, limitI
   )
 }
 
-
 function ChapterLimitSummary({ chapterList, limitId, limitIndex }) {
   if (!limitId) return null
   const text = limitIndex >= 0
     ? `学到 ${limitIndex + 1}/${chapterList.length} 节：${getChapterTitle(chapterList[limitIndex])}`
     : '学到所选章节'
   return (
-    <p className="mt-1 truncate text-xs font-medium text-warning" title={text}>{text}</p>
+    <p className="mt-0.5 truncate text-xs font-semibold text-primary" title={text}>{text}</p>
   )
 }
-
 
 function ChapterArea({ course, courseId, chapterList, chapterStatus, limitId, limitIndex, onChange, toggleExpand }) {
   const status = chapterStatus?.[courseId]
   if (status?.loading && chapterList.length === 0) {
     return (
       <p role="status" className="mt-2 flex items-center gap-2 px-1 text-sm text-text-muted">
-        <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />正在读取章节…
+        <Loader2 className="h-4 w-4 motion-safe:animate-spin text-primary" aria-hidden="true" />正在读取章节…
       </p>
     )
   }
@@ -86,7 +86,7 @@ function ChapterArea({ course, courseId, chapterList, chapterStatus, limitId, li
     return (
       <div role="alert" className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-danger/30 bg-danger-surface px-3 py-2 text-sm text-danger">
         <span className="min-w-0 flex-1 break-words">章节没有读出来：{status.error}</span>
-        <button type="button" onClick={() => { void toggleExpand(course, { reload: true }) }} className="clay-button-secondary min-h-[44px] px-3 text-sm">
+        <button type="button" onClick={() => { void toggleExpand(course, { reload: true }) }} className="ui-btn-secondary min-h-[44px] px-3 text-sm">
           重试
         </button>
       </div>
@@ -148,14 +148,15 @@ export default function CourseListSection({
     <section aria-labelledby="fanya-course-list-title" className={CARD}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 id="fanya-course-list-title" className="text-xl font-semibold text-text">选择要学的课程</h2>
-          <p className="mt-1 text-sm text-text-muted">共 {courses.length} 门。默认学完整门课；想只学一部分，点「选章节」。</p>
+          <h2 id="fanya-course-list-title" className="font-display text-base font-bold text-text">
+            课程列表 <span className="font-code text-xs font-normal text-text-muted">{courses.length} 门</span>
+          </h2>
         </div>
 
         <div className="flex gap-2">
           <button
             type="button"
-            className="clay-button-secondary min-h-[44px] px-3 text-sm"
+            className="ui-btn-secondary min-h-[44px] px-3 text-sm"
             onClick={() => setSelectedCourses(allSelected ? [] : courseIds)}
           >
             {allSelected ? '取消全选' : '全选课程'}
@@ -163,12 +164,12 @@ export default function CourseListSection({
 
           <button
             type="button"
-            className="clay-button-secondary min-h-[44px] gap-1.5 px-3 text-sm"
+            className="ui-btn-secondary min-h-[44px] gap-1.5 px-3 text-sm"
             disabled={refreshing}
             aria-busy={refreshing}
             onClick={() => { void handleRefresh() }}
           >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
             {refreshing ? '刷新中...' : '刷新课程'}
           </button>
         </div>
@@ -194,13 +195,13 @@ export default function CourseListSection({
           return (
             <li
               key={courseId || `course-${index}`}
-              className={`rounded-xl border p-2 transition-colors ${checked ? 'border-primary/50 bg-primary/5' : 'border-border bg-surface'}`}
+              className={`rounded-lg border p-2 transition-colors ${checked ? 'border-primary/50 bg-primary/5' : 'border-border-subtle bg-surface'}`}
             >
               <div className="flex items-center gap-2">
                 <label className="flex min-h-[44px] min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg px-2">
                   <input
                     type="checkbox"
-                    className="h-5 w-5 shrink-0 accent-[rgb(var(--color-primary))]"
+                    className="ui-check h-5 w-5 shrink-0"
                     checked={checked}
                     disabled={!courseId}
                     onChange={() => {
@@ -217,13 +218,15 @@ export default function CourseListSection({
 
                 <button
                   type="button"
-                  className="clay-button-secondary min-h-[44px] min-w-[44px] shrink-0 px-3 text-sm"
+                  className="ui-btn-ghost min-h-[44px] min-w-[44px] shrink-0 px-3 text-sm"
+                  disabled={!courseId}
                   aria-expanded={isExpanded}
-                  aria-controls={chapterPanelId}
+                  aria-controls={isExpanded ? chapterPanelId : undefined}
                   aria-label={`${isExpanded ? '收起' : '选章节'}：${courseName}`}
                   onClick={() => { void toggleExpand(course) }}
                 >
                   {isExpanded ? '收起' : '选章节'}
+                  <ChevronDown className={`h-3.5 w-3.5 motion-safe:transition-transform ${isExpanded ? 'rotate-180' : ''}`} aria-hidden="true" />
                 </button>
               </div>
 

@@ -20,9 +20,9 @@ export default function Select({
   const describedBy = [ariaDescribedBy, errorId, hintId].filter(Boolean).join(' ') || undefined
 
   return (
-    <div>
+    <div className="min-w-0">
       {label && (
-        <label htmlFor={selectId} className="mb-2 block text-sm font-semibold text-text">
+        <label htmlFor={selectId} className="ui-label">
           {label}
         </label>
       )}
@@ -30,8 +30,8 @@ export default function Select({
         <select
           id={selectId}
           className={clsx(
-            'clay-input min-h-[44px] cursor-pointer appearance-none pr-10',
-            error && 'border-danger focus:border-danger focus:ring-danger/20',
+            'ui-field cursor-pointer appearance-none pr-9',
+            error && 'border-danger focus:border-danger focus:ring-danger/25',
             className,
           )}
           aria-invalid={error ? true : undefined}
@@ -49,8 +49,8 @@ export default function Select({
           aria-hidden="true"
         />
       </div>
-      {error && <p id={errorId} className="mt-1.5 text-sm text-danger">{error}</p>}
-      {hint && <p id={hintId} className="mt-1.5 text-xs leading-5 text-text-muted">{hint}</p>}
+      {error && <p id={errorId} className="mt-1.5 text-xs font-medium text-danger">{error}</p>}
+      {hint && <p id={hintId} className="ui-hint">{hint}</p>}
     </div>
   )
 }

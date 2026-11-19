@@ -183,11 +183,28 @@ describe('Dashboard task routing', () => {
     const action = await screen.findByRole('button', { name: '前往恢复' })
     const nextAction = screen.getByRole('heading', { level: 2, name: '处理最近失败' }).closest('section')
     expect(within(nextAction).getByText(/智慧树 课程学习 · 最新失败/)).toBeTruthy()
-    expect(screen.getAllByText(/智慧树 课程学习 · 最新失败/, { selector: 'p' })).toHaveLength(2)
-    expect(screen.queryByText(/学习通 课程学习 · 较早失败/, { selector: 'p' })).toBeNull()
+    expect(screen.getAllByText(/智慧树 课程学习 · 最新失败/)).toHaveLength(1)
+    expect(screen.queryByText(/学习通 课程学习 · 较早失败/)).toBeNull()
 
     await user.click(action)
     expect(screen.getByLabelText('当前路径')).toHaveTextContent('/zhihuishu-panel')
+  })
+
+  test('lists a failure separately only when a running task holds the next step', async () => {
+    mockTaskRequests({
+      zhihuishu: [{ status: 'running', course_name: '运行课程' }],
+      fanya: [{ status: 'failed', course_name: '失败课程' }],
+    })
+
+    const user = userEvent.setup()
+    renderDashboard()
+
+    await screen.findByRole('button', { name: '查看任务' })
+    expect(screen.getAllByText(/智慧树 课程学习 · 运行课程/)).toHaveLength(1)
+    const failure = screen.getByRole('button', { name: /学习通 课程学习 · 失败课程/ })
+
+    await user.click(failure)
+    expect(screen.getByLabelText('当前路径')).toHaveTextContent('/chaoxing-fanya?tab=tasks')
   })
 
   test('reports a partial sync when only some services fulfill', async () => {

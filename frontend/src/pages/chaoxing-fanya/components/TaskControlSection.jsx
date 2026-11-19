@@ -1,6 +1,6 @@
 import { Pause, Play, RefreshCw, Square, WifiOff } from 'lucide-react'
 
-import { StatusBadge } from '../../../components'
+import { ProgressMeter, StateNotice, StatusBadge } from '../../../components'
 import { CARD, DONE_STATUSES, formatTaskTime, toNum } from '../utils'
 import { describeTask } from '../taskInsights'
 
@@ -19,34 +19,13 @@ const clock = (seconds) => {
   return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`
 }
 
-function ProgressRow({ label, value, percent, barClass }) {
-  return (
-    <div>
-      <div className="flex items-baseline justify-between gap-3 text-sm">
-        <span className="text-text-muted">{label}</span>
-        <span className="font-semibold tabular-nums text-text">{value}</span>
-      </div>
-      <div
-        role="progressbar"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(percent)}
-        className="mt-1.5 h-2 overflow-hidden rounded-full bg-surface-hover"
-      >
-        <div className={`h-full rounded-full transition-all duration-200 ${barClass}`} style={{ width: `${percent}%` }} />
-      </div>
-    </div>
-  )
-}
-
 // Status-first view of the selected task: Chinese status, one-line headline,
 // progress, and the controls that make sense right now.
 export default function TaskControlSection({
-  taskId, taskStatus, logs = [], view: precomputed, statusText, controlTask, controlLoading = {}, pollError = null, onRefresh,
+  taskId, taskStatus, logs = [], view: precomputed, controlTask, controlLoading = {}, pollError = null, onRefresh,
 }) {
   const view = precomputed || describeTask(taskStatus, logs)
-  const status = statusText || view.status
+  const status = view.status
   const progress = taskStatus?.progress || {}
   const totalChapters = toNum(progress.total_chapters)
   const doneChapters = toNum(progress.completed_chapters)
@@ -65,52 +44,55 @@ export default function TaskControlSection({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <StatusBadge status={status} label={view.label} tone={view.tone} />
-          <h2 id="fanya-task-headline" className="mt-2 break-words text-xl font-bold text-text">{view.headline}</h2>
+          <h2 id="fanya-task-headline" className="mt-2 break-words font-display text-xl font-bold text-text">{view.headline}</h2>
           {view.detail && <p className="mt-1 break-words text-sm text-text-muted">{view.detail}</p>}
         </div>
         {updatedAt && <p className="text-xs text-text-muted">更新于 {formatTaskTime(updatedAt)}</p>}
       </div>
 
       {pollError && (
-        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-warning/30 bg-warning-surface px-3 py-2 text-sm text-text">
-          <WifiOff className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
-          <p className="min-w-0 flex-1 break-words">
-            {pollError.missing
-              ? '找不到这个任务的记录，可能已过期被清理。下面显示的是最后一次读到的状态。'
-              : `暂时读不到最新进度，正在自动重试。${pollError.message ? `（${pollError.message}）` : ''}`}
-          </p>
-          {!pollError.missing && onRefresh && (
-            <button type="button" onClick={onRefresh} className="clay-button-secondary min-h-[44px] gap-1.5 px-3 text-sm">
+        <StateNotice
+          kind="warning"
+          icon={WifiOff}
+          role="status"
+          className="mt-4"
+          action={!pollError.missing && onRefresh && (
+            <button type="button" onClick={onRefresh} className="ui-btn-secondary min-h-[44px]">
               <RefreshCw className="h-4 w-4" aria-hidden="true" />立即刷新
             </button>
           )}
-        </div>
+        >
+          {pollError.missing
+            ? '任务记录可能已过期。以下是上次读取的状态。'
+            : `暂时读不到最新进度，正在自动重试。${pollError.message ? `（${pollError.message}）` : ''}`}
+        </StateNotice>
       )}
 
       {(totalChapters > 0 || totalCourses > 0) && (
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <ProgressRow
+          <ProgressMeter
             label="章节进度"
-            value={`${doneChapters}/${totalChapters}`}
-            percent={percentOf(doneChapters, totalChapters)}
-            barClass="bg-primary"
+            detail={`${doneChapters}/${totalChapters}`}
+            value={percentOf(doneChapters, totalChapters)}
+            known={totalChapters > 0}
           />
-          <ProgressRow
+          <ProgressMeter
             label="课程进度"
-            value={`${doneCourses}/${totalCourses}${failedCourses > 0 ? `（${failedCourses} 门未完成）` : ''}`}
-            percent={percentOf(doneCourses, totalCourses)}
-            barClass="bg-success"
+            detail={`${doneCourses}/${totalCourses}${failedCourses > 0 ? `（${failedCourses} 门未完成）` : ''}`}
+            value={percentOf(doneCourses, totalCourses)}
+            tone="success"
+            known={totalCourses > 0}
           />
         </div>
       )}
 
       {showVideo && (
-        <div className="mt-4 rounded-xl bg-surface-hover/60 p-3">
-          <ProgressRow
+        <div className="mt-4 ui-panel p-3">
+          <ProgressMeter
             label={`当前视频：${video.name}`}
-            value={`${clock(video.current)} / ${clock(video.duration)}`}
-            percent={percentOf(toNum(video.current), toNum(video.duration))}
-            barClass="bg-primary"
+            detail={`${clock(video.current)} / ${clock(video.duration)}`}
+            value={percentOf(toNum(video.current), toNum(video.duration))}
+            known={toNum(video.duration) > 0}
           />
         </div>
       )}
@@ -121,7 +103,7 @@ export default function TaskControlSection({
             type="button"
             onClick={() => { void controlTask('pause') }}
             disabled={status !== 'running' || Boolean(controlLoading?.pause)}
-            className="clay-button-secondary min-h-[44px] gap-1.5 px-4 text-sm"
+            className="ui-btn-secondary min-h-[44px]"
           >
             <Pause className="h-4 w-4" aria-hidden="true" />暂停
           </button>
@@ -129,7 +111,7 @@ export default function TaskControlSection({
             type="button"
             onClick={() => { void controlTask('resume') }}
             disabled={status !== 'paused' || Boolean(controlLoading?.resume)}
-            className="clay-button-secondary min-h-[44px] gap-1.5 px-4 text-sm"
+            className="ui-btn-secondary min-h-[44px]"
           >
             <Play className="h-4 w-4" aria-hidden="true" />继续
           </button>
@@ -138,8 +120,8 @@ export default function TaskControlSection({
             onClick={() => {
               if (window.confirm('确定要停止当前刷课任务吗？')) void controlTask('stop')
             }}
-            disabled={status === 'cancelling' || Boolean(controlLoading?.stop)}
-            className="clay-button min-h-[44px] gap-1.5 border border-danger/40 px-4 text-sm text-danger hover:bg-danger-surface"
+            disabled={['cancelling', 'stopping'].includes(status) || Boolean(controlLoading?.stop)}
+            className="ui-btn-danger min-h-[44px]"
           >
             <Square className="h-4 w-4" aria-hidden="true" />停止
           </button>
@@ -148,7 +130,7 @@ export default function TaskControlSection({
 
       {taskId && (
         <p className="mt-4 break-all text-xs text-text-muted">
-          任务编号 <span className="font-mono">{taskId}</span>
+          任务编号 <span className="font-code">{taskId}</span>
         </p>
       )}
     </section>

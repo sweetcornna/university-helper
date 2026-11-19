@@ -1,15 +1,28 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
+  ArrowRight,
   ChevronDown,
   Loader2,
   Pause,
   Play,
   QrCode,
   RefreshCcw,
+  Sparkles,
   X
 } from 'lucide-react'
-import { AccountChip, Input, PageHeader, Toggle, useRuntimeProfile, useToast } from '../components'
+import {
+  AccountChip,
+  Input,
+  PageHeader,
+  ProgressMeter,
+  StateNotice,
+  StatusBadge,
+  Toggle,
+  useRuntimeProfile,
+  useToast,
+} from '../components'
+import { statusLabel } from '../components/statusMeta'
 import WorkspaceTabs from '../components/WorkspaceTabs'
 import useWorkspaceTab from '../components/useWorkspaceTab'
 import { api } from '../utils/api'
@@ -30,26 +43,25 @@ const SETTINGS_STORAGE_KEY = 'zhihuishu_page_settings_v1'
 const ACTIVE_TASK_ID_STORAGE_KEY = 'zhihuishu_active_task_id_v1'
 const ZHIHUISHU_API_BASE = '/course/zhihuishu'
 
-const CARD_CLASS = 'rounded-2xl border border-border bg-surface p-5 shadow-sm sm:p-6'
-const PANEL_CLASS = 'rounded-xl border border-border bg-surface-hover/40 p-4'
+const CARD_CLASS = 'ui-card p-4 sm:p-5'
+const PANEL_CLASS = 'ui-panel p-3.5'
+// Tabs follow the student's order of work: log in, choose a course, configure
+// and start, then follow the task. The default tab still depends on login.
 const ZHIHUISHU_TABS = [
+  { id: 'account', label: '账号' },
   { id: 'courses', label: '课程' },
   { id: 'study', label: '学习配置' },
   { id: 'tasks', label: '任务' },
-  { id: 'account', label: '账号' },
 ]
 // Old links: 登录 and 状态与退出 became 账号; 设置 became the 默认设置
 // section of 学习配置.
 const ZHIHUISHU_TAB_ALIASES = { login: 'account', status: 'account', settings: 'study' }
-const FIELD_CLASS =
-  'w-full min-w-0 min-h-[44px] rounded-xl border border-border bg-surface px-4 py-2 text-text focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60'
-const LABEL_CLASS = 'mb-2 block text-sm font-semibold text-text'
-const BUTTON_CLASS =
-  'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60'
-const PRIMARY_BUTTON_CLASS = `${BUTTON_CLASS} bg-primary text-white hover:bg-primary/90`
-const SECONDARY_BUTTON_CLASS = `${BUTTON_CLASS} border border-border bg-surface text-text hover:bg-surface-hover`
-const GHOST_BUTTON_CLASS = `${BUTTON_CLASS} text-text-muted hover:bg-surface-hover hover:text-text`
-const DANGER_BUTTON_CLASS = `${BUTTON_CLASS} border border-danger/40 text-danger hover:bg-danger/10`
+const FIELD_CLASS = 'ui-field'
+const LABEL_CLASS = 'ui-label'
+const PRIMARY_BUTTON_CLASS = 'ui-btn-primary'
+const SECONDARY_BUTTON_CLASS = 'ui-btn-secondary'
+const GHOST_BUTTON_CLASS = 'ui-btn-ghost'
+const DANGER_BUTTON_CLASS = 'ui-btn-danger'
 const SPEED_OPTIONS = ['0.5', '1.0', '1.5', '2.0']
 
 // The speed <select> uses one-decimal values ("1.0"), but the config API
@@ -248,6 +260,7 @@ export default function Zhihuishu() {
   const qrSessionOwnerRef = useRef({ generation: 0, sessionId: '' })
   const qrPollsInFlightRef = useRef(new Map())
   const progressPollRef = useRef(null)
+  const terminalProgressTaskIdRef = useRef('')
   const mountedRef = useRef(false)
   const coursesRef = useRef([])
   const selectedCourseIdRef = useRef('')
@@ -939,7 +952,10 @@ export default function Zhihuishu() {
         activeTaskIdRef.current = normalized.taskId
         setActiveTaskId(normalized.taskId)
         if (TERMINAL_ZHIHUISHU_TASK_STATUSES.has(normalized.status)) {
+          terminalProgressTaskIdRef.current = normalized.taskId
           stopProgressPolling()
+        } else {
+          terminalProgressTaskIdRef.current = ''
         }
       }
       return normalized
@@ -1358,6 +1374,7 @@ export default function Zhihuishu() {
   const resetZhihuishuSession = useCallback(() => {
     invalidateQrGeneration()
     stopProgressPolling()
+    terminalProgressTaskIdRef.current = ''
     invalidateTaskRequests()
     taskRecordsRef.current = []
     coursesRef.current = []
@@ -1502,14 +1519,11 @@ export default function Zhihuishu() {
   }, [fetchTaskDetail])
 
   useEffect(() => {
-    if (!activeTaskId) {
-      stopProgressPolling()
-      return undefined
-    }
+    stopProgressPolling()
+    // A detail request can confirm completion before this effect sees the new active task.
+    if (!activeTaskId || terminalProgressTaskIdRef.current === activeTaskId) return undefined
 
     const pollSeconds = clampPollSeconds(settings.progressPollSeconds)
-    stopProgressPolling()
-
     progressPollRef.current = setInterval(() => {
       void fetchTaskDetailRef.current(activeTaskId, true)
     }, pollSeconds * 1000)
@@ -1596,33 +1610,56 @@ export default function Zhihuishu() {
 
   const courseLabel = selectedCourse?.courseName || selectedCourse?.name || selectedCourse?.title || selectedCourseId
 
-  if (booting) {
-    return (
-      <div className="space-y-6">
-        <PageHeader eyebrow="智慧树" title="课程学习" />
-        <p role="status" className="flex items-center gap-2 text-sm text-text-muted">
-          <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
-          正在检查登录状态...
-        </p>
-      </div>
-    )
-  }
+  const activeTaskRecord = taskRecords.find((task) => task.taskId === activeTaskId) || null
+  const activeTaskOpen = Boolean(activeTaskRecord && !TERMINAL_ZHIHUISHU_TASK_STATUSES.has(activeTaskRecord.status))
+  const qrBadge = {
+    idle: { status: 'idle', label: '未生成' },
+    loading: { status: 'starting', label: '生成中' },
+    pending: { status: 'pending', label: '等待扫码' },
+    success: { status: 'completed', label: '登录成功' },
+    failed: { status: 'failed', label: '登录失败' },
+  }[qrStatus] || { status: 'unknown', label: '未知状态' }
 
-  return (
-    <div className="min-w-0 space-y-6">
-      <PageHeader
-        eyebrow="智慧树"
-        title="课程学习"
-        actions={(
+  const header = (
+    <PageHeader
+      spine="zhihuishu"
+      eyebrow="智慧树"
+      title="课程学习"
+      actions={booting ? null : (
+        <>
+          {activeTaskOpen && activeTab !== 'tasks' && (
+            <button type="button" onClick={() => setActiveTab('tasks')} className="ui-btn-secondary border-primary/40 text-primary">
+              <span className="relative flex h-2 w-2" aria-hidden="true">
+                <span className="absolute inline-flex h-full w-full rounded-full bg-primary/60 motion-safe:animate-ping" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+              </span>
+              任务进行中
+            </button>
+          )}
           <AccountChip
             ready={zhihuishuLoggedIn}
             account={loggedInAccount}
             onClick={() => setActiveTab('account')}
           />
-        )}
-      >
-        <WorkspaceTabs id="zhs" label="智慧树工作区" tabs={ZHIHUISHU_TABS} activeTab={activeTab} onChange={setActiveTab} />
-      </PageHeader>
+        </>
+      )}
+    >
+      {!booting && <WorkspaceTabs id="zhs" label="智慧树工作区" tabs={ZHIHUISHU_TABS} activeTab={activeTab} onChange={setActiveTab} />}
+    </PageHeader>
+  )
+
+  if (booting) {
+    return (
+      <div className="space-y-5">
+        {header}
+        <StateNotice kind="loading" role="status" compact>正在检查登录状态...</StateNotice>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-w-0 space-y-5">
+      {header}
 
       {activeTab === 'courses' && (
         <section
@@ -1630,27 +1667,31 @@ export default function Zhihuishu() {
           role="tabpanel"
           aria-labelledby="zhs-tab-courses"
           tabIndex="0"
-          className={courses.length > 0 ? 'grid grid-cols-1 items-start gap-6 lg:grid-cols-2' : 'max-w-2xl'}
+          className={courses.length > 0 ? 'grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]' : 'max-w-3xl'}
         >
           <div className={`${CARD_CLASS} space-y-4`}>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-text">选择课程</h2>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="font-display text-base font-bold text-text">
+                  选择课程 {courses.length > 0 && <span className="font-code text-xs font-normal text-text-muted">{courses.length} 门</span>}
+                </h2>
+              </div>
               <button
                 type="button"
-                className={GHOST_BUTTON_CLASS}
+                className={`${GHOST_BUTTON_CLASS} ui-btn-sm`}
                 onClick={() => {
                   void loadCourses(false)
                 }}
                 disabled={coursesLoading}
               >
-                <RefreshCcw className="h-4 w-4" aria-hidden="true" />
+                <RefreshCcw className={`h-3.5 w-3.5 ${coursesLoading ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
                 {coursesLoading ? '刷新中...' : '刷新课程'}
               </button>
             </div>
 
             {courses.length > 0 ? (
               <>
-                <div>
+                <div className="lg:hidden">
                   <label htmlFor="zhs-course" className={LABEL_CLASS}>分组课程</label>
                   <select
                     id="zhs-course"
@@ -1672,6 +1713,35 @@ export default function Zhihuishu() {
                     ))}
                   </select>
                 </div>
+                {/* Wide screens: the same choices as a catalog list beside the detail;
+                    the select above is display:none there, so only one is exposed. */}
+                <div className="hidden max-h-[30rem] space-y-3 overflow-y-auto pr-0.5 lg:block" role="group" aria-label="课程目录">
+                  {courseGroups.map((group) => (
+                    <div key={group.group}>
+                      <p className="catalog-label mb-1.5">{group.group}（{group.courses.length}）</p>
+                      <ul className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface">
+                        {group.courses.map((course) => {
+                          const id = getZhihuishuCourseId(course)
+                          const title = course.courseName || course.name || course.title || id
+                          const selected = id === selectedCourseId
+                          return (
+                            <li key={`${group.group}-${id}`}>
+                              <button
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() => selectCourse(id)}
+                                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${selected ? 'bg-primary/10 font-semibold text-primary' : 'text-text hover:bg-surface-hover'}`}
+                              >
+                                <span aria-hidden="true" className={`h-4 w-1 shrink-0 rounded-sm ${selected ? 'bg-[rgb(var(--spine-zhihuishu))]' : 'bg-transparent'}`} />
+                                <span className="min-w-0 flex-1 break-words">{title}</span>
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
                 <button
                   type="button"
                   className={`${PRIMARY_BUTTON_CLASS} w-full`}
@@ -1679,11 +1749,14 @@ export default function Zhihuishu() {
                   disabled={!selectedCourseId}
                 >
                   下一步：学习配置
+                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
                 </button>
               </>
-            ) : !coursesLoading && (
+            ) : coursesLoading ? (
+              <StateNotice kind="loading" role="status" compact>正在读取课程…</StateNotice>
+            ) : (
               <div role="status" className="space-y-3 text-sm text-text-muted">
-                <p>{zhihuishuLoggedIn ? '没有读到课程，可稍后刷新重试。' : '登录智慧树后即可看到课程。'}</p>
+                <p>{zhihuishuLoggedIn ? '没有读到课程，请稍后刷新。' : '先登录智慧树。'}</p>
                 {!zhihuishuLoggedIn && (
                   <button type="button" className={PRIMARY_BUTTON_CLASS} onClick={() => setActiveTab('account')}>
                     前往登录
@@ -1694,14 +1767,14 @@ export default function Zhihuishu() {
           </div>
 
           {courses.length > 0 && (
-            <div className={`${CARD_CLASS} space-y-4`}>
+            <div className={`${CARD_CLASS} spine-zhihuishu min-w-0 space-y-4`}>
               {!selectedCourseId ? (
                 <p className="text-sm text-text-muted">请选择课程查看详情与进度。</p>
               ) : (
                 <>
                   <div className="min-w-0">
-                    <h2 className="break-words text-lg font-semibold text-text">{courseLabel}</h2>
-                    <p className="mt-1 break-all text-xs text-text-muted">
+                    <h2 className="font-display break-words text-lg font-bold text-text">{courseLabel}</h2>
+                    <p className="font-code mt-1 break-all text-xs text-text-muted">
                       {selectedCourse?._groupName || selectedCourse?.semesterName || selectedCourse?.termName || '未分类'} · ID {selectedCourseId}
                     </p>
                     {courseDetailLoading && <p className="mt-2 text-xs text-text-muted">正在加载课程详情...</p>}
@@ -1712,7 +1785,7 @@ export default function Zhihuishu() {
                       <h3 className="text-sm font-semibold text-text">学习进度</h3>
                       <button
                         type="button"
-                        className={SECONDARY_BUTTON_CLASS}
+                        className={`${SECONDARY_BUTTON_CLASS} ui-btn-sm`}
                         onClick={() => {
                           const courseTask = taskRecords.find((task) => task.taskId === activeTaskId && task.courseId === selectedCourseId)
                           if (courseTask) {
@@ -1728,22 +1801,16 @@ export default function Zhihuishu() {
                     </div>
                     {progress ? (
                       <>
-                        <div
-                          className="h-2 overflow-hidden rounded-full bg-border/60"
-                          role="progressbar"
-                          aria-valuenow={Math.round(selectedCourseProgress.percentage)}
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          aria-label="课程学习进度"
-                        >
-                          <div className="h-full rounded-full bg-primary transition-all duration-200" style={{ width: `${selectedCourseProgress.percentage}%` }} />
-                        </div>
-                        <p className="text-xs text-text-muted">
-                          {progress.status ? `${progress.status} · ` : ''}
-                          {selectedCourseProgress.completed}/{selectedCourseProgress.total}（{Math.round(selectedCourseProgress.percentage)}%）
-                          {selectedCourseProgress.failed > 0 ? ` · 失败 ${selectedCourseProgress.failed}` : ''}
-                          {selectedCourseProgress.estimatedTime ? ` · 预计剩余 ${selectedCourseProgress.estimatedTime}` : ''}
-                        </p>
+                        <ProgressMeter
+                          label="课程学习进度"
+                          value={selectedCourseProgress.percentage}
+                          detail={[
+                            progress.status ? `${statusLabel(progress.status)} · ` : '',
+                            `${selectedCourseProgress.completed}/${selectedCourseProgress.total}（${Math.round(selectedCourseProgress.percentage)}%）`,
+                            selectedCourseProgress.failed > 0 ? ` · 失败 ${selectedCourseProgress.failed}` : '',
+                            selectedCourseProgress.estimatedTime ? ` · 预计剩余 ${selectedCourseProgress.estimatedTime}` : '',
+                          ].join('')}
+                        />
                         <p className="break-words text-sm text-text">消息：{progress.message || '暂无'}</p>
                         {selectedCourseProgress.currentVideo && (
                           <p className="break-words text-sm text-text-muted">当前视频：{selectedCourseProgress.currentVideo}</p>
@@ -1759,7 +1826,7 @@ export default function Zhihuishu() {
                       <h3 className="text-sm font-semibold text-text">课程内容</h3>
                       <button
                         type="button"
-                        className={SECONDARY_BUTTON_CLASS}
+                        className={`${SECONDARY_BUTTON_CLASS} ui-btn-sm`}
                         onClick={() => {
                           void loadVideos(selectedCourseId)
                         }}
@@ -1772,26 +1839,26 @@ export default function Zhihuishu() {
                       <p className="text-sm text-text-muted">尚未加载课程内容。</p>
                     )}
                     {courseStructure.length > 0 && (
-                      <ul className="max-h-48 space-y-2 overflow-y-auto pr-1 text-sm">
+                      <ul className="max-h-48 divide-y divide-border-subtle overflow-y-auto rounded-md border border-border-subtle bg-surface text-sm">
                         {courseStructure.map((section, index) => (
-                          <li key={`${section.id || index}`} className="flex items-start justify-between gap-3 rounded-lg bg-surface px-3 py-2">
+                          <li key={`${section.id || index}`} className="flex items-start justify-between gap-3 px-3 py-2">
                             <p className="min-w-0 break-words font-medium text-text">{section.title || `结构 ${index + 1}`}</p>
-                            <span className="shrink-0 text-xs text-text-muted">{Array.isArray(section.videos) ? section.videos.length : 0} 个视频</span>
+                            <span className="font-code shrink-0 text-xs text-text-muted">{Array.isArray(section.videos) ? section.videos.length : 0} 个视频</span>
                           </li>
                         ))}
                       </ul>
                     )}
                     {videos.length > 0 && (
-                      <details>
-                        <summary className="cursor-pointer text-sm font-medium text-text">视频（{videos.length}）</summary>
-                        <ul className="mt-2 max-h-56 space-y-2 overflow-y-auto pr-1 text-sm">
+                      <details className="group">
+                        <summary className="min-h-[32px] py-1 text-sm font-semibold text-text">视频（{videos.length}）</summary>
+                        <ul className="mt-2 max-h-56 divide-y divide-border-subtle overflow-y-auto rounded-md border border-border-subtle bg-surface text-sm">
                           {videos.map((video, index) => {
                             const title = video.name || video.title || video.videoName || `视频 ${index + 1}`
                             return (
-                              <li key={`${title}-${index}`} className="rounded-lg bg-surface px-3 py-2">
+                              <li key={`${title}-${index}`} className="px-3 py-2">
                                 <div className="flex items-start justify-between gap-3">
                                   <span className="min-w-0 break-words text-text">{title}</span>
-                                  <span className="shrink-0 text-xs text-text-muted">{video.status || 'unknown'}</span>
+                                  <span className="font-code shrink-0 text-xs text-text-muted">{video.status || 'unknown'}</span>
                                 </div>
                                 {video.sectionTitle && <p className="mt-0.5 text-xs text-text-muted">章节：{video.sectionTitle}</p>}
                               </li>
@@ -1809,16 +1876,13 @@ export default function Zhihuishu() {
       )}
 
       {activeTab === 'study' && (
-        <section id="zhs-panel-study" role="tabpanel" aria-labelledby="zhs-tab-study" tabIndex="0" className="max-w-3xl space-y-4">
-          <div className={`${CARD_CLASS} space-y-5`}>
+        <section id="zhs-panel-study" role="tabpanel" aria-labelledby="zhs-tab-study" tabIndex="0" className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className={`${CARD_CLASS} spine-zhihuishu space-y-5`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs font-medium text-text-muted">当前课程</p>
-                <h2 className="mt-1 break-words text-lg font-semibold text-text">{selectedCourseId ? courseLabel : '尚未选择课程'}</h2>
-              </div>
+              <h2 className="font-display min-w-0 break-words text-lg font-bold text-text">{selectedCourseId ? courseLabel : '尚未选择课程'}</h2>
               <button
                 type="button"
-                className={selectedCourseId ? GHOST_BUTTON_CLASS : PRIMARY_BUTTON_CLASS}
+                className={selectedCourseId ? `${GHOST_BUTTON_CLASS} ui-btn-sm` : PRIMARY_BUTTON_CLASS}
                 onClick={() => setActiveTab('courses')}
               >
                 {selectedCourseId ? '换课程' : '去选择课程'}
@@ -1837,7 +1901,7 @@ export default function Zhihuishu() {
                   {SPEED_OPTIONS.map((speed) => <option key={speed} value={speed}>{speed}x</option>)}
                 </select>
               </div>
-              <div className="flex min-h-[44px] items-center justify-between gap-3 self-end rounded-xl border border-border pl-4 pr-1">
+              <div className="flex min-h-[40px] items-center justify-between gap-3 self-end rounded-lg border border-border bg-surface pl-3 pr-1">
                 <span className="text-sm font-semibold text-text">
                   自动答题<span className="ml-1 text-xs font-normal text-text-muted">视频弹题</span>
                 </span>
@@ -1849,7 +1913,7 @@ export default function Zhihuishu() {
               </div>
             </div>
 
-            {selectedCourseId && (
+            {selectedCourseId ? (
               <>
                 <div>
                   <label htmlFor="zhs-end-chapter" className={LABEL_CLASS}>学到哪一章</label>
@@ -1878,14 +1942,15 @@ export default function Zhihuishu() {
                         }}
                         disabled={chaptersLoading}
                       >
+                        {chaptersLoading && <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />}
                         {chaptersLoading ? '章节加载中...' : '加载章节'}
                       </button>
                     )}
                   </div>
-                  <p id="zhs-end-chapter-hint" className="mt-1.5 text-xs text-text-muted">{chapterScope.hint}</p>
+                  <p id="zhs-end-chapter-hint" className="ui-hint">{chapterScope.hint}</p>
                 </div>
 
-                <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="flex flex-col gap-2 border-t border-border-subtle pt-4 sm:flex-row">
                   <button
                     type="button"
                     className={PRIMARY_BUTTON_CLASS}
@@ -1894,7 +1959,7 @@ export default function Zhihuishu() {
                     }}
                     disabled={startLoadingType !== ''}
                   >
-                    <Play className="h-4 w-4" aria-hidden="true" />
+                    {startLoadingType === 'course' ? <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
                     {startLoadingType === 'course' ? '启动中...' : '启动课程任务'}
                   </button>
                   <button
@@ -1905,26 +1970,25 @@ export default function Zhihuishu() {
                     }}
                     disabled={startLoadingType !== ''}
                   >
-                    <Play className="h-4 w-4" aria-hidden="true" />
+                    {startLoadingType === 'ai-course' ? <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" /> : <Sparkles className="h-4 w-4" aria-hidden="true" />}
                     {startLoadingType === 'ai-course' ? '启动中...' : '启动 AI 任务'}
                   </button>
                 </div>
               </>
-            )}
+            ) : null}
           </div>
 
           <details
-            className={CARD_CLASS}
+            className={`${CARD_CLASS} lg:sticky lg:top-20`}
             open={defaultsOpen}
             onToggle={(event) => setDefaultsOpen(event.currentTarget.open)}
           >
-            <summary className="flex min-h-[28px] cursor-pointer list-none items-center justify-between gap-3 font-semibold text-text [&::-webkit-details-marker]:hidden">
+            <summary className="flex min-h-[28px] list-none items-center justify-between gap-3 font-semibold text-text [&::-webkit-details-marker]:hidden">
               默认设置
               <ChevronDown className={`h-4 w-4 text-text-muted transition-transform ${defaultsOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
             </summary>
             <div className="mt-4 space-y-4">
-              <p className="text-sm text-text-muted">保存后，上面的倍速、自动答题和这里的轮询间隔会在下次打开时沿用。</p>
-              <div className="sm:max-w-xs">
+              <div>
                 <label htmlFor="zhs-poll" className={LABEL_CLASS}>进度轮询间隔（秒）</label>
                 <input
                   id="zhs-poll"
@@ -1964,42 +2028,37 @@ export default function Zhihuishu() {
       )}
 
       {activeTab === 'tasks' && (
-        <section id="zhs-panel-tasks" role="tabpanel" aria-labelledby="zhs-tab-tasks" tabIndex="0" className="space-y-4">
-          <div className={`${CARD_CLASS} space-y-4`}>
+        <section id="zhs-panel-tasks" role="tabpanel" aria-labelledby="zhs-tab-tasks" tabIndex="0" className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+          <div className={`${CARD_CLASS} spine-zhihuishu min-w-0 space-y-4 lg:order-2 lg:sticky lg:top-20`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-text">当前任务</h2>
-              <button type="button" className={GHOST_BUTTON_CLASS} onClick={refreshTaskList} disabled={progressLoading}>
-                <RefreshCcw className="h-4 w-4" aria-hidden="true" />
+              <h2 className="font-display text-base font-bold text-text">当前任务</h2>
+              <button type="button" className={`${GHOST_BUTTON_CLASS} ui-btn-sm`} onClick={refreshTaskList} disabled={progressLoading}>
+                <RefreshCcw className={`h-3.5 w-3.5 ${progressLoading ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" />
                 刷新列表
               </button>
             </div>
 
             {activeTaskId ? (
               <>
-                <div className="min-w-0">
-                  <p className="break-words font-semibold text-text">{activeTaskSummary.courseName || '智慧树任务'}</p>
-                  <p className="mt-1 break-all text-xs text-text-muted">任务 ID：{activeTaskId}</p>
-                </div>
-                <div className="space-y-2">
-                  <div
-                    className="h-2 overflow-hidden rounded-full bg-border/60"
-                    role="progressbar"
-                    aria-valuenow={Math.round(activeTaskSummary.percentage)}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-label="最近任务进度"
-                  >
-                    <div className="h-full rounded-full bg-primary transition-all duration-200" style={{ width: `${activeTaskSummary.percentage}%` }} />
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="break-words font-semibold text-text">{activeTaskSummary.courseName || '智慧树任务'}</p>
+                    <p className="font-code mt-1 break-all text-xs text-text-muted">任务 ID：{activeTaskId}</p>
                   </div>
-                  <p className="text-xs text-text-muted">
-                    {activeTaskSummary.completed}/{activeTaskSummary.total}（{Math.round(activeTaskSummary.percentage)}%）
-                    {activeTaskSummary.failed > 0 ? ` · 失败 ${activeTaskSummary.failed}` : ''}
-                    {activeTaskSummary.estimatedTime ? ` · 预计剩余 ${activeTaskSummary.estimatedTime}` : ''}
-                  </p>
+                  <StatusBadge status={activeTaskSummary.status} />
                 </div>
-                <div className="space-y-1 text-sm">
-                  <p className="text-text">状态：{activeTaskSummary.status}</p>
-                  <p className="break-words text-text-muted">消息：{activeTaskSummary.message}</p>
+                <ProgressMeter
+                  label="最近任务进度"
+                  value={activeTaskSummary.percentage}
+                  tone={TERMINAL_ZHIHUISHU_TASK_STATUSES.has(activeTaskSummary.status) && activeTaskSummary.status !== 'completed' ? 'danger' : activeTaskSummary.status === 'completed' ? 'success' : 'primary'}
+                  detail={[
+                    `${activeTaskSummary.completed}/${activeTaskSummary.total}（${Math.round(activeTaskSummary.percentage)}%）`,
+                    activeTaskSummary.failed > 0 ? ` · 失败 ${activeTaskSummary.failed}` : '',
+                    activeTaskSummary.estimatedTime ? ` · 预计剩余 ${activeTaskSummary.estimatedTime}` : '',
+                  ].join('')}
+                />
+                <div className="ui-panel space-y-1 px-3 py-2.5 text-sm">
+                  <p className="break-words text-text">消息：{activeTaskSummary.message}</p>
                   {activeTaskSummary.currentVideo && (
                     <p className="break-words text-text-muted">当前视频：{activeTaskSummary.currentVideo}</p>
                   )}
@@ -2020,7 +2079,7 @@ export default function Zhihuishu() {
                 </div>
               </>
             ) : sortedTasks.length > 0 ? (
-              <p role="status" className="text-sm text-text-muted">在下方任务记录中点「查看详情」查看进度。</p>
+              <StateNotice kind="info" role="status" compact>选择一条任务记录查看详情</StateNotice>
             ) : (
               <div role="status" className="space-y-3 text-sm text-text-muted">
                 <p>还没有任务。</p>
@@ -2035,75 +2094,83 @@ export default function Zhihuishu() {
             )}
           </div>
 
-          {sortedTasks.length > 0 && (
-            <div className={`${CARD_CLASS} space-y-3`}>
-              <h2 className="text-lg font-semibold text-text">任务记录</h2>
-              <ul className="space-y-3">
-                {sortedTasks.map((task) => (
-                  <li key={task.taskId} className={`${PANEL_CLASS} space-y-2`}>
-                    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-                      <div className="min-w-0">
-                        <p className="break-words font-semibold text-text">{task.courseName || '智慧树任务'}</p>
-                        <p className="mt-1 break-all text-xs text-text-muted">任务 ID：{task.taskId}{task.taskId === activeTaskId ? ' · 当前查看' : ''}</p>
+          <div className={`${CARD_CLASS} min-w-0 space-y-3 lg:order-1`}>
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="font-display text-base font-bold text-text">任务记录</h2>
+              <span className="font-code text-xs text-text-muted">{sortedTasks.length} 条</span>
+            </div>
+            {sortedTasks.length === 0 ? (
+              <StateNotice kind="empty" compact>暂无任务记录</StateNotice>
+            ) : (
+              <ul className="space-y-2">
+                {sortedTasks.map((task) => {
+                  const current = task.taskId === activeTaskId
+                  return (
+                    <li key={task.taskId} className={`space-y-2 rounded-lg border p-3 ${current ? 'border-primary/50 bg-primary/5' : 'border-border-subtle bg-surface'}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="break-words text-sm font-semibold text-text">{task.courseName || '智慧树任务'}</p>
+                          <p className="font-code mt-1 break-all text-xs text-text-muted">任务 ID：{task.taskId}{current ? ' · 当前查看' : ''}</p>
+                        </div>
+                        <StatusBadge status={task.status || 'unknown'} />
                       </div>
-                      <p className="shrink-0 text-sm text-text">状态：{task.status || 'unknown'}</p>
-                    </div>
-                    <p className="break-words text-sm text-text-muted">
-                      进度：{task.completed || 0}/{task.total || 0}（{Math.round(Number(task.percentage || 0))}%）{task.currentTask ? ` · ${task.currentTask}` : ''}
-                    </p>
-                    {task.message && <p className="break-words text-sm text-text-muted">消息：{task.message}</p>}
-                    <p className="text-xs text-text-muted">
-                      {task.taskType === 'ai-course' ? 'AI 任务' : '课程任务'} · 更新于 {new Date(task.updatedAt || task.startedAt).toLocaleString()}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className={SECONDARY_BUTTON_CLASS}
-                        onClick={() => {
-                          void fetchTaskDetail(task.taskId, false)
-                        }}
-                        disabled={taskActionLoading !== '' || taskItemActionLoading === task.taskId}
-                      >
-                        查看详情
-                      </button>
-                      {!TERMINAL_ZHIHUISHU_TASK_STATUSES.has(task.status) && (
+                      <p className="break-words text-xs text-text-muted">
+                        进度：{task.completed || 0}/{task.total || 0}（{Math.round(Number(task.percentage || 0))}%）{task.currentTask ? ` · ${task.currentTask}` : ''}
+                      </p>
+                      {task.message && <p className="break-words text-xs text-text-muted">消息：{task.message}</p>}
+                      <p className="text-xs text-text-muted">
+                        {task.taskType === 'ai-course' ? 'AI 任务' : '课程任务'} · 更新于 {new Date(task.updatedAt || task.startedAt).toLocaleString()}
+                      </p>
+                      <div className="flex flex-wrap gap-2 pt-1">
                         <button
                           type="button"
-                          className={`${GHOST_BUTTON_CLASS} hover:text-danger`}
+                          className={`${SECONDARY_BUTTON_CLASS} ui-btn-sm`}
                           onClick={() => {
-                            void cancelTaskById(task.taskId)
+                            void fetchTaskDetail(task.taskId, false)
                           }}
                           disabled={taskActionLoading !== '' || taskItemActionLoading === task.taskId}
                         >
-                          {taskItemActionLoading === task.taskId ? '取消中...' : '取消该任务'}
+                          查看详情
                         </button>
-                      )}
-                    </div>
-                  </li>
-                ))}
+                        {!TERMINAL_ZHIHUISHU_TASK_STATUSES.has(task.status) && (
+                          <button
+                            type="button"
+                            className={`${GHOST_BUTTON_CLASS} ui-btn-sm hover:text-danger`}
+                            onClick={() => {
+                              void cancelTaskById(task.taskId)
+                            }}
+                            disabled={taskActionLoading !== '' || taskItemActionLoading === task.taskId}
+                          >
+                            {taskItemActionLoading === task.taskId ? '取消中...' : '取消该任务'}
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  )
+                })}
               </ul>
-            </div>
-          )}
+            )}
+          </div>
         </section>
       )}
 
       {activeTab === 'account' && (
-        <section id="zhs-panel-account" role="tabpanel" aria-labelledby="zhs-tab-account" tabIndex="0" className="max-w-2xl">
+        <section id="zhs-panel-account" role="tabpanel" aria-labelledby="zhs-tab-account" tabIndex="0" className="max-w-3xl">
           {zhihuishuLoggedIn ? (
-            <div className={`${CARD_CLASS} space-y-4`}>
+            <div className={`${CARD_CLASS} spine-zhihuishu space-y-4`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h2 className="text-lg font-semibold text-text">智慧树已登录</h2>
+                  <h2 className="font-display text-base font-bold text-text">智慧树已登录</h2>
                   {loggedInAccount && <p className="mt-1 break-all text-sm text-text-muted">账号：{loggedInAccount}</p>}
                 </div>
                 <button
                   type="button"
-                  className={GHOST_BUTTON_CLASS}
+                  className={`${GHOST_BUTTON_CLASS} ui-btn-sm`}
                   onClick={() => {
                     void loadZhihuishuStatus(false)
                   }}
                 >
-                  <RefreshCcw className="h-4 w-4" aria-hidden="true" />
+                  <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
                   同步状态
                 </button>
               </div>
@@ -2121,11 +2188,11 @@ export default function Zhihuishu() {
               <p className="text-xs text-text-muted">退出会结束智慧树会话并取消相关任务；清理只重置本页状态。</p>
             </div>
           ) : (
-            <div className={`${CARD_CLASS} space-y-5`}>
+            <div className={`${CARD_CLASS} spine-zhihuishu space-y-5`}>
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold text-text">登录智慧树</h2>
+                <h2 className="font-display text-base font-bold text-text">登录智慧树</h2>
                 {/* Only the chosen method's form shows, so the two never compete on screen. */}
-                <div role="radiogroup" aria-label="登录方式" className="inline-flex rounded-xl bg-surface-hover p-1">
+                <div role="radiogroup" aria-label="登录方式" className="inline-flex rounded-lg border border-border bg-surface p-1">
                   {[
                     { value: 'qr', label: '二维码登录' },
                     { value: 'password', label: '账号密码登录' },
@@ -2139,10 +2206,10 @@ export default function Zhihuishu() {
                         if (opt.value === 'password') abandonQrLoginIntent()
                         setLoginMethod(opt.value)
                       }}
-                      className={`min-h-[40px] rounded-lg px-3 text-sm font-medium transition-colors ${
+                      className={`min-h-[34px] rounded-md px-3 text-sm font-semibold transition-colors ${
                         loginMethod === opt.value
-                          ? 'bg-surface text-text shadow-sm'
-                          : 'text-text-muted hover:text-text'
+                          ? 'bg-primary text-on-primary'
+                          : 'text-text-muted hover:bg-surface-hover hover:text-text'
                       }`}
                     >
                       {opt.label}
@@ -2152,21 +2219,22 @@ export default function Zhihuishu() {
               </div>
 
               {loginMethod === 'qr' ? (
-                <div className="flex flex-col items-center gap-5 sm:flex-row">
-                  <div className="flex h-48 w-48 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-dashed border-border bg-surface-hover/40">
+                <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-start">
+                  <div className="flex h-48 w-48 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-dashed border-border bg-surface">
                     {qrLoading ? (
-                      <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden="true" />
+                      <Loader2 className="h-8 w-8 text-primary motion-safe:animate-spin" aria-hidden="true" />
                     ) : qrCode ? (
                       <img src={`data:image/png;base64,${qrCode}`} alt="智慧树二维码" className="h-full w-full bg-white object-contain" />
                     ) : (
                       <QrCode className="h-12 w-12 text-text-muted" aria-hidden="true" />
                     )}
                   </div>
-                  <div className="w-full min-w-0 space-y-4 text-center sm:text-left">
+                  <div className="w-full min-w-0 space-y-3 text-center sm:text-left">
+                    <StatusBadge status={qrBadge.status} label={qrBadge.label} />
                     {qrError ? (
                       <p role="alert" className="break-words text-sm text-danger">{qrError}</p>
                     ) : (
-                      <p className="break-words text-sm text-text-muted">
+                      <p aria-live="polite" className="break-words text-sm text-text-muted">
                         {qrStatus === 'idle' ? '用智慧树 App 扫码登录。' : (qrMessage || qrStatusText)}
                       </p>
                     )}
@@ -2188,9 +2256,12 @@ export default function Zhihuishu() {
                     <Input id="zhs-username" label="智慧树账号" type="text" autoComplete="username" value={passwordForm.username} onChange={(event) => setPasswordForm((prev) => ({ ...prev, username: event.target.value }))} required />
                     <Input id="zhs-password" label="密码" type="password" autoComplete="current-password" value={passwordForm.password} onChange={(event) => setPasswordForm((prev) => ({ ...prev, password: event.target.value }))} required />
                   </div>
-                  <button type="submit" className={`${PRIMARY_BUTTON_CLASS} w-full sm:w-auto`} disabled={passwordLoading}>
-                    {passwordLoading ? '登录中...' : '密码登录'}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button type="submit" className={`${PRIMARY_BUTTON_CLASS} w-full sm:w-auto`} disabled={passwordLoading}>
+                      {passwordLoading ? '登录中...' : '密码登录'}
+                    </button>
+                    <p className="text-xs text-text-muted">密码只在本页使用，不会保存。</p>
+                  </div>
                 </form>
               )}
             </div>

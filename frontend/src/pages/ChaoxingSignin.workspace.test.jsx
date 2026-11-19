@@ -63,6 +63,10 @@ describe('Chaoxing sign-in workspaces', () => {
     expect(screen.queryByLabelText('签到类型')).not.toBeInTheDocument()
     expect(screen.queryByRole('group', { name: '签到范围' })).not.toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    // No arrow-flow tagline, step labels or panel that restates the locked form
+    expect(screen.queryByText(/→/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/第 \d 步/)).not.toBeInTheDocument()
+    expect(screen.queryByText('签到表单尚未打开')).not.toBeInTheDocument()
   })
 
   test('keeps account fields editable until verification and retains them across sections', async () => {
@@ -259,6 +263,165 @@ describe('Chaoxing sign-in workspaces', () => {
     await user.click(screen.getByRole('button', { name: '检测群聊活动' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('群聊检测服务暂不可用')
     expect(screen.queryByText(/未检测到群聊活动/)).not.toBeInTheDocument()
+  })
+
+  test('a non-actionable group activity stays blocked by ID, after parsing its link and with an unparsed link', async () => {
+    const user = userEvent.setup()
+    fetch.mockImplementation(async (input) => String(input).includes('/chat-activities')
+      ? response({ status: true, data: { tasks: [{ chatId: '456', activeId: '123', name: '核验群活动', type: 'normal', status: 'unknown', actionable: false, source: 'chat', unsupportedReason: '仅显示群聊活动，请在学习通完成签到。' }] } })
+      : response({ status: true, data: [] }))
+    renderPage()
+    await verifyAccount(user)
+    await user.click(screen.getByRole('button', { name: '群聊' }))
+    await user.type(screen.getByLabelText('群聊 ID'), '456')
+    await user.click(screen.getByRole('button', { name: '检测群聊活动' }))
+    await screen.findByText('核验群活动')
+    expect(screen.getByText(/普通签到 · 需在学习通完成/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '选择此活动' }))
+    expect(screen.getByRole('button', { name: '提交群聊签到' })).toBeDisabled()
+    expect(screen.queryByRole('group', { name: '签到位置' })).not.toBeInTheDocument()
+
+    // Parsing the official link clears the detected list but not the block.
+    await user.type(screen.getByLabelText('活动链接（可选）'), 'https://mobilelearn.chaoxing.com/pptSign/stuSign?aid=123&chatId=456')
+    await user.click(screen.getByRole('button', { name: '解析活动链接' }))
+    expect(screen.queryByText('核验群活动')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('活动 ID')).toHaveValue('123')
+    expect(screen.getByRole('button', { name: '提交群聊签到' })).toBeDisabled()
+
+    // Only the link, not yet parsed, pointing at the same activity.
+    await user.clear(screen.getByLabelText('群聊 ID'))
+    await user.clear(screen.getByLabelText('活动 ID'))
+    expect(screen.getByRole('button', { name: '提交群聊签到' })).toBeDisabled()
+    expect(screen.getByText('仅显示群聊活动，请在学习通完成签到。')).toBeInTheDocument()
+    expect(fetch.mock.calls.filter(([input]) => String(input).endsWith('/chat-sign'))).toHaveLength(0)
+  })
+
+  test('a verification-only group rejection blocks the location form and further submits', async () => {
+    const user = userEvent.setup()
+    fetch.mockImplementation(async (input) => String(input).endsWith('/chat-sign')
+      ? response({ status: false, message: '请在学习通完成位置签到。', data: { requiresLocation: true, task: { chatId: '456', activeId: '123', type: 'location', actionable: false } } })
+      : response({ status: true, data: [] }))
+    renderPage()
+    await verifyAccount(user)
+    await user.click(screen.getByRole('button', { name: '群聊' }))
+    await user.type(screen.getByLabelText('群聊 ID'), '456')
+    await user.type(screen.getByLabelText('活动 ID'), '123')
+    await user.click(screen.getByRole('button', { name: '提交群聊签到' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('请在学习通完成位置签到。')
+    expect(screen.queryByRole('group', { name: '签到位置' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '提交群聊签到' })).toBeDisabled()
+
+    await user.type(screen.getByLabelText('活动链接（可选）'), 'https://mobilelearn.chaoxing.com/widget/sign?activeId=123&chatId=456')
+    await user.click(screen.getByRole('button', { name: '解析活动链接' }))
+    expect(screen.getByRole('button', { name: '提交群聊签到' })).toBeDisabled()
+    expect(fetch.mock.calls.filter(([input]) => String(input).endsWith('/chat-sign'))).toHaveLength(1)
+  })
+
+  test('history and detail share one task state; unknown is never shown as running', async () => {
+    const user = userEvent.setup()
+    fetch.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/task-list')) {
+        return response({ status: true, data: [
+          { task_id: 'odd', status: 'mystery', updated_at: '2026-11-18T10:03:00Z' },
+          { task_id: 'unsaved', status: 'error', message: '最终结果未保存。', updated_at: '2026-11-18T10:02:00Z' },
+          { task_id: 'unconfirmed', status: 'error', message: '签到未获确认，请在学习通核对签到状态。', updated_at: '2026-11-18T10:01:00Z' },
+        ] })
+      }
+      if (url.endsWith('/task/odd')) return response({ status: true, data: { task_id: 'odd', status: 'mystery' } })
+      return response({ status: true, data: [] })
+    })
+    renderPage()
+    await user.click(screen.getByRole('tab', { name: '签到记录' }))
+    const list = await screen.findByRole('region', { name: '后台任务历史' })
+    await waitFor(() => expect(list).toHaveTextContent('最终结果未保存'))
+    expect(list).toHaveTextContent('签到结果未确认')
+    expect(list).toHaveTextContent('状态未知')
+    expect(list).not.toHaveTextContent('进行中')
+    expect(await screen.findAllByText('状态未知')).not.toHaveLength(0)
+    expect(screen.queryByText('执行中')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /后台任务进行中/ })).not.toBeInTheDocument()
+  })
+
+  test('a running background task blocks a second create', async () => {
+    const user = userEvent.setup()
+    fetch.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/courses')) return response({ data: [{ courseId: '1', classId: '10', name: '课程一' }] })
+      if (url.endsWith('/task-list')) return response({ status: true, data: [{ task_id: 'run-1', status: 'running', updated_at: '2026-11-18T10:00:00Z' }] })
+      if (url.endsWith('/task/run-1')) return response({ status: true, data: { task_id: 'run-1', status: 'running', progress: { total: 2, current: 1, completed: 1, failed: 0 } } })
+      return response({ status: true, data: [] })
+    })
+    renderPage()
+    await verifyAccount(user)
+    await user.click(await screen.findByRole('checkbox', { name: /课程一/ }))
+    await user.click(screen.getByRole('tab', { name: '自动监控' }))
+    expect(await screen.findByText('已处理 1/2')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '创建课程任务' })).toBeDisabled()
+    expect(screen.getByText('后台任务运行中，结束后可再创建。')).toBeInTheDocument()
+    expect(fetch.mock.calls.filter(([input]) => String(input).endsWith('/start'))).toHaveLength(0)
+  })
+
+  test('a rejected create keeps the open task detail and its logs', async () => {
+    const user = userEvent.setup()
+    fetch.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/courses')) return response({ data: [{ courseId: '1', classId: '10', name: '课程一' }] })
+      if (url.endsWith('/task-list')) return response({ status: true, data: [{ task_id: 'old-task', status: 'completed', updated_at: '2026-11-18T10:00:00Z' }] })
+      if (url.endsWith('/task/old-task')) return response({ status: true, data: { task_id: 'old-task', status: 'completed', message: 'Task completed' } })
+      if (url.includes('/logs/old-task')) return response({ status: true, data: [{ message: '旧任务日志' }], cursor: 1 })
+      if (url.endsWith('/start')) return response({ detail: '已有后台签到任务正在运行。' }, 409)
+      return response({ status: true, data: [] })
+    })
+    renderPage()
+    await verifyAccount(user)
+    await user.click(await screen.findByRole('checkbox', { name: /课程一/ }))
+    await user.click(screen.getByRole('tab', { name: '自动监控' }))
+    expect(await screen.findByText('旧任务日志')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '创建课程任务' }))
+    await waitFor(() => expect(fetch.mock.calls.filter(([input]) => String(input).endsWith('/start'))).toHaveLength(1))
+    expect(await screen.findByText('已有后台签到任务正在运行。')).toBeInTheDocument()
+    expect(screen.getByText('old-task')).toBeInTheDocument()
+    expect(screen.getByText('旧任务日志')).toBeInTheDocument()
+    expect(screen.getAllByText('已完成').length).toBeGreaterThan(0)
+  })
+
+  test('the manual result is written only by the sign-in request and bound to its account', async () => {
+    const user = userEvent.setup()
+    let resolveSign
+    let courseCalls = 0
+    fetch.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/courses')) {
+        courseCalls += 1
+        return courseCalls === 1
+          ? response({ data: [{ courseId: '1', classId: '10', name: '课程一' }] })
+          : response({ detail: '课程列表暂不可用。' }, 502)
+      }
+      if (url.endsWith('/sign')) return new Promise((resolve) => { resolveSign = resolve })
+      return response({ status: true, data: [] })
+    })
+    renderPage()
+    await verifyAccount(user)
+    expect(screen.queryByText(/课程签到 ·/)).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('checkbox', { name: /课程一/ }))
+    await user.click(screen.getByRole('button', { name: '课程签到', exact: true }))
+    await waitFor(() => expect(resolveSign).toBeTypeOf('function'))
+    // A refresh failure while the sign-in is in flight stays in the toast.
+    await user.click(screen.getByRole('button', { name: '刷新课程列表' }))
+    expect(await screen.findByText('课程列表暂不可用。')).toBeInTheDocument()
+    expect(screen.queryByText(/课程签到 ·/)).not.toBeInTheDocument()
+
+    await act(async () => resolveSign(response({ status: false, message: '签到未获确认，请在学习通核对签到状态。' })))
+    const title = await screen.findByText('课程签到 · 结果未确认')
+    const notice = title.closest('[data-state]')
+    expect(notice).toHaveTextContent('课程一：签到未获确认')
+    expect(notice).not.toHaveTextContent('课程列表暂不可用')
+
+    await user.click(screen.getByRole('tab', { name: '账号' }))
+    await user.type(screen.getByLabelText('账号 / 手机号'), '2')
+    await user.click(screen.getByRole('tab', { name: '手动签到' }))
+    expect(screen.queryByText('课程签到 · 结果未确认')).not.toBeInTheDocument()
   })
 
   test('manual course submission sends only selected course selectors', async () => {

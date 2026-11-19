@@ -58,6 +58,99 @@ describe('useBackgroundTasks polling races', () => {
     vi.useRealTimers()
   })
 
+  test.each(['completed', 'error', 'failed', 'cancelled'])(
+    'does not poll after opening a task that is already %s',
+    async (status) => {
+      const finalLog = { message: 'final log' }
+      const requestChaoxingApi = vi.fn(async (path) => (
+        path === '/task/X'
+          ? { data: { status } }
+          : { data: path.endsWith('cursor=0') ? [finalLog] : [], cursor: 1 }
+      ))
+      const rendered = renderBackgroundTasks(requestChaoxingApi)
+
+      try {
+        await act(async () => {
+          await rendered.current.openBackgroundTask('X')
+        })
+        expect(rendered.current.taskStatus).toEqual({ status })
+        expect(rendered.current.logs).toEqual([finalLog])
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3)
+        })
+        expect(requestChaoxingApi.mock.calls).toEqual([['/task/X'], ['/logs/X?cursor=0']])
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        rendered.cleanup()
+      }
+    },
+  )
+
+  test('stops polling after a fast status rejection without blocking manual refresh', async () => {
+    const requestChaoxingApi = vi.fn(async (path) => {
+      if (path === '/task/X') throw new Error('status unavailable')
+      return { data: [], cursor: 0 }
+    })
+    const setResultType = vi.fn()
+    const setResultMessage = vi.fn()
+    const rendered = renderBackgroundTasks(requestChaoxingApi)
+
+    try {
+      await act(async () => {
+        await rendered.current.openBackgroundTask('X', { setResultType, setResultMessage })
+      })
+      expect(setResultType).toHaveBeenCalledWith('error')
+      expect(setResultMessage).toHaveBeenCalledWith('status unavailable')
+      expect(rendered.current.statusLoading).toBe(false)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3)
+      })
+      expect(requestChaoxingApi.mock.calls).toEqual([['/task/X'], ['/logs/X?cursor=0']])
+      expect(vi.getTimerCount()).toBe(0)
+
+      await act(async () => {
+        await rendered.current.refreshTaskStatus('X')
+      })
+      expect(requestChaoxingApi.mock.calls.slice(2)).toEqual([['/task/X'], ['/logs/X?cursor=0']])
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
+  test('polls again when reopening the same task in a new generation', async () => {
+    let status = 'completed'
+    const requestChaoxingApi = vi.fn(async (path) => (
+      path === '/task/X' ? { data: { status } } : { data: [], cursor: 1 }
+    ))
+    const rendered = renderBackgroundTasks(requestChaoxingApi)
+
+    try {
+      await act(async () => {
+        await rendered.current.openBackgroundTask('X')
+      })
+      status = 'running'
+      await act(async () => {
+        await rendered.current.openBackgroundTask('X')
+      })
+      status = 'cancelled'
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3)
+      })
+
+      expect(rendered.current.taskStatus).toEqual({ status: 'cancelled' })
+      expect(requestChaoxingApi.mock.calls).toEqual([
+        ['/task/X'], ['/logs/X?cursor=0'],
+        ['/task/X'], ['/logs/X?cursor=0'],
+        ['/task/X'], ['/logs/X?cursor=1'],
+      ])
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      rendered.cleanup()
+    }
+  })
+
   test('ignores a stale task rejection while the newer task remains in flight', async () => {
     const aStatus = deferred()
     const aLogs = deferred()

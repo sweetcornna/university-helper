@@ -40,5 +40,11 @@ describe('app shell smoke', () => {
     expect(screen.getAllByText('智慧树').length).toBeGreaterThan(0)
     // Theme toggle is present (radiogroup)
     expect(screen.getByRole('radiogroup', { name: '主题' })).toBeTruthy()
+    // No decorative shelf copy, call numbers or flow recaps in the shell
+    expect(screen.queryByText('书架')).toBeNull()
+    expect(screen.queryByText(/正在阅览/)).toBeNull()
+    expect(screen.queryByText(/按顺序使用/)).toBeNull()
+    expect(screen.queryByText('CX2')).toBeNull()
+    expect(screen.queryByText(/每张卡片/)).toBeNull()
   })
 })

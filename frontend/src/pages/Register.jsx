@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { BookOpen, Eye, EyeOff } from 'lucide-react'
-import { Button, Card, Input, ThemeToggle, useRuntimeProfile } from '../components'
+import { Eye, EyeOff } from 'lucide-react'
+import { Button, Input, StateNotice, useRuntimeProfile } from '../components'
+import AuthShell from '../components/AuthShell'
 import { api, LOCAL_PROFILE_AUTH_CODE } from '../utils/api'
 import { setToken } from '../utils/auth'
 
@@ -64,85 +65,95 @@ export default function Register() {
   }
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center bg-background px-4 py-20 sm:px-8">
-      <div className="absolute right-4 top-4 z-20"><ThemeToggle /></div>
-      <section className="w-full max-w-md">
-        <Card padding="spacious" tone="elevated">
-          <Link to="/register" className="mb-7 flex w-fit items-center gap-3" aria-label="学道注册页">
-            <span className="relative grid h-11 w-11 place-items-center overflow-hidden rounded-xl bg-secondary text-background dark:text-text">
-              <BookOpen className="h-5 w-5" aria-hidden="true" />
-              <span className="absolute bottom-0 right-0 h-2.5 w-2.5 bg-cta" aria-hidden="true" />
-            </span>
-            <span className="text-xl font-black tracking-[0.18em]">学道</span>
+    <AuthShell
+      homeTo="/register"
+      homeLabel="学道注册页"
+      title="创建账号"
+      footer={
+        <p>
+          已有账号？{' '}
+          <Link
+            to="/login"
+            className="font-semibold text-primary underline-offset-4 hover:underline"
+          >
+            返回登录
           </Link>
-
-          <h1 className="text-3xl font-black tracking-tight text-text">创建账号</h1>
-
-          <form onSubmit={handleSubmit} className="mt-7 space-y-5" noValidate>
-            <Input
-              id="register-username"
-              label="用户名"
-              type="text"
-              autoComplete="username"
-              value={form.username}
-              onChange={(event) => {
-                setForm((previous) => ({ ...previous, username: event.target.value }))
-                setFieldErrors((previous) => ({ ...previous, username: '' }))
-              }}
-              error={fieldErrors.username}
-              hint="3–30 位小写字母或数字。"
-              required
-            />
-            <Input
-              id="register-email"
-              label="邮箱"
-              type="email"
-              autoComplete="email"
-              inputMode="email"
-              value={form.email}
-              onChange={(event) => {
-                setForm((previous) => ({ ...previous, email: event.target.value }))
-                setFieldErrors((previous) => ({ ...previous, email: '' }))
-              }}
-              error={fieldErrors.email}
-              required
-            />
-            <Input
-              id="register-password"
-              label="密码"
-              type={showPassword ? 'text' : 'password'}
-              autoComplete="new-password"
-              value={form.password}
-              onChange={(event) => {
-                setForm((previous) => ({ ...previous, password: event.target.value }))
-                setFieldErrors((previous) => ({ ...previous, password: '' }))
-              }}
-              error={fieldErrors.password}
-              hint="至少 8 个字符，包含大写字母、小写字母和数字。"
-              trailing={(
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((visible) => !visible)}
-                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
-                  className="grid h-10 w-10 place-items-center rounded-lg text-text-muted hover:bg-surface-hover hover:text-text focus-visible:ring-offset-0"
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
-                </button>
+        </p>
+      }
+    >
+      <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate>
+        <Input
+          id="register-username"
+          label="用户名"
+          type="text"
+          autoComplete="username"
+          value={form.username}
+          onChange={(event) => {
+            setForm((previous) => ({ ...previous, username: event.target.value }))
+            setFieldErrors((previous) => ({ ...previous, username: '' }))
+          }}
+          error={fieldErrors.username}
+          hint="3–30 位小写字母或数字。"
+          required
+        />
+        <Input
+          id="register-email"
+          label="邮箱"
+          type="email"
+          autoComplete="email"
+          inputMode="email"
+          value={form.email}
+          onChange={(event) => {
+            setForm((previous) => ({ ...previous, email: event.target.value }))
+            setFieldErrors((previous) => ({ ...previous, email: '' }))
+          }}
+          error={fieldErrors.email}
+          required
+        />
+        <Input
+          id="register-password"
+          label="密码"
+          type={showPassword ? 'text' : 'password'}
+          autoComplete="new-password"
+          value={form.password}
+          onChange={(event) => {
+            setForm((previous) => ({ ...previous, password: event.target.value }))
+            setFieldErrors((previous) => ({ ...previous, password: '' }))
+          }}
+          error={fieldErrors.password}
+          hint="至少 8 个字符，包含大写字母、小写字母和数字。"
+          trailing={
+            <button
+              type="button"
+              onClick={() => setShowPassword((visible) => !visible)}
+              aria-label={showPassword ? '隐藏密码' : '显示密码'}
+              className="grid h-9 w-9 place-items-center rounded-md text-text-muted hover:bg-surface-hover hover:text-text focus-visible:ring-offset-0"
+            >
+              {showPassword ? (
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Eye className="h-4 w-4" aria-hidden="true" />
               )}
-              required
-            />
-            {error && <p role="alert" className="rounded-xl border border-danger/30 bg-danger-surface px-3 py-2.5 text-sm text-danger">{error}</p>}
-            <Button type="submit" variant="cta" size="lg" className="w-full gap-2" loading={submitting} loadingLabel="正在创建…">
-              创建学道账号
-            </Button>
-          </form>
-
-          <p className="mt-6 text-center text-sm text-text-muted">
-            已有账号？{' '}
-            <Link to="/login" className="font-bold text-primary hover:underline">返回登录</Link>
-          </p>
-        </Card>
-      </section>
-    </main>
+            </button>
+          }
+          required
+        />
+        {error && (
+          <StateNotice kind="error" role="alert" compact>
+            {error}
+          </StateNotice>
+        )}
+        <Button
+          type="submit"
+          variant="primary"
+          size="lg"
+          className="w-full gap-2"
+          loading={submitting}
+          loadingLabel="正在创建…"
+        >
+          创建学道账号
+        </Button>
+      </form>
+    </AuthShell>
   )
 }

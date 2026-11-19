@@ -1,9 +1,29 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { normalizeChatActivities, parseChatActivityLink, resolveChatSigninTarget } from '../chatSignin'
 import { pickMessage } from '../utils'
 
 const SUPPORTED_TYPES = new Set(['normal', 'location'])
 const LOCATION_REQUIRED = '这是位置签到，请先设置签到位置（地图选点或使用当前位置）后再提交。'
+const UNSUPPORTED_TYPE = '群聊目前支持普通签到和位置签到，请在学习通中完成此活动。'
+const NOT_ACTIONABLE = '此活动需在学习通完成签到。'
+
+const activityKey = (chatId, activeId) => `${String(chatId || '').trim()}:${String(activeId || '').trim()}`
+
+// An activity is submittable here only when its type is supported and the
+// server has not marked it actionable:false.
+const isSubmittable = (activity) => activity?.actionable !== false && SUPPORTED_TYPES.has(activity?.type)
+
+const blockReasonFor = (activity) =>
+  String(activity?.unsupportedReason || '').trim() ||
+  (SUPPORTED_TYPES.has(activity?.type) ? NOT_ACTIONABLE : UNSUPPORTED_TYPE)
+
+// Known non-actionable activities are keyed by group + activity id. An entry
+// with no group id (the server did not say which group) blocks that activity
+// id in any group.
+const lookupBlocked = (blocked, chatId, activeId) => {
+  if (!String(activeId || '').trim()) return ''
+  return blocked[activityKey(chatId, activeId)] || blocked[activityKey('', activeId)] || ''
+}
 
 const hasCoordinates = (location) => {
   const latitude = Number.parseFloat(location?.latitude)
@@ -22,8 +42,24 @@ export default function useChatSignin({ requestChaoxingApi, username, password, 
   const [notice, setNotice] = useState('')
   // `chatId:activeId` the platform reported as a location sign-in (manual IDs carry no type).
   const [locationActivityKey, setLocationActivityKey] = useState('')
+  // `chatId:activeId` → reason for activities known to be non-actionable here.
+  // Kept across re-detection, link parsing and ID edits until the account is
+  // re-verified, so the same activity cannot be submitted by another route.
+  const [blockedActivities, setBlockedActivities] = useState({})
   const detectionGenerationRef = useRef(0)
   const submitInFlightRef = useRef(false)
+
+  const markBlocked = useCallback((entries) => {
+    const valid = entries.filter(({ activeId }) => String(activeId || '').trim())
+    if (valid.length === 0) return
+    setBlockedActivities((previous) => {
+      const next = { ...previous }
+      valid.forEach(({ chatId, activeId, reason }) => {
+        next[activityKey(chatId, activeId)] = reason || NOT_ACTIONABLE
+      })
+      return next
+    })
+  }, [])
 
   useEffect(() => () => { detectionGenerationRef.current += 1 }, [])
 
@@ -65,13 +101,21 @@ export default function useChatSignin({ requestChaoxingApi, username, password, 
     setNotice('')
     try {
       const query = new URLSearchParams()
-      if (form.chatId.trim()) {
-        if (!/^[1-9][0-9]{0,31}$/.test(form.chatId.trim())) throw new Error('群聊 ID 必须为最多 32 位的正整数。')
-        query.set('chat_id', form.chatId.trim())
+      const detectedChatId = form.chatId.trim()
+      if (detectedChatId) {
+        if (!/^[1-9][0-9]{0,31}$/.test(detectedChatId)) throw new Error('群聊 ID 必须为最多 32 位的正整数。')
+        query.set('chat_id', detectedChatId)
       }
       const payload = await requestChaoxingApi(`/chat-activities${query.size ? `?${query}` : ''}`)
       if (!current()) return
-      setActivities(normalizeChatActivities(payload))
+      // An activity found while checking one group belongs to that group.
+      const detectedActivities = normalizeChatActivities(payload).map((activity) => (
+        activity.chatId || !detectedChatId ? activity : { ...activity, chatId: detectedChatId }
+      ))
+      setActivities(detectedActivities)
+      markBlocked(detectedActivities
+        .filter((activity) => !isSubmittable(activity))
+        .map((activity) => ({ chatId: activity.chatId, activeId: activity.activeId, reason: blockReasonFor(activity) })))
       const discoveryWarnings = payload?.data?.warnings || payload?.warnings
       setWarnings(Array.isArray(discoveryWarnings) ? discoveryWarnings.filter((warning) => typeof warning === 'string') : [])
       setDetected(true)
@@ -80,20 +124,46 @@ export default function useChatSignin({ requestChaoxingApi, username, password, 
     } finally {
       if (current()) setLoading(false)
     }
-  }, [accountGenerationRef, form.chatId, requestChaoxingApi])
+  }, [accountGenerationRef, form.chatId, markBlocked, requestChaoxingApi])
 
   const selectActivity = useCallback((activity) => {
     setForm((previous) => ({ ...previous, activityLink: '', activeId: activity.activeId, chatId: activity.chatId || previous.chatId }))
     setError('')
-    setNotice({
+    const blocked = !isSubmittable(activity)
+      ? blockReasonFor(activity)
+      : lookupBlocked(blockedActivities, activity.chatId, activity.activeId)
+    setNotice(blocked || {
       normal: '已选择普通签到，可提交。',
       location: '已选择位置签到，请先设置签到位置再提交。',
-    }[activity.type] || '群聊目前支持普通签到和位置签到，请在学习通中完成此活动。')
-  }, [])
+    }[activity.type])
+  }, [blockedActivities])
 
-  const selectedActivity = activities.find((activity) => activity.activeId === form.activeId.trim() && (!activity.chatId || activity.chatId === form.chatId.trim()))
-  const unsupported = Boolean(selectedActivity && !SUPPORTED_TYPES.has(selectedActivity.type))
-  const needsLocation = selectedActivity?.type === 'location' || locationActivityKey === `${form.chatId.trim()}:${form.activeId.trim()}`
+  // The activity the form currently points at, from the typed IDs and/or a
+  // pasted official link (a link that is still unparsed counts too).
+  const linkTarget = useMemo(() => {
+    if (!form.activityLink.trim()) return null
+    try {
+      return parseChatActivityLink(form.activityLink)
+    } catch (_) {
+      return null
+    }
+  }, [form.activityLink])
+  const formChatId = form.chatId.trim()
+  const formActiveId = form.activeId.trim()
+  const currentTarget = {
+    chatId: formChatId || linkTarget?.chatId || '',
+    activeId: formActiveId || linkTarget?.activeId || '',
+  }
+  const selectedActivity = activities.find((activity) => activity.activeId === currentTarget.activeId && (!activity.chatId || activity.chatId === currentTarget.chatId))
+  const blockedReason =
+    lookupBlocked(blockedActivities, currentTarget.chatId, currentTarget.activeId) ||
+    (linkTarget ? lookupBlocked(blockedActivities, linkTarget.chatId || formChatId, linkTarget.activeId) : '') ||
+    (selectedActivity && !isSubmittable(selectedActivity) ? blockReasonFor(selectedActivity) : '')
+  const unsupported = Boolean(blockedReason)
+  const needsLocation = !unsupported && (
+    selectedActivity?.type === 'location' ||
+    locationActivityKey === activityKey(currentTarget.chatId, currentTarget.activeId)
+  )
 
   const submit = async (event) => {
     event.preventDefault()
@@ -112,12 +182,15 @@ export default function useChatSignin({ requestChaoxingApi, username, password, 
       return
     }
     const targetActivity = activities.find((activity) => activity.activeId === target.activeId && (!activity.chatId || activity.chatId === target.chatId))
-    if (targetActivity && !SUPPORTED_TYPES.has(targetActivity.type)) {
-      setError('群聊目前支持普通签到和位置签到，请在学习通中完成此活动。')
+    const targetBlocked =
+      lookupBlocked(blockedActivities, target.chatId, target.activeId) ||
+      (targetActivity && !isSubmittable(targetActivity) ? blockReasonFor(targetActivity) : '')
+    if (targetBlocked) {
+      setError(targetBlocked)
       return
     }
     const withLocation = hasCoordinates(location)
-    const targetKey = `${target.chatId}:${target.activeId}`
+    const targetKey = activityKey(target.chatId, target.activeId)
     if ((targetActivity?.type === 'location' || locationActivityKey === targetKey) && !withLocation) {
       setError(LOCATION_REQUIRED)
       return
@@ -145,7 +218,25 @@ export default function useChatSignin({ requestChaoxingApi, username, password, 
       onSuccess?.()
     } catch (err) {
       if (accountGeneration !== accountGenerationRef.current) return
-      if (err?.payload?.data?.requiresLocation) setLocationActivityKey(targetKey)
+      const data = err?.payload?.data
+      const task = data?.task
+      if (task && typeof task === 'object' && task.actionable === false) {
+        // The server verified this activity but will not submit it here
+        // (e.g. guidance-only, already signed, ended). Never offer the
+        // location form or another submit for it.
+        const reason = err.message || blockReasonFor(task)
+        markBlocked([
+          { chatId: target.chatId, activeId: target.activeId, reason },
+          {
+            chatId: String(task.chatId || task.chat_id || target.chatId),
+            activeId: String(task.activeId || task.active_id || target.activeId),
+            reason,
+          },
+        ])
+        setLocationActivityKey((previous) => (previous === targetKey ? '' : previous))
+      } else if (data?.requiresLocation) {
+        setLocationActivityKey(targetKey)
+      }
       setError(err.message || '群聊签到失败，请重试。')
     } finally {
       submitInFlightRef.current = false
@@ -161,7 +252,14 @@ export default function useChatSignin({ requestChaoxingApi, username, password, 
     setLoading(false)
     setError('')
     setNotice('')
+    setBlockedActivities({})
+    setLocationActivityKey('')
   }, [])
 
-  return { form, updateForm, applyLink, activities, warnings, detected, loading, submitting, error, notice, refresh, selectActivity, unsupported, needsLocation, submit, reset }
+  const isActivityBlocked = useCallback(
+    (activity) => !isSubmittable(activity) || Boolean(lookupBlocked(blockedActivities, activity?.chatId, activity?.activeId)),
+    [blockedActivities],
+  )
+
+  return { form, updateForm, applyLink, activities, warnings, detected, loading, submitting, error, notice, refresh, selectActivity, unsupported, blockedReason, isActivityBlocked, needsLocation, submit, reset }
 }

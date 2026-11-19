@@ -19,9 +19,9 @@ export default function Input({
   const describedBy = [ariaDescribedBy, errorId, hintId].filter(Boolean).join(' ') || undefined
 
   return (
-    <div className={containerClassName}>
+    <div className={clsx('min-w-0', containerClassName)}>
       {label && (
-        <label htmlFor={inputId} className="mb-2 block text-sm font-semibold text-text">
+        <label htmlFor={inputId} className="ui-label">
           {label}
         </label>
       )}
@@ -29,9 +29,9 @@ export default function Input({
         <input
           id={inputId}
           className={clsx(
-            'clay-input',
-            trailing && 'pr-12',
-            error && 'border-danger focus:border-danger focus:ring-danger/20',
+            'ui-field',
+            trailing && 'pr-11',
+            error && 'border-danger focus:border-danger focus:ring-danger/25',
             className,
           )}
           aria-invalid={error ? true : undefined}
@@ -39,18 +39,18 @@ export default function Input({
           {...props}
         />
         {trailing && (
-          <div className="absolute inset-y-0 right-1 flex items-center">
+          <div className="absolute inset-y-0 right-0.5 flex items-center">
             {trailing}
           </div>
         )}
       </div>
       {error && (
-        <p id={errorId} className="mt-1.5 text-sm text-danger">
+        <p id={errorId} className="mt-1.5 text-xs font-medium text-danger">
           {error}
         </p>
       )}
       {hint && (
-        <p id={hintId} className="mt-1.5 text-xs leading-5 text-text-muted">
+        <p id={hintId} className="ui-hint">
           {hint}
         </p>
       )}

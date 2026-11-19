@@ -2,28 +2,61 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { useNavigate } from 'react-router-dom'
 
-import { ChevronDown, Loader2, Camera, Map, MapPin, RefreshCw, Upload } from 'lucide-react'
+import { BookMarked, Camera, ChevronDown, Map, MapPin, MessagesSquare, RefreshCw, Search, Upload, Users } from 'lucide-react'
 
 import { getToken, removeToken } from '../utils/auth'
 import { APP_JWT_401_PATTERN } from '../utils/api'
 
-import { AccountChip, Button, Input, MultiSelect, PageHeader, Select, useRuntimeProfile, useToast } from '../components'
+import { AccountChip, Button, Input, MultiSelect, PageHeader, Select, StateNotice, StatusBadge, useRuntimeProfile, useToast } from '../components'
 import WorkspaceTabs from '../components/WorkspaceTabs'
 import useWorkspaceTab from '../components/useWorkspaceTab'
 
+// Tabs follow the student's order of work: verify the account, choose a
+// course or class and sign in, review detected activities, then background
+// tasks and records. The default stays on 手动签到, which asks for the account
+// first when it has not been verified.
 const CHAOXING_TABS = [
+  { id: 'account', label: '账号' },
   { id: 'signin', label: '手动签到' },
   { id: 'tasks', label: '待处理签到' },
   { id: 'monitor', label: '自动监控' },
   { id: 'history', label: '签到记录' },
-  { id: 'account', label: '账号' },
 ]
 
 const SIGNIN_SCOPES = [
-  { id: 'course', label: '课程' },
-  { id: 'class', label: '班级' },
-  { id: 'chat', label: '群聊' },
+  { id: 'course', label: '课程', icon: BookMarked },
+  { id: 'class', label: '班级', icon: Users },
+  { id: 'chat', label: '群聊', icon: MessagesSquare },
 ]
+
+const RESULT_NOTICE = {
+  done: { kind: 'done', title: '已完成' },
+  error: { kind: 'error', title: '未成功' },
+  partial: { kind: 'error', title: '未全部成功' },
+  guided: { kind: 'warning', title: '需在学习通完成' },
+  unconfirmed: { kind: 'unknown', title: '结果未确认' },
+  info: { kind: 'info', title: '提示' },
+}
+
+const SCOPE_LABEL = { course: '课程签到', class: '班级签到' }
+
+// One summary for a multi-course/class run. Counts stay separate, and the
+// detail line comes from the item that most needs attention (unconfirmed,
+// then 学习通 hand-off, then failure) so it is never buried under successes.
+const formatBatchOutcome = (label, unit, results) => {
+  const { kind, counts, lead } = summarizeBatchResults(results)
+  const parts = [`成功 ${counts.done} ${unit}`]
+  if (counts.unconfirmed) parts.push(`结果未确认 ${counts.unconfirmed} ${unit}`)
+  if (counts.guided) parts.push(`需在学习通完成 ${counts.guided} ${unit}`)
+  if (counts.error + counts.info) parts.push(`失败 ${counts.error + counts.info} ${unit}`)
+  const detail = lead && lead.kind !== 'done' ? `${lead.name ? `${lead.name}：` : ''}${lead.message}` : ''
+  const toastType = counts.done === results.length ? 'success' : counts.done > 0 ? 'info' : 'error'
+  return {
+    kind: kind === 'error' && counts.done > 0 ? 'partial' : kind,
+    toastType,
+    message: `${label}签到完成，${parts.join('，')}。${detail}`,
+  }
+}
 
 // Lazy-load the map picker (pulls in ~150KB of leaflet) only when the user
 // opens it, so the initial signin page stays light on mobile.
@@ -43,7 +76,6 @@ import {
   normalizeBackgroundTaskHistory,
   upsertBackgroundTaskHistory,
   isBackgroundTaskRunning,
-  safeStringify,
   buildCourseSelector,
   buildClassSelector,
   getCourseDisplayName,
@@ -60,6 +92,13 @@ import ChatSigninSection from './chaoxing-signin/components/ChatSigninSection'
 import { fetchWithTimeout } from './chaoxing-signin/request'
 
 import StatsCards from './chaoxing-signin/components/StatsCards'
+import BackgroundTaskDetail from './chaoxing-signin/components/BackgroundTaskDetail'
+import {
+  backgroundTaskBadge,
+  classifyResult,
+  isBackgroundTaskActive,
+  summarizeBatchResults,
+} from './chaoxing-signin/taskPresentation'
 import TasksTab from './chaoxing-signin/components/TasksTab'
 import HistoryTab from './chaoxing-signin/components/HistoryTab'
 import ConfigTab from './chaoxing-signin/components/ConfigTab'
@@ -79,9 +118,6 @@ export default function ChaoxingSignin() {
 
   const setTodayStatsRef = useRef(null)
 
-  // Live-log ref so the pane sticks to the newest line.
-  const logContainerRef = useRef(null)
-
   const toast = useToast()
 
   const [submitting, setSubmitting] = useState(false)
@@ -93,6 +129,16 @@ export default function ChaoxingSignin() {
   const [resultMessage, setResultMessage] = useState('')
 
   const [resultType, setResultType] = useState('info')
+
+  // The most recent manual sign-in result stays on the form after its toast
+  // fades. Only the manual operation that produced it writes it, and it is
+  // shown only for the account it was made with; account checks, auto sign-in,
+  // refreshes and background messages stay in the toast.
+  const [lastResult, setLastResult] = useState(null)
+  const manualOperationRef = useRef(0)
+  const backgroundCreateRef = useRef(false)
+
+  const historyDetailRef = useRef(null)
 
   const [activeTab, setActiveTab] = useWorkspaceTab(CHAOXING_TABS, 'signin', { config: 'monitor' })
 
@@ -257,11 +303,8 @@ export default function ChaoxingSignin() {
   const backgroundTasks = useBackgroundTasks(requestChaoxingApi)
   const {
     taskId,
-    setTaskId,
     taskStatus,
-    setTaskStatus,
     logs,
-    setLogs,
     statusLoading,
     refreshTaskStatus,
     openBackgroundTask,
@@ -298,11 +341,20 @@ export default function ChaoxingSignin() {
     }
   }, [resultMessage, resultType, toast])
 
-  // Keep the live-log pane pinned to the newest line.
-  useEffect(() => {
-    const el = logContainerRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [logs])
+  // A manual operation captures its scope, account and account generation at
+  // launch. Its result is kept only if no newer manual operation started and
+  // the account was not re-verified in the meantime.
+  const beginManualOperation = useCallback((scope) => {
+    const id = manualOperationRef.current + 1
+    manualOperationRef.current = id
+    return { id, scope, account: form.username.trim(), generation: accountGenerationRef.current }
+  }, [form.username])
+
+  const recordManualResult = useCallback((operation, kind, message) => {
+    if (!operation || operation.id !== manualOperationRef.current) return
+    if (operation.generation !== accountGenerationRef.current) return
+    setLastResult({ kind, message, scope: operation.scope, account: operation.account, at: new Date() })
+  }, [])
 
   // Remember the account for next visit (username only).
   useEffect(() => {
@@ -485,6 +537,7 @@ export default function ChaoxingSignin() {
   const executeSignin = useCallback(
     async (courseId = null, signTypeOverride = null, options = {}) => {
       const silent = Boolean(options.silent)
+      const operation = silent ? null : beginManualOperation('course')
 
       if (!silent) {
         setSubmitting(true)
@@ -511,6 +564,8 @@ export default function ChaoxingSignin() {
           setResultType('success')
 
           setResultMessage(message)
+
+          recordManualResult(operation, classifyResult('success', message), message)
         }
 
         await fetchSigninHistory()
@@ -523,6 +578,8 @@ export default function ChaoxingSignin() {
           setResultType('error')
 
           setResultMessage(message)
+
+          recordManualResult(operation, classifyResult('error', message), message)
         }
 
         return { status: false, message }
@@ -534,10 +591,12 @@ export default function ChaoxingSignin() {
     },
     [
       applySigninAssets,
+      beginManualOperation,
       buildSigninPayload,
       fetchSigninHistory,
       form.password,
       form.username,
+      recordManualResult,
       requestChaoxingApi,
     ]
   )
@@ -775,6 +834,7 @@ export default function ChaoxingSignin() {
   const executeClassSignin = useCallback(
     async (classOption, signTypeOverride = null, options = {}) => {
       const silent = Boolean(options.silent)
+      const operation = silent ? null : beginManualOperation('class')
 
       if (!silent) {
         setSubmitting(true)
@@ -813,6 +873,8 @@ export default function ChaoxingSignin() {
           setResultType('success')
 
           setResultMessage(message)
+
+          recordManualResult(operation, classifyResult('success', message), message)
         }
 
         await fetchSigninHistory()
@@ -825,6 +887,8 @@ export default function ChaoxingSignin() {
           setResultType('error')
 
           setResultMessage(message)
+
+          recordManualResult(operation, classifyResult('error', message), message)
         }
 
         return { status: false, message }
@@ -836,33 +900,40 @@ export default function ChaoxingSignin() {
     },
     [
       applySigninAssets,
+      beginManualOperation,
       buildSigninPayload,
       fetchSigninHistory,
       form.password,
       form.username,
+      recordManualResult,
       requestChaoxingApi,
     ]
   )
 
   const executeSelectedClassSignin = useCallback(async () => {
     if (submitting) return
+    const operation = beginManualOperation('class')
+
+    const rejectSelection = (message) => {
+      setResultType('error')
+
+      setResultMessage(message)
+
+      recordManualResult(operation, 'error', message)
+    }
 
     const selectedClassOptions = form.selectedClassIds
       .map((id) => classOptions.find((subject) => subject.id === id))
       .filter(Boolean)
 
     if (selectedClassOptions.length === 0) {
-      setResultType('error')
-
-      setResultMessage('请选择班级后再执行班级签到。')
+      rejectSelection('请选择班级后再执行班级签到。')
 
       return
     }
 
     if (selectedClassOptions.length !== form.selectedClassIds.length) {
-      setResultType('error')
-
-      setResultMessage('选中的班级无效，请重新选择后再试。')
+      rejectSelection('选中的班级无效，请重新选择后再试。')
 
       return
     }
@@ -872,31 +943,21 @@ export default function ChaoxingSignin() {
     setResultMessage('')
 
     try {
-      let success = 0
-
-      const failed = []
+      const results = []
 
       for (const classOption of selectedClassOptions) {
         const result = await executeClassSignin(classOption, form.signType, { silent: true })
 
-        if (result.status) {
-          success += 1
-        } else {
-          failed.push(`${classOption.name}：${result.message}`)
-        }
+        results.push({ ...result, name: classOption.name })
       }
 
-      if (failed.length > 0) {
-        setResultType(success > 0 ? 'info' : 'error')
+      const outcome = formatBatchOutcome('班级', '个', results)
 
-        setResultMessage(
-          `班级签到完成，成功 ${success} 个，失败 ${failed.length} 个。${failed.slice(0, 2).join('；')}`
-        )
-      } else {
-        setResultType('success')
+      setResultType(outcome.toastType)
 
-        setResultMessage(`班级签到完成，成功 ${success} 个。`)
-      }
+      setResultMessage(outcome.message)
+
+      recordManualResult(operation, outcome.kind, outcome.message)
 
       await fetchSigninTasks()
 
@@ -905,12 +966,14 @@ export default function ChaoxingSignin() {
       setSubmitting(false)
     }
   }, [
+    beginManualOperation,
     classOptions,
     executeClassSignin,
     fetchSigninHistory,
     fetchSigninTasks,
     form.selectedClassIds,
     form.signType,
+    recordManualResult,
     submitting,
   ])
 
@@ -920,26 +983,31 @@ export default function ChaoxingSignin() {
       await executeSignin()
       return
     }
+    const operation = beginManualOperation('course')
     const selected = form.selectedCourseIds.map((id) => courseOptions.find((course) => course.id === id))
     if (selected.some((course) => !course)) {
+      const message = '选中的课程无效，请重新选择后再试。'
       setResultType('error')
-      setResultMessage('选中的课程无效，请重新选择后再试。')
+      setResultMessage(message)
+      recordManualResult(operation, 'error', message)
       return
     }
     setSubmitting(true)
     try {
       const results = []
       for (const course of selected) {
-        results.push(await executeSignin(course.id, form.signType, { silent: true }))
+        const result = await executeSignin(course.id, form.signType, { silent: true })
+        results.push({ ...result, name: course.name })
       }
-      const failed = results.filter((result) => !result.status)
-      setResultType(failed.length === 0 ? 'success' : 'error')
-      setResultMessage(`课程签到完成，成功 ${results.length - failed.length} 门，失败 ${failed.length} 门。${failed[0]?.message || ''}`)
+      const outcome = formatBatchOutcome('课程', '门', results)
+      setResultType(outcome.toastType)
+      setResultMessage(outcome.message)
+      recordManualResult(operation, outcome.kind, outcome.message)
       await fetchSigninTasks()
     } finally {
       setSubmitting(false)
     }
-  }, [courseOptions, executeSignin, fetchSigninTasks, form.selectedCourseIds, form.signType, submitting])
+  }, [beginManualOperation, courseOptions, executeSignin, fetchSigninTasks, form.selectedCourseIds, form.signType, recordManualResult, submitting])
 
   // Auto-detect: apply the detected task's sign-in type (and matching class
   // selection when available) into the form so the user only sees fields
@@ -1010,6 +1078,8 @@ export default function ChaoxingSignin() {
     }
 
     accountGenerationRef.current += 1
+    manualOperationRef.current += 1
+    setLastResult(null)
     coursesRequestRef.current += 1
     classesRequestRef.current += 1
     signinTasksRequestRef.current += 1
@@ -1051,30 +1121,51 @@ export default function ChaoxingSignin() {
     }
   }
 
-  const startSigninTask = async () => {
-    if (submitting) return
+  // A background task is "running" only while its last known status says so;
+  // an unread or unrecognised status is never shown as running. Used for the
+  // cross-tab progress pill and to block a second create.
+  const taskRunning = Boolean(taskId) && isBackgroundTaskActive(taskStatus)
+  const backgroundBusy =
+    taskRunning ||
+    backgroundTaskHistory.some((task) => isBackgroundTaskActive(task) && !(task.taskId === taskId && taskStatus))
 
-    const username = form.username.trim()
+  // Shared guard for both create buttons: one request at a time, and none
+  // while a known task is still running. The open task's status and logs stay
+  // until the server returns a new task id, so a rejection or 409 keeps them.
+  const beginBackgroundCreate = () => {
+    if (submitting || backgroundCreateRef.current) return false
 
-    const password = form.password
+    if (backgroundBusy) {
+      setResultType('error')
 
-    if (!username || !password) {
+      setResultMessage('后台任务运行中，结束后再创建。')
+
+      return false
+    }
+
+    if (!form.username.trim() || !form.password) {
       setResultType('error')
 
       setResultMessage('请输入账号和密码。')
 
-      return
+      return false
     }
+
+    backgroundCreateRef.current = true
 
     setSubmitting(true)
 
     setResultMessage('')
 
-    setLogs([])
+    return true
+  }
 
-    setTaskStatus(null)
+  const startSigninTask = async () => {
+    if (!beginBackgroundCreate()) return
 
-    setTaskId('')
+    const username = form.username.trim()
+
+    const password = form.password
 
     try {
       const selectedCourseOptions = form.selectedCourseIds
@@ -1173,34 +1264,18 @@ export default function ChaoxingSignin() {
 
       setResultMessage(err.message || '启动签到任务失败。')
     } finally {
+      backgroundCreateRef.current = false
+
       setSubmitting(false)
     }
   }
 
   const startClassSigninTask = async () => {
-    if (submitting) return
+    if (!beginBackgroundCreate()) return
 
     const username = form.username.trim()
 
     const password = form.password
-
-    if (!username || !password) {
-      setResultType('error')
-
-      setResultMessage('请输入账号和密码。')
-
-      return
-    }
-
-    setSubmitting(true)
-
-    setResultMessage('')
-
-    setLogs([])
-
-    setTaskStatus(null)
-
-    setTaskId('')
 
     try {
       const selectedClassOptions = form.selectedClassIds
@@ -1304,57 +1379,77 @@ export default function ChaoxingSignin() {
 
       setResultMessage(err.message || '启动班级签到任务失败。')
     } finally {
+      backgroundCreateRef.current = false
+
       setSubmitting(false)
     }
   }
-
-  const taskPretty = useMemo(() => {
-    if (!taskStatus) return ''
-
-    try {
-      return JSON.stringify(taskStatus, null, 2)
-    } catch (_) {
-      return String(taskStatus)
-    }
-  }, [taskStatus])
-
-  // A background task is "running" while we have a task id and its status has
-  // not reached a terminal state — used for the cross-tab progress pill so a
-  // user who switches tabs still knows something is happening.
-  const taskRunning =
-    Boolean(taskId) && !['completed', 'error', 'failed', 'cancelled'].includes(taskStatus?.status)
 
   const hasCredentials = Boolean(form.username.trim() && form.password)
 
   const openAccountTab = () => setActiveTab('account')
 
   const accountCard = (
-    <div className={`${GLASS_CARD_CLASS} max-w-2xl space-y-4`}>
+    <section className="ui-index-card spine-signin space-y-4 p-4 sm:p-5" aria-labelledby="cx-account-heading">
       <div>
-        <h2 className="text-lg font-bold text-text">学习通账号</h2>
+        <h2 id="cx-account-heading" className="font-display text-base font-bold text-text">学习通账号</h2>
         <p className="mt-1 text-sm text-text-muted">
-          {accountReady ? '账号已验证；修改后请重新验证。' : '验证后即可检测并提交签到，密码仅在当前页面使用。'}
+          {accountReady ? '修改后需重新验证。' : '密码只在本页使用，不会保存。'}
         </p>
       </div>
       <form className="grid gap-4 sm:grid-cols-2" onSubmit={verifyAccount}>
         <Input id="cx-username" label="账号 / 手机号" type="text" disabled={submitting || chatSignin.submitting} name="cx-username" autoComplete="username" value={form.username} onChange={(event) => setForm((prev) => ({ ...prev, username: event.target.value }))} required />
         <Input id="cx-password" label="密码" type="password" disabled={submitting || chatSignin.submitting} name="cx-password" autoComplete="current-password" value={form.password} onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))} required />
-        <div className="sm:col-span-2">
+        <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
           <Button type="submit" disabled={submitting || chatSignin.submitting}>{submitting ? '验证中...' : '验证账号并获取课程'}</Button>
+          {accountReady && <StatusBadge status="connected" label="已验证" />}
         </div>
       </form>
-    </div>
+    </section>
   )
+
+  const backgroundScopeNames = {
+    courses: form.selectedCourseIds.map((id) => courseOptions.find((course) => course.id === id)?.name).filter(Boolean),
+    classes: form.selectedClassIds.map((id) => classOptions.find((subject) => subject.id === id)?.name).filter(Boolean),
+  }
+
+  const refreshOpenTask = () =>
+    refreshTaskStatus(taskId, {
+      setResultType,
+      setResultMessage,
+      setBackgroundTaskHistory,
+    })
+
+  const taskDetail = (
+    <BackgroundTaskDetail
+      taskId={taskId}
+      taskStatus={taskStatus}
+      logs={logs}
+      statusLoading={statusLoading}
+      onRefresh={refreshOpenTask}
+    />
+  )
+
+  // Shown only for the account that made the request; editing the account
+  // field (even before re-verifying) hides it.
+  const resultNotice = lastResult && lastResult.account === form.username.trim() && (() => {
+    const meta = RESULT_NOTICE[lastResult.kind] || RESULT_NOTICE.info
+    return (
+      <StateNotice kind={meta.kind} compact title={`${SCOPE_LABEL[lastResult.scope] || '最近一次结果'} · ${meta.title}`}>
+        <p>{lastResult.message}</p>
+        <p className="font-code mt-0.5 text-xs opacity-75">{lastResult.at.toLocaleTimeString('zh-CN', { hour12: false })}</p>
+      </StateNotice>
+    )
+  })()
 
   // Shared by the course/class form and the group-chat location sign-in.
   const locationFields = (
                   <>
                     {/* Primary path: one tap to fill coordinates. */}
-                    <div className="flex flex-wrap gap-3">
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"
                         variant="secondary"
-                        className="inline-flex min-h-[44px] items-center gap-2 cursor-pointer transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60"
                         onClick={useCurrentLocation}
                         disabled={geocodeLoading}
                       >
@@ -1365,7 +1460,6 @@ export default function ChaoxingSignin() {
                       <Button
                         type="button"
                         variant="secondary"
-                        className="inline-flex min-h-[44px] items-center gap-2 cursor-pointer transition-all duration-200"
                         onClick={() => setIsMapPickerOpen(true)}
                       >
                         <Map className="h-4 w-4" aria-hidden="true" />
@@ -1383,11 +1477,11 @@ export default function ChaoxingSignin() {
                       placeholder="例如：北京市朝阳区"
                     />
 
-                    <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button
                         type="button"
                         variant="secondary"
-                        className="min-h-[44px] cursor-pointer transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        size="sm"
                         onClick={resolveLocationCoordinates}
                         disabled={geocodeLoading}
                       >
@@ -1397,21 +1491,23 @@ export default function ChaoxingSignin() {
                       <Button
                         type="button"
                         variant="secondary"
-                        className="min-h-[44px] cursor-pointer transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        size="sm"
                         onClick={searchLocationCandidates}
                         disabled={placeSearchLoading}
                       >
+                        <Search className="h-3.5 w-3.5" aria-hidden="true" />
                         {placeSearchLoading ? '搜索中...' : '搜索地点'}
                       </Button>
 
                       {geocodeMessage && (
                         <p
-                          className={`text-xs ${
+                          role="status"
+                          className={`text-xs font-medium ${
                             geocodeStatus === 'error'
                               ? 'text-danger'
                               : geocodeStatus === 'success'
                                 ? 'text-success'
-                                : 'text-text/70'
+                                : 'text-text-muted'
                           }`}
                         >
                           {geocodeMessage}
@@ -1420,24 +1516,24 @@ export default function ChaoxingSignin() {
                     </div>
 
                     {placeSearchMessage ? (
-                      <p className="text-xs text-text/70">{placeSearchMessage}</p>
+                      <p className="text-xs text-text-muted">{placeSearchMessage}</p>
                     ) : null}
 
                     {placeSearchResults.length > 0 ? (
-                      <div className="space-y-2 rounded-xl border border-border/40 bg-surface/50 p-3 backdrop-blur-sm">
+                      <div className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border bg-surface">
                         {placeSearchResults.map((candidate) => (
                           <button
                             key={candidate.id}
                             type="button"
                             data-place-result-id={candidate.id}
-                            className="w-full rounded-xl border border-transparent bg-surface/70 px-4 py-3 text-left transition-all duration-200 hover:border-primary/40 hover:bg-surface"
+                            className="w-full px-3 py-2.5 text-left hover:bg-surface-hover focus-visible:ring-inset"
                             onClick={() => choosePlaceSearchResult(candidate)}
                           >
-                            <span className="block text-sm font-medium text-text">
+                            <span className="block text-sm font-semibold text-text">
                               {candidate.name || candidate.address}
                             </span>
 
-                            <span className="mt-1 block text-xs text-text/70">
+                            <span className="mt-0.5 block text-xs text-text-muted">
                               {candidate.address}
                             </span>
                           </button>
@@ -1446,8 +1542,8 @@ export default function ChaoxingSignin() {
                     ) : null}
 
                     {/* Manual override — pre-filled by the actions above; rarely needed. */}
-                    <details className="rounded-xl border border-border/60 bg-surface/40 p-3">
-                      <summary className="cursor-pointer text-sm text-text/80">
+                    <details className="ui-panel px-3 py-2">
+                      <summary className="min-h-[32px] py-1.5 text-sm text-text-muted">
                         手动输入坐标（高级）
                       </summary>
                       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -1481,17 +1577,25 @@ export default function ChaoxingSignin() {
                           placeholder="留空则使用默认 100"
                         />
                       </div>
-                      <p className="mt-2 text-xs text-text-muted">坐标使用百度 BD-09 坐标系。</p>
+                      <p className="ui-hint mb-1">坐标使用百度 BD-09 坐标系。</p>
                     </details>
                   </>
   )
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  const showPhoto = form.signType === 'photo' || (form.signType === 'all' && advancedOpen)
+  const showLocation = form.signType === 'location' || form.signType === 'qrcode' || form.signType === 'gesture' || (form.signType === 'all' && advancedOpen)
+  const showQr = form.signType === 'qrcode' || (form.signType === 'all' && advancedOpen)
+  const showGesture = form.signType === 'gesture' || (form.signType === 'all' && advancedOpen)
+  const showCode = form.signType === 'code' || (form.signType === 'all' && advancedOpen)
+  const submitBlocked = !hasCredentials || (signinTarget === 'class' && form.selectedClassIds.length === 0)
+
   return (
     <div className="overflow-x-hidden">
-      <div className="space-y-6">
+      <div className="space-y-5">
         <PageHeader
+          spine="signin"
           eyebrow="学习通"
           title="课堂签到"
           actions={
@@ -1500,11 +1604,11 @@ export default function ChaoxingSignin() {
                 <button
                   type="button"
                   onClick={() => setActiveTab('monitor')}
-                  className="inline-flex min-h-[40px] items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 text-sm font-semibold text-primary hover:bg-primary/20"
+                  className="ui-btn-secondary border-primary/40 text-primary"
                   title="查看后台任务进度"
                 >
-                  <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
+                  <span className="relative flex h-2 w-2" aria-hidden="true">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-primary/60 motion-safe:animate-ping" />
                     <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
                   </span>
                   后台任务进行中
@@ -1518,15 +1622,40 @@ export default function ChaoxingSignin() {
         </PageHeader>
 
         {activeTab === 'account' && (
-          <section id="cx-panel-account" role="tabpanel" aria-labelledby="cx-tab-account" tabIndex="0" className="space-y-4">
+          <section id="cx-panel-account" role="tabpanel" aria-labelledby="cx-tab-account" tabIndex="0" className="max-w-3xl">
             {accountCard}
           </section>
         )}
 
         {activeTab === 'signin' && (
           <section id="cx-panel-signin" role="tabpanel" aria-labelledby="cx-tab-signin" tabIndex="0" className="space-y-4">
-            {!accountReady ? accountCard : (
+            {!accountReady ? (
+              <div className="max-w-3xl">{accountCard}</div>
+            ) : (
             <>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="inline-flex max-w-full rounded-lg border border-border bg-surface p-1" role="group" aria-label="签到范围">
+                  {SIGNIN_SCOPES.map((scope) => {
+                    const Icon = scope.icon
+                    const active = signinTarget === scope.id
+                    return (
+                      <button
+                        key={scope.id}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setSigninTarget(scope.id)}
+                        className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-md px-3.5 text-sm font-semibold transition-colors ${
+                          active ? 'bg-primary text-on-primary' : 'text-text-muted hover:bg-surface-hover hover:text-text'
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" aria-hidden="true" />
+                        {scope.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
               {signinTarget !== 'chat' && <AutoSigninBanner
                 signinTasks={signinTasks}
                 form={form}
@@ -1538,28 +1667,58 @@ export default function ChaoxingSignin() {
                 error={signinTasksError}
               />}
 
-              <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-              <div className="inline-flex max-w-full rounded-full bg-surface-hover p-1" role="group" aria-label="签到范围">
-                {SIGNIN_SCOPES.map((scope) => (
-                  <button
-                    key={scope.id}
-                    type="button"
-                    aria-pressed={signinTarget === scope.id}
-                    onClick={() => setSigninTarget(scope.id)}
-                    className={`min-h-[40px] rounded-full px-4 text-sm font-medium transition-colors ${
-                      signinTarget === scope.id ? 'bg-surface text-text shadow-sm' : 'text-text-muted hover:text-text'
-                    }`}
-                  >
-                    {scope.label}
-                  </button>
-                ))}
-              </div>
-
+              <div className={GLASS_CARD_CLASS}>
               {signinTarget === 'chat' ? (
                 <ChatSigninSection chat={chatSignin} hasCredentials={hasCredentials} busy={submitting} onOpenAccount={openAccountTab} locationFields={locationFields} />
               ) : (
-              <form className="grid grid-cols-1 gap-4 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); void (signinTarget === 'class' ? executeSelectedClassSignin() : executeSelectedCourseSignin()) }}>
-                <div className="md:col-span-2">
+              <form className="grid items-start gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]" onSubmit={(event) => { event.preventDefault(); void (signinTarget === 'class' ? executeSelectedClassSignin() : executeSelectedCourseSignin()) }}>
+                <div className="min-w-0 space-y-2">
+                  {signinTarget === 'course' && (
+                    <MultiSelect
+                      label="课程选择（可选，不选即全部课程）"
+                      options={courseOptions}
+                      selectedIds={form.selectedCourseIds}
+                      onChange={(ids) => setForm((prev) => ({ ...prev, selectedCourseIds: ids }))}
+                      emptyHint="此账号暂无课程；可在学习通加入课程后刷新"
+                      headerAction={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label="刷新课程列表"
+                          title="刷新课程列表"
+                          onClick={fetchCourses}
+                        >
+                          <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                        </Button>
+                      }
+                    />
+                  )}
+
+                  {signinTarget === 'class' && (
+                    <MultiSelect
+                      label="班级选择（班级签到入口）"
+                      options={classOptions}
+                      selectedIds={form.selectedClassIds}
+                      onChange={(ids) => setForm((prev) => ({ ...prev, selectedClassIds: ids }))}
+                      emptyHint="此账号暂无班级；可在学习通加入班级后刷新"
+                      headerAction={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label="刷新班级列表"
+                          title="刷新班级列表"
+                          onClick={fetchClasses}
+                        >
+                          <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                        </Button>
+                      }
+                    />
+                  )}
+                </div>
+
+                <div className="min-w-0 space-y-4">
                   <Select
                     id="cx-signtype"
                     label="签到类型"
@@ -1576,59 +1735,13 @@ export default function ChaoxingSignin() {
                     <option value="gesture">手势签到</option>
                     <option value="code">签到码签到</option>
                   </Select>
-                </div>
 
-                {signinTarget === 'course' && <div className="md:col-span-2">
-                  <MultiSelect
-                    label="课程选择（可选，不选即全部课程）"
-                    options={courseOptions}
-                    selectedIds={form.selectedCourseIds}
-                    onChange={(ids) => setForm((prev) => ({ ...prev, selectedCourseIds: ids }))}
-                    emptyHint="此账号暂无课程；可在学习通加入课程后刷新"
-                    headerAction={
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        aria-label="刷新课程列表"
-                        title="刷新课程列表"
-                        className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
-                        onClick={fetchCourses}
-                      >
-                        <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                    }
-                  />
-                </div>}
-
-                {signinTarget === 'class' && <div className="md:col-span-2">
-                  <MultiSelect
-                    label="班级选择（班级签到入口）"
-                    options={classOptions}
-                    selectedIds={form.selectedClassIds}
-                    onChange={(ids) => setForm((prev) => ({ ...prev, selectedClassIds: ids }))}
-                    emptyHint="此账号暂无班级；可在学习通加入班级后刷新"
-                    headerAction={
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        aria-label="刷新班级列表"
-                        title="刷新班级列表"
-                        className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
-                        onClick={fetchClasses}
-                      >
-                        <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                    }
-                  />
-                </div>}
-
-                {form.signType === 'all' && (
-                  <div className="md:col-span-2">
+                  {form.signType === 'all' && (
                     <button
                       type="button"
                       onClick={() => setAdvancedOpen((open) => !open)}
                       aria-expanded={advancedOpen}
-                      className="flex min-h-[44px] w-full items-center justify-between rounded-xl border border-border/60 bg-surface/60 px-4 py-2 text-sm text-text/80 transition-colors hover:bg-surface-hover"
+                      className="ui-panel flex min-h-[40px] w-full items-center justify-between px-3 py-2 text-sm text-text-muted hover:text-text"
                     >
                       <span>补充签到参数（可选）</span>
                       <ChevronDown
@@ -1636,131 +1749,115 @@ export default function ChaoxingSignin() {
                         aria-hidden="true"
                       />
                     </button>
-                  </div>
-                )}
+                  )}
 
-                {(form.signType === 'photo' || (form.signType === 'all' && advancedOpen)) && (
-                  <div className="md:col-span-2">
-                    <label htmlFor="cx-photo" className="mb-2 block text-sm font-medium text-text">
-                      签到照片（自拍/拍照）
-                    </label>
-
-                    <div className="flex items-center gap-3">
-                      <label
-                        htmlFor="cx-photo"
-                        className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border border-border/30 bg-surface/60 px-4 py-2 text-sm text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 hover:bg-surface/80"
-                      >
-                        <Camera className="h-4 w-4" />
-                        选择照片
+                  {showPhoto && (
+                    <div>
+                      <label htmlFor="cx-photo" className="ui-label">
+                        签到照片（自拍/拍照）
                       </label>
 
-                      <input
-                        id="cx-photo"
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp"
-                        className="hidden"
-                        onChange={(event) => {
-                          const file = event.target.files?.[0] || null
-                          try {
-                            validatePhotoFile(file)
-                            setForm((prev) => ({ ...prev, photoFile: file }))
-                          } catch (error) {
-                            event.target.value = ''
-                            toast.error(error.message)
-                          }
-                        }}
-                      />
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="ui-btn-secondary focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2 focus-within:ring-offset-background">
+                          <Camera className="h-4 w-4" aria-hidden="true" />
+                          选择照片
+                          <input
+                            id="cx-photo"
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            className="sr-only"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] || null
+                              try {
+                                validatePhotoFile(file)
+                                setForm((prev) => ({ ...prev, photoFile: file }))
+                              } catch (error) {
+                                event.target.value = ''
+                                toast.error(error.message)
+                              }
+                            }}
+                          />
+                        </label>
 
-                      <p className="text-xs text-text/70">
-                        {form.photoFile
-                          ? `已选择：${form.photoFile.name}（${(form.photoFile.size / 1024).toFixed(0)} KB）`
-                          : '请上传自拍照片，支持 JPG、PNG、WebP，最大 5 MB。'}
-                      </p>
-                    </div>
+                        <p className="text-xs text-text-muted">
+                          {form.photoFile
+                            ? `已选择：${form.photoFile.name}（${(form.photoFile.size / 1024).toFixed(0)} KB）`
+                            : '请上传自拍照片，支持 JPG、PNG、WebP，最大 5 MB。'}
+                        </p>
+                      </div>
 
-                    {photoPreviewUrl && (
-                      <div className="mt-3">
+                      {photoPreviewUrl && (
                         <img
                           src={photoPreviewUrl}
                           alt="签到照片预览"
-                          className="h-32 w-32 rounded-xl border border-border/30 object-cover"
+                          className="mt-3 h-28 w-28 rounded-md border border-border object-cover"
                         />
-                      </div>
-                    )}
-                  </div>
-                )}
+                      )}
+                    </div>
+                  )}
 
-                {(form.signType === 'location' ||
-                  form.signType === 'qrcode' ||
-                  form.signType === 'gesture' ||
-                  (form.signType === 'all' && advancedOpen)) && (
-                  <div className="space-y-3 md:col-span-2">
-                    {locationFields}
-                  </div>
-                )}
+                  {showLocation && (
+                    <fieldset className="ui-panel space-y-3 p-3.5">
+                      <legend className="px-1 text-xs font-semibold text-text">位置</legend>
+                      {locationFields}
+                    </fieldset>
+                  )}
 
-                {(form.signType === 'qrcode' || (form.signType === 'all' && advancedOpen)) && (
-                  <div className="md:col-span-2 space-y-4">
-                    <div>
-                      <label
-                        htmlFor="cx-qrcode-file"
-                        className="mb-2 block text-sm font-medium text-text"
-                      >
-                        上传二维码图片
-                      </label>
-
-                      <div className="flex items-center gap-3">
+                  {showQr && (
+                    <div className="space-y-3">
+                      <div>
                         <label
                           htmlFor="cx-qrcode-file"
-                          className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border border-border/30 bg-surface/60 px-4 py-2 text-sm text-text backdrop-blur-sm transition-all duration-200 hover:border-primary/50 hover:bg-surface/80"
+                          className="ui-label"
                         >
-                          <Upload className="h-4 w-4" />
-                          选择二维码图片
+                          上传二维码图片
                         </label>
 
-                        <input
-                          id="cx-qrcode-file"
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0]
+                        <div className="flex flex-wrap items-center gap-3">
+                          <label className="ui-btn-secondary focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2 focus-within:ring-offset-background">
+                            <Upload className="h-4 w-4" aria-hidden="true" />
+                            选择二维码图片
+                            <input
+                              id="cx-qrcode-file"
+                              type="file"
+                              accept="image/*"
+                              className="sr-only"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0]
 
-                            if (file) handleQrCodeFileUpload(file)
-                          }}
-                        />
+                                if (file) handleQrCodeFileUpload(file)
+                              }}
+                            />
+                          </label>
 
-                        <p
-                          className={`text-xs ${form.qrDecodeStatus.includes('成功') ? 'text-success' : form.qrDecodeStatus.includes('失败') || form.qrDecodeStatus.includes('无法') ? 'text-danger' : 'text-text/70'}`}
-                        >
-                          {form.qrDecodeStatus ||
-                            (form.qrCodeFile
-                              ? `已选择：${form.qrCodeFile.name}`
-                              : '支持 JPG/PNG 格式的二维码截图')}
-                        </p>
+                          <p
+                            role="status"
+                            className={`text-xs font-medium ${form.qrDecodeStatus.includes('成功') ? 'text-success' : form.qrDecodeStatus.includes('失败') || form.qrDecodeStatus.includes('无法') ? 'text-danger' : 'text-text-muted'}`}
+                          >
+                            {form.qrDecodeStatus ||
+                              (form.qrCodeFile
+                                ? `已选择：${form.qrCodeFile.name}`
+                                : '支持 JPG/PNG 格式的二维码截图')}
+                          </p>
+                        </div>
                       </div>
+
+                      <Input
+                        id="cx-qrcode"
+                        label="二维码内容"
+                        type="text"
+                        value={form.qrCode}
+                        onChange={(e) => {
+                          qrDecodeGenerationRef.current += 1
+                          setForm((prev) => ({ ...prev, qrCode: e.target.value, qrDecodeStatus: '' }))
+                        }}
+                        placeholder="粘贴二维码链接或内容"
+                        hint="二维码签到可附带经纬度、地址和海拔参数以提高成功率。"
+                      />
                     </div>
+                  )}
 
-                    <Input
-                      id="cx-qrcode"
-                      label="二维码内容"
-                      type="text"
-                      value={form.qrCode}
-                      onChange={(e) => {
-                        qrDecodeGenerationRef.current += 1
-                        setForm((prev) => ({ ...prev, qrCode: e.target.value, qrDecodeStatus: '' }))
-                      }}
-                      placeholder="粘贴二维码链接或内容"
-                    />
-
-                    <p className="text-xs text-text/70">
-                      二维码签到可附带经纬度、地址和海拔参数以提高成功率。
-                    </p>
-                  </div>
-                )}
-
-                {(form.signType === 'gesture' || (form.signType === 'all' && advancedOpen)) && (
-                  <div className="md:col-span-2">
+                  {showGesture && (
                     <Input
                       id="cx-gesture"
                       label="手势编码"
@@ -1770,16 +1867,11 @@ export default function ChaoxingSignin() {
                         setForm((prev) => ({ ...prev, gesturePattern: e.target.value }))
                       }
                       placeholder="请输入老师发布的手势编码"
+                      hint="手势签到可附带位置参数，填写上方地址信息以提高成功率。"
                     />
+                  )}
 
-                    <p className="mt-2 text-xs text-text/70">
-                      手势签到可附带位置参数，填写下方地址信息以提高成功率。
-                    </p>
-                  </div>
-                )}
-
-                {(form.signType === 'code' || (form.signType === 'all' && advancedOpen)) && (
-                  <div className="md:col-span-2">
+                  {showCode && (
                     <Input
                       id="cx-sign-code"
                       label="签到码"
@@ -1788,14 +1880,19 @@ export default function ChaoxingSignin() {
                       onChange={(e) => setForm((prev) => ({ ...prev, signCode: e.target.value }))}
                       placeholder="请输入老师发布的签到码"
                     />
-                  </div>
-                )}
+                  )}
 
-                <div className="flex flex-wrap items-center gap-3 md:col-span-2">
-                  <Button type="submit" disabled={submitting || !hasCredentials || (signinTarget === 'class' && form.selectedClassIds.length === 0)}>
-                    {submitting ? '签到中...' : signinTarget === 'class' ? '班级签到' : '课程签到'}
-                  </Button>
-                  {!hasCredentials && <p className="text-sm text-text-muted">请先在「账号」中填写密码。</p>}
+                  <div className="flex flex-wrap items-center gap-3 border-t border-border-subtle pt-4">
+                    <Button type="submit" disabled={submitting || submitBlocked}>
+                      {submitting ? '签到中...' : signinTarget === 'class' ? '班级签到' : '课程签到'}
+                    </Button>
+                    {!hasCredentials && <p className="text-sm text-text-muted">请先在「账号」中填写密码。</p>}
+                    {hasCredentials && signinTarget === 'class' && form.selectedClassIds.length === 0 && (
+                      <p className="text-sm text-text-muted">先选择至少一个班级。</p>
+                    )}
+                  </div>
+
+                  {resultNotice}
                 </div>
               </form>
               )}
@@ -1806,110 +1903,50 @@ export default function ChaoxingSignin() {
         )}
 
         {activeTab === 'monitor' && (
-          <section id="cx-panel-monitor" role="tabpanel" aria-labelledby="cx-tab-monitor" tabIndex="0" className="space-y-4">
-            <ConfigTab autoSignin={autoSignin} setAutoSignin={setAutoSignin} autoSignFilter={autoSignFilter} setAutoSignFilter={setAutoSignFilter} checkInterval={checkInterval} setCheckInterval={setCheckInterval} nextCheckCountdown={nextCheckCountdown} paused={!accountReady} />
-            <div className={`${GLASS_CARD_CLASS} space-y-4`}>
-              <div>
-                <h2 className="text-lg font-bold text-text">后台签到任务</h2>
-                <p className="mt-1 text-sm text-text-muted">由服务端执行，沿用手动签到的设置：{getSignTypeLabel(form.signType)}，已选 {form.selectedCourseIds.length} 门课程、{form.selectedClassIds.length} 个班级。</p>
-              </div>
-              {hasCredentials ? (
-                <div className="flex flex-wrap gap-3">
-                  <Button type="button" onClick={startSigninTask} disabled={submitting}>{submitting ? '处理中...' : '创建课程任务'}</Button>
-                  <Button type="button" variant="secondary" onClick={startClassSigninTask} disabled={submitting || form.selectedClassIds.length === 0}>{submitting ? '处理中...' : '创建班级任务'}</Button>
-                  <Button type="button" variant="ghost" onClick={() => setActiveTab('signin')}>调整范围与参数</Button>
+          <section id="cx-panel-monitor" role="tabpanel" aria-labelledby="cx-tab-monitor" tabIndex="0" className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+            <div className="min-w-0 space-y-4">
+              <ConfigTab autoSignin={autoSignin} setAutoSignin={setAutoSignin} autoSignFilter={autoSignFilter} setAutoSignFilter={setAutoSignFilter} checkInterval={checkInterval} setCheckInterval={setCheckInterval} nextCheckCountdown={nextCheckCountdown} paused={!accountReady} />
+              <section className={`${GLASS_CARD_CLASS} space-y-4`} aria-labelledby="cx-bg-create-heading">
+                <div>
+                  <h2 id="cx-bg-create-heading" className="font-display text-base font-bold text-text">后台签到任务</h2>
+                  <p className="mt-1 text-sm text-text-muted">签到类型：{getSignTypeLabel(form.signType)}</p>
                 </div>
-              ) : (
-                <p className="text-sm text-text-muted">
-                  请先在
-                  <button type="button" className="mx-1 font-semibold text-primary hover:underline" onClick={openAccountTab}>账号</button>
-                  中验证学习通账号。
-                </p>
-              )}
+
+                <dl className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    { label: '课程范围', names: backgroundScopeNames.courses, empty: '未选课程' },
+                    { label: '班级范围', names: backgroundScopeNames.classes, empty: '未选班级' },
+                  ].map((scope) => (
+                    <div key={scope.label} className="ui-panel px-3 py-2.5">
+                      <dt className="catalog-label">{scope.label}</dt>
+                      <dd className="mt-1 text-sm text-text">
+                        {scope.names.length > 0 ? (
+                          <span className="line-clamp-3 break-words">{scope.names.join('、')}</span>
+                        ) : (
+                          <span className="text-text-muted">{scope.empty}</span>
+                        )}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+
+                {hasCredentials ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" onClick={startSigninTask} disabled={submitting || backgroundBusy || form.selectedCourseIds.length === 0}>{submitting ? '处理中...' : '创建课程任务'}</Button>
+                    <Button type="button" variant="secondary" onClick={startClassSigninTask} disabled={submitting || backgroundBusy || form.selectedClassIds.length === 0}>{submitting ? '处理中...' : '创建班级任务'}</Button>
+                    <Button type="button" variant="ghost" onClick={() => setActiveTab('signin')}>调整范围与参数</Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-text-muted">
+                    请先在
+                    <button type="button" className="mx-1 font-semibold text-primary underline-offset-4 hover:underline" onClick={openAccountTab}>账号</button>
+                    中验证学习通账号。
+                  </p>
+                )}
+                <p className="ui-hint mt-0">{backgroundBusy ? '后台任务运行中，结束后可再创建。' : '同一账号同时只运行一个后台任务。'}</p>
+              </section>
             </div>
-            {(taskId || taskStatus || logs.length > 0) && (
-                <div className={GLASS_CARD_CLASS}>
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                    <h2 className="text-lg font-bold text-text">任务状态</h2>
-
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                      onClick={() =>
-                        refreshTaskStatus(taskId, {
-                          setResultType,
-                          setResultMessage,
-                          setBackgroundTaskHistory,
-                        })
-                      }
-                      disabled={!taskId || statusLoading}
-                    >
-                      {statusLoading ? (
-                        <span className="inline-flex items-center gap-2">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          刷新中...
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-2">
-                          <RefreshCw className="h-4 w-4" />
-                          刷新状态
-                        </span>
-                      )}
-                    </Button>
-                  </div>
-
-                  {taskId && (
-                    <p className="mb-2 text-sm text-text/80">
-                      任务 ID：<span className="font-mono">{taskId}</span>
-                    </p>
-                  )}
-
-                  {taskStatus && (
-                    <div className="mb-4 space-y-3">
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="rounded-xl bg-surface-hover p-3"><p className="text-xs text-text-muted">运行状态</p><p className="mt-1 font-semibold text-text">{taskStatus.status || '等待更新'}</p></div>
-                        <div className="rounded-xl bg-surface-hover p-3"><p className="text-xs text-text-muted">最近消息</p><p className="mt-1 break-words text-sm text-text">{taskStatus.message || taskStatus.current_task || '暂无消息'}</p></div>
-                      </div>
-                      <details>
-                        <summary className="min-h-[44px] cursor-pointer py-3 text-sm text-text-muted">查看完整任务状态</summary>
-                        <pre className="max-h-48 overflow-auto rounded-xl bg-slate-900/90 p-3 text-xs text-slate-100">{taskPretty}</pre>
-                      </details>
-                    </div>
-                  )}
-
-                  <div>
-                    <p className="mb-2 text-sm font-medium text-text">实时日志</p>
-
-                    <div
-                      ref={logContainerRef}
-                      role="log"
-                      aria-live="polite"
-                      aria-label="实时日志"
-                      className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-border/20 bg-slate-900/90 p-3 font-mono text-xs text-slate-100"
-                    >
-                      {logs.length === 0 ? (
-                        <p className="text-slate-300">暂无日志</p>
-                      ) : (
-                        logs.map((log, index) => {
-                          const message =
-                            typeof log === 'string' ? log : log?.message || safeStringify(log)
-
-                          const timestamp =
-                            typeof log === 'object' && log?.timestamp ? String(log.timestamp) : ''
-
-                          return (
-                            <p key={`${timestamp}-${index}`} className="break-all">
-                              {timestamp ? `[${timestamp}] ` : ''}
-                              {message}
-                            </p>
-                          )
-                        })
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
+            <div className="min-w-0 lg:sticky lg:top-20">{taskDetail}</div>
           </section>
         )}
 
@@ -1924,6 +1961,9 @@ export default function ChaoxingSignin() {
               onOpenAccount={openAccountTab}
               openBackgroundTask={(tid) => {
                 setActiveTab('monitor')
+                // The clicked button unmounts with this tab; land focus on the
+                // task detail instead of dropping it to the page body.
+                window.requestAnimationFrame?.(() => document.getElementById('cx-task-detail-heading')?.focus())
                 return openBackgroundTask(tid, {
                   setResultType,
                   setResultMessage,
@@ -1940,85 +1980,77 @@ export default function ChaoxingSignin() {
         {activeTab === 'history' && (
           <section id="cx-panel-history" role="tabpanel" aria-labelledby="cx-tab-history" tabIndex="0" className="space-y-4">
               <StatsCards todayStats={todayStats} />
-              <HistoryTab signinHistory={signinHistory} fetchSigninHistory={fetchSigninHistory} />
-              <div className={GLASS_CARD_CLASS}>
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="text-lg font-bold text-text">后台任务历史</h2>
+              <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,23rem)_minmax(0,1fr)]">
+                <section className={GLASS_CARD_CLASS} aria-labelledby="cx-bg-history-heading">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <h2 id="cx-bg-history-heading" className="font-display text-base font-bold text-text">后台任务历史</h2>
 
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    aria-label="刷新后台任务历史"
-                    title="刷新后台任务历史"
-                    className="min-h-[44px] min-w-[44px] cursor-pointer transition-all duration-200"
-                    onClick={() => {
-                      void fetchBackgroundTaskHistory()
-                    }}
-                  >
-                    <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </div>
-
-                {backgroundTaskHistory.length === 0 ? (
-                  <p className="text-sm text-text-muted">暂无后台任务历史</p>
-                ) : (
-                  <div className="max-h-64 space-y-2 overflow-y-auto">
-                    {backgroundTaskHistory.map((task) => {
-                      const isActive = task.taskId === taskId
-
-                      const statusClassName =
-                        task.status === 'completed'
-                          ? 'border-success/30 bg-success-surface text-success'
-                          : task.status === 'error'
-                            ? 'border-danger/30 bg-danger-surface text-danger'
-                            : 'border-amber-300 bg-amber-50 text-amber-700'
-
-                      return (
-                        <button
-                          key={task.taskId}
-                          type="button"
-                          className={`w-full min-h-[44px] rounded-xl border px-3 py-3 text-left transition-all duration-200 cursor-pointer ${isActive ? 'border-primary/50 bg-primary/10' : 'border-border/30 bg-surface/70 hover:border-primary/40'}`}
-                          onClick={() => {
-                            setActiveTab('monitor')
-                            void openBackgroundTask(task.taskId, {
-                              setResultType,
-                              setResultMessage,
-                              setBackgroundTaskHistory,
-                            })
-                          }}
-                        >
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div className="min-w-0 flex-1">
-                              <p className="font-medium text-text">
-                                {task.courseName || '后台签到任务'}
-                              </p>
-
-                              <p className="mt-1 break-all font-mono text-xs text-text/70">
-                                任务 ID：{task.taskId}
-                              </p>
-                            </div>
-
-                            <span
-                              className={`rounded-full border px-2 py-1 text-xs font-medium ${statusClassName}`}
-                            >
-                              {task.status || 'unknown'}
-                            </span>
-                          </div>
-
-                          <p className="mt-2 text-sm text-text/80">{task.message || '暂无消息'}</p>
-
-                          <p className="mt-1 text-xs text-text/60">
-                            更新时间：
-                            {parseTaskTimestamp(task.updatedAt || task.createdAt) > 0
-                              ? new Date(task.updatedAt || task.createdAt).toLocaleString()
-                              : '--'}
-                          </p>
-                        </button>
-                      )
-                    })}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon"
+                      aria-label="刷新后台任务历史"
+                      title="刷新后台任务历史"
+                      onClick={() => {
+                        void fetchBackgroundTaskHistory()
+                      }}
+                    >
+                      <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                    </Button>
                   </div>
-                )}
+
+                  {backgroundTaskHistory.length === 0 ? (
+                    <StateNotice kind="empty" compact>暂无后台任务历史</StateNotice>
+                  ) : (
+                    <ul className="max-h-[32rem] space-y-2 overflow-y-auto pr-0.5">
+                      {backgroundTaskHistory.map((task) => {
+                        const isActive = task.taskId === taskId
+                        return (
+                          <li key={task.taskId}>
+                            <button
+                              type="button"
+                              aria-pressed={isActive}
+                              className={`w-full rounded-lg border px-3 py-2.5 text-left ${isActive ? 'border-primary/60 bg-primary/5' : 'border-border-subtle bg-surface hover:border-primary/40 hover:bg-surface-hover'}`}
+                              onClick={() => {
+                                void openBackgroundTask(task.taskId, {
+                                  setResultType,
+                                  setResultMessage,
+                                  setBackgroundTaskHistory,
+                                })
+                                historyDetailRef.current?.scrollIntoView?.({ block: 'start' })
+                              }}
+                            >
+                              <span className="flex flex-wrap items-start justify-between gap-2">
+                                <span className="min-w-0 flex-1">
+                                  <span className="block text-sm font-semibold text-text">
+                                    {task.courseName || '后台签到任务'}
+                                  </span>
+                                  <span className="font-code mt-0.5 block break-all text-xs text-text-muted">
+                                    任务 ID：{task.taskId}
+                                  </span>
+                                </span>
+                                {(() => {
+                                  const badge = backgroundTaskBadge(task)
+                                  return <StatusBadge status={badge.status} label={badge.label} />
+                                })()}
+                              </span>
+                              {task.message && <span className="mt-1.5 block text-xs text-text-muted">{task.message}</span>}
+                              <span className="font-code mt-1 block text-[0.6875rem] text-text-muted">
+                                更新时间：
+                                {parseTaskTimestamp(task.updatedAt || task.createdAt) > 0
+                                  ? new Date(task.updatedAt || task.createdAt).toLocaleString()
+                                  : '--'}
+                              </span>
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </section>
+                <div ref={historyDetailRef} className="min-w-0 lg:sticky lg:top-20">{taskDetail}</div>
               </div>
+              <HistoryTab signinHistory={signinHistory} fetchSigninHistory={fetchSigninHistory} />
           </section>
         )}
       </div>

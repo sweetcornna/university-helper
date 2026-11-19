@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { MapPin, Search, X, Loader2 } from 'lucide-react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { Search, X, Loader2 } from 'lucide-react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import markerIcon from 'leaflet/dist/images/marker-icon.png'
@@ -85,6 +85,8 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
   const searchGenerationRef = useRef(0)
   const searchLoadingRef = useRef(false)
   const pendingRequestControllersRef = useRef(new Set())
+  const closeButtonRef = useRef(null)
+  const titleId = useId()
 
   // Keep async callbacks from writing after a close has been rendered, even
   // before the close effect gets a chance to run.
@@ -324,6 +326,43 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
     [placeMarker]
   )
 
+  // Land keyboard focus inside the dialog when it opens, keep Tab inside it,
+  // close on Escape and hand focus back to the opener when it closes.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  const dialogRef = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const opener = document.activeElement
+    closeButtonRef.current?.focus()
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onCloseRef.current?.()
+        return
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return
+      const focusable = Array.from(dialogRef.current.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ))
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const inside = dialogRef.current.contains(document.activeElement)
+      if (event.shiftKey && (!inside || document.activeElement === first)) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (!inside || document.activeElement === last)) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      if (opener && typeof opener.focus === 'function' && document.contains(opener)) opener.focus()
+    }
+  }, [open])
+
   const handleConfirm = useCallback(() => {
     if (!draft) return
     onConfirm({
@@ -336,29 +375,34 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="relative flex h-[85vh] w-[90vw] max-w-4xl flex-col overflow-hidden rounded-2xl border border-border/20 bg-surface/95 shadow-2xl backdrop-blur-lg">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[rgb(12_18_28/0.45)] sm:items-center sm:p-4">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="ui-index-card relative flex h-[92dvh] w-full max-w-4xl flex-col overflow-hidden rounded-b-none sm:h-[85vh] sm:rounded-b-[10px]"
+      >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
-          <div className="flex items-center gap-2">
-            <MapPin className="h-5 w-5 text-blue-600" />
-            <h2 className="text-lg font-semibold text-gray-800">地图选点</h2>
-          </div>
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
+          <h2 id={titleId} className="font-display min-w-0 text-base font-bold text-text">地图选点</h2>
           <button
+            ref={closeButtonRef}
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+            aria-label="关闭地图选点"
+            className="ui-btn-ghost ui-btn-icon"
           >
-            <X className="h-5 w-5" />
+            <X className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
 
         {/* Body */}
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
           {/* Left panel: search + results + preview */}
-          <div className="flex w-full flex-col border-b border-gray-200 md:w-80 md:border-b-0 md:border-r">
+          <div className="flex max-h-[45%] w-full flex-col border-b border-border md:max-h-none md:w-80 md:border-b-0 md:border-r">
             {/* Search */}
-            <div className="border-b border-gray-100 p-4">
+            <div className="border-b border-border-subtle p-3 sm:p-4">
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -366,65 +410,68 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={handleSearchKeyDown}
                   placeholder="搜索地点名称..."
-                  className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-surface px-3 py-2 text-sm outline-none transition-colors focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  aria-label="搜索地点名称"
+                  className="ui-field"
                 />
                 <button
                   type="button"
                   onClick={handleSearch}
                   disabled={searchLoading || !searchQuery.trim()}
-                  className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+                  aria-label="搜索地点"
+                  className="ui-btn-primary ui-btn-icon"
                 >
                   {searchLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
                   ) : (
-                    <Search className="h-4 w-4" />
+                    <Search className="h-4 w-4" aria-hidden="true" />
                   )}
                 </button>
               </div>
               {searchError && (
-                <p className="mt-2 text-xs text-red-500">{searchError}</p>
+                <p role="status" className="mt-2 text-xs font-medium text-danger">{searchError}</p>
               )}
             </div>
 
             {/* Search results */}
             {searchResults.length > 0 && (
-              <div className="flex-1 overflow-y-auto p-2">
+              <ul className="min-h-0 flex-1 divide-y divide-border-subtle overflow-y-auto">
                 {searchResults.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => selectCandidate(c)}
-                    className="mb-1 w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-blue-50"
-                  >
-                    <span className="block text-sm font-medium text-gray-800">
-                      {c.name || c.address}
-                    </span>
-                    {c.address && (
-                      <span className="mt-0.5 block text-xs text-gray-500">
-                        {c.address}
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onClick={() => selectCandidate(c)}
+                      className="w-full px-4 py-2.5 text-left hover:bg-surface-hover focus-visible:ring-inset"
+                    >
+                      <span className="block text-sm font-semibold text-text">
+                        {c.name || c.address}
                       </span>
-                    )}
-                  </button>
+                      {c.address && (
+                        <span className="mt-0.5 block text-xs text-text-muted">
+                          {c.address}
+                        </span>
+                      )}
+                    </button>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
 
             {/* Preview */}
             {draft && (
-              <div className="mt-auto border-t border-gray-100 p-4">
-                <p className="mb-1 text-xs font-medium text-gray-400">
+              <div className="mt-auto border-t border-border-subtle bg-surface-hover/60 p-4">
+                <p className="catalog-label mb-1">
                   当前选点 {draft.source ? `(${draft.source})` : ''}
                 </p>
-                <p className="text-sm text-gray-700">
+                <p className="text-sm text-text">
                   {reverseLoading ? (
-                    <span className="flex items-center gap-1 text-gray-400">
-                      <Loader2 className="h-3 w-3 animate-spin" /> 解析地址中...
+                    <span className="flex items-center gap-1 text-text-muted">
+                      <Loader2 className="h-3 w-3 motion-safe:animate-spin" aria-hidden="true" /> 解析地址中...
                     </span>
                   ) : (
                     draft.address || '未解析到详细地址'
                   )}
                 </p>
-                <p className="mt-1 font-mono text-xs text-gray-500">
+                <p className="font-code mt-1 text-xs text-text-muted">
                   {(() => {
                     const [bdLng, bdLat] = wgs84ToBd09(
                       Number(draft.longitude),
@@ -438,10 +485,10 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
           </div>
 
           {/* Map area */}
-          <div className="relative min-h-[300px] flex-1">
+          <div className="relative min-h-[240px] flex-1">
             <div ref={mapContainerRef} className="h-full w-full" />
             {!draft && (
-              <div className="pointer-events-none absolute bottom-4 left-1/2 z-[1000] -translate-x-1/2 rounded-lg bg-black/60 px-4 py-2 text-sm text-white">
+              <div className="pointer-events-none absolute bottom-4 left-1/2 z-[1000] -translate-x-1/2 rounded-md bg-[rgb(12_18_28/0.75)] px-3 py-2 text-xs text-white">
                 点击地图或搜索地点来选取位置
               </div>
             )}
@@ -449,11 +496,11 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-6 py-4">
+        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3 sm:px-5">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50"
+            className="ui-btn-secondary"
           >
             取消
           </button>
@@ -461,7 +508,7 @@ export default function BaiduMapPickerModal({ open, initialLocation, onClose, on
             type="button"
             onClick={handleConfirm}
             disabled={!draft}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            className="ui-btn-primary"
           >
             确认选点
           </button>

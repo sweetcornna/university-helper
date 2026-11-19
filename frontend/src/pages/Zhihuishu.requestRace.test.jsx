@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -124,6 +124,10 @@ const fail = async (request, error) => {
 }
 
 const getWorkspaceTab = (name) => screen.getByRole('tab', { name })
+
+const getTaskDetail = () => screen.getByRole('heading', { level: 2, name: '当前任务' }).closest('.ui-card')
+
+const getTaskRecord = (taskId) => screen.getByText(`任务 ID：${taskId}`, { exact: false, selector: 'li p' }).closest('li')
 
 const expectLoggedOut = () => {
   expect(screen.getByRole('button', { name: '平台账号：未登录' })).toBeInTheDocument()
@@ -496,7 +500,8 @@ describe('Zhihuishu request race guards', () => {
     expect(screen.getByText('当前任务：课程 A')).toBeInTheDocument()
     expect(screen.getByText('任务记录：1 条')).toBeInTheDocument()
     fireEvent.click(getWorkspaceTab('任务'))
-    expect(screen.getAllByText('状态：running').length).toBeGreaterThan(0)
+    expect(within(getTaskDetail()).getByText('进行中')).toBeInTheDocument()
+    expect(within(getTaskRecord('task-a')).getByText('进行中')).toBeInTheDocument()
     expect(toast.notify).toHaveBeenCalledWith('error', '退出保留失败')
     expect(toast.notify.mock.calls.some(([, message]) => String(message).includes('学习完成'))).toBe(false)
     fireEvent.click(getWorkspaceTab('课程'))
@@ -506,7 +511,8 @@ describe('Zhihuishu request race guards', () => {
     await waitFor(() => expect(taskCalls).toBe(2))
     await settle(newTaskRequest, { data: taskResponse('task-a', COURSE_A, 'completed') })
     fireEvent.click(getWorkspaceTab('任务'))
-    expect(screen.getAllByText('状态：completed').length).toBeGreaterThan(0)
+    expect(within(getTaskDetail()).getByText('已完成')).toBeInTheDocument()
+    expect(within(getTaskRecord('task-a')).getByText('已完成')).toBeInTheDocument()
   })
 
   test('successful logout clears the session and blocks its old in-flight task response', async () => {
@@ -572,7 +578,8 @@ describe('Zhihuishu request race guards', () => {
 
     await settle(newerRequest, { data: taskResponse('task-a', COURSE_A, 'completed') })
     await settle(olderRequest, { data: taskResponse('task-a', COURSE_A, 'running') })
-    expect(screen.getAllByText('状态：completed').length).toBeGreaterThan(0)
+    expect(within(getTaskDetail()).getByText('已完成')).toBeInTheDocument()
+    expect(within(getTaskRecord('task-a')).getByText('已完成')).toBeInTheDocument()
     expect(screen.queryByText('task-a 运行中')).not.toBeInTheDocument()
   })
 
@@ -627,7 +634,9 @@ describe('Zhihuishu request race guards', () => {
     ]) })
 
     fireEvent.click(getWorkspaceTab('任务'))
-    expect(screen.getAllByText('状态：completed').length).toBeGreaterThan(0)
+    expect(within(getTaskRecord('task-a')).getByText('已完成')).toBeInTheDocument()
+    expect(within(getTaskDetail()).getByText('任务 ID：task-b')).toBeInTheDocument()
+    expect(within(getTaskDetail()).getByText('进行中')).toBeInTheDocument()
     expect(toast.notify.mock.calls.some(([, message]) => String(message).includes('学习完成'))).toBe(true)
     fireEvent.click(getWorkspaceTab('账号'))
     expect(screen.getByText('当前任务：课程 B')).toBeInTheDocument()
@@ -682,7 +691,8 @@ describe('Zhihuishu request race guards', () => {
       { id: 'a-video', title: 'A 后台视频' },
     ]) })
     fireEvent.click(getWorkspaceTab('任务'))
-    expect(screen.getAllByText('状态：completed').length).toBeGreaterThan(0)
+    expect(within(getTaskRecord('task-a')).getByText('已完成')).toBeInTheDocument()
+    expect(within(getTaskDetail()).getByText('已完成')).toBeInTheDocument()
     expect(toast.notify.mock.calls.some(([, message]) => String(message).includes('学习完成'))).toBe(true)
 
     fireEvent.click(getWorkspaceTab('课程'))

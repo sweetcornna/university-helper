@@ -5,8 +5,12 @@ import {
   upsertBackgroundTaskHistory,
 } from '../utils'
 
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'error', 'failed', 'cancelled'])
+
 export default function useBackgroundTasks(requestChaoxingApi) {
   const pollRef = useRef(null)
+  // The initial refresh can stop polling before the effect installs a timer.
+  const stoppedPollGenerationRef = useRef(null)
   // Monotonic generation for every open/clear operation. Task ids can be
   // reused, so the id alone cannot distinguish an old request from a reopened
   // task with the same id.
@@ -68,6 +72,10 @@ export default function useBackgroundTasks(requestChaoxingApi) {
       const inFlight = inFlightRef.current
       return isCurrentTask() && inFlight?.taskId === currentTaskId && inFlight.generation === generation
     }
+    const stopPollingForGeneration = () => {
+      stoppedPollGenerationRef.current = generation
+      stopPolling()
+    }
 
     // Reject calls for an id/generation that is no longer open, then skip only
     // a concurrent poll from this exact generation.
@@ -110,8 +118,8 @@ export default function useBackgroundTasks(requestChaoxingApi) {
         )
       }
 
-      if (statusData.status === 'completed' || statusData.status === 'error') {
-        stopPolling()
+      if (TERMINAL_TASK_STATUSES.has(statusData.status)) {
+        stopPollingForGeneration()
       }
 
       const logsResult = await logsPromise
@@ -139,7 +147,7 @@ export default function useBackgroundTasks(requestChaoxingApi) {
       if (!isCurrentPoll()) return
       if (setResultType) setResultType('error')
       if (setResultMessage) setResultMessage(err.message || '查询任务状态失败。')
-      stopPolling()
+      stopPollingForGeneration()
     } finally {
       // Only clear if this exact generation still owns the poll slot — a newer
       // generation may have taken it, including when the task id is reused.
@@ -187,10 +195,10 @@ export default function useBackgroundTasks(requestChaoxingApi) {
 
   // Poll effect: when taskId or its generation changes, start/stop 3s polling.
   useEffect(() => {
-    if (!taskId) return undefined
+    if (!taskId || stoppedPollGenerationRef.current === taskGeneration) return undefined
     stopPolling()
     pollRef.current = setInterval(() => {
-      refreshTaskStatus(taskId)
+      refreshTaskStatus(taskId, undefined, taskGeneration)
     }, POLL_INTERVAL_MS)
     return stopPolling
   }, [refreshTaskStatus, stopPolling, taskId, taskGeneration])

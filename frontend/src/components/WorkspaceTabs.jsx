@@ -1,6 +1,8 @@
 import { useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
+// Index-card divider tabs. Each tab is a real link (shareable ?tab=) that
+// switches in place; arrows/Home/End move between tabs.
 export default function WorkspaceTabs({ id, label, tabs, activeTab, onChange }) {
   const location = useLocation()
   const tabRefs = useRef({})
@@ -28,7 +30,7 @@ export default function WorkspaceTabs({ id, label, tabs, activeTab, onChange }) 
       tabIndex="-1"
       aria-label={label}
       onKeyDown={handleKeyDown}
-      className="scrollbar-none flex gap-1 overflow-x-auto shadow-[inset_0_-1px_0_rgb(var(--color-border))]"
+      className="index-tabs scrollbar-none"
     >
       {tabs.map((tab) => {
         const search = new URLSearchParams(location.search)
@@ -49,13 +51,11 @@ export default function WorkspaceTabs({ id, label, tabs, activeTab, onChange }) 
               event.preventDefault()
               onChange(tab.id)
             }}
-            className={`inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 border-b-2 px-3 text-sm font-semibold sm:px-4 ${
-              active ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border hover:text-text'
-            }`}
+            className="index-tab"
           >
             {tab.label}
             {tab.count > 0 && (
-              <span className="rounded-full bg-primary/10 px-1.5 text-xs text-primary">
+              <span className="rounded bg-primary/10 px-1.5 text-xs text-primary">
                 {tab.count}
               </span>
             )}

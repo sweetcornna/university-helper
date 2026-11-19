@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -56,7 +56,7 @@ const taskPayload = {
 const countRequests = (path) =>
   api.mock.calls.filter(([requestPath]) => requestPath === path).length
 
-const createApiMock = () => {
+const createApiMock = ({ tasks = [taskPayload], getTaskDetail = () => Promise.resolve({ data: taskPayload }) } = {}) => {
   api.mockImplementation((path) => {
     if (path === '/course/zhihuishu/config') {
       return Promise.resolve({ data: { speed: 1, auto_answer: true } })
@@ -70,10 +70,10 @@ const createApiMock = () => {
       })
     }
     if (path === '/course/zhihuishu/tasks') {
-      return Promise.resolve({ data: [taskPayload] })
+      return Promise.resolve({ data: tasks })
     }
-    if (path === '/course/zhihuishu/tasks/task-1') {
-      return Promise.resolve({ data: taskPayload })
+    if (path.startsWith('/course/zhihuishu/tasks/')) {
+      return getTaskDetail(path.split('/').pop())
     }
     if (path === '/course/zhihuishu/courses/course-1') {
       return Promise.resolve({ data: { courseId: 'course-1', name: '高等数学' } })
@@ -140,5 +140,66 @@ describe('Zhihuishu effect feedback loops', () => {
       await vi.advanceTimersByTimeAsync(1)
     })
     expect(countRequests('/course/zhihuishu/tasks/task-1')).toBe(2)
+  })
+
+  test('stops detail polling when the active task finishes', async () => {
+    let task = taskPayload
+    createApiMock({ getTaskDetail: async () => ({ data: task }) })
+    renderPage()
+    await flushPromises()
+    expect(countRequests('/course/zhihuishu/tasks/task-1')).toBe(1)
+
+    task = { ...taskPayload, status: 'completed' }
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000)
+    })
+    expect(countRequests('/course/zhihuishu/tasks/task-1')).toBe(2)
+  })
+
+  test('does not restart detail polling for a terminal task opened from the list', async () => {
+    const finishedTask = { ...taskPayload, task_id: 'task-2', status: 'completed' }
+    createApiMock({
+      tasks: [taskPayload, finishedTask],
+      getTaskDetail: async (taskId) => ({ data: taskId === 'task-2' ? finishedTask : taskPayload }),
+    })
+    renderPage()
+    await flushPromises()
+    expect(countRequests('/course/zhihuishu/tasks/task-1')).toBe(1)
+
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+    const details = (taskId) => {
+      const row = screen.getByText(`任务 ID：${taskId}`, { exact: false, selector: 'li p' }).closest('li')
+      return within(row).getByRole('button', { name: '查看详情' })
+    }
+    fireEvent.click(details('task-2'))
+    await flushPromises()
+    expect(countRequests('/course/zhihuishu/tasks/task-2')).toBe(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000)
+    })
+    expect(countRequests('/course/zhihuishu/tasks/task-2')).toBe(1)
+
+    fireEvent.click(screen.getByRole('tab', { name: '学习配置' }))
+    fireEvent.change(screen.getByLabelText('进度轮询间隔（秒）'), { target: { value: '2' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+    expect(countRequests('/course/zhihuishu/tasks/task-2')).toBe(1)
+    expect(countRequests('/course/zhihuishu/tasks/task-1')).toBe(1)
+
+    fireEvent.click(screen.getByRole('tab', { name: '任务' }))
+    fireEvent.click(details('task-2'))
+    await flushPromises()
+    expect(countRequests('/course/zhihuishu/tasks/task-2')).toBe(2)
+
+    fireEvent.click(details('task-1'))
+    await flushPromises()
+    const requestsAfterSwitch = countRequests('/course/zhihuishu/tasks/task-1')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(countRequests('/course/zhihuishu/tasks/task-1')).toBe(requestsAfterSwitch + 1)
+    expect(countRequests('/course/zhihuishu/tasks/task-2')).toBe(2)
   })
 })

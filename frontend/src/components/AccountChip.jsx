@@ -13,14 +13,15 @@ export default function AccountChip({ ready, account, onClick }) {
       type="button"
       onClick={onClick}
       aria-label={ready ? `平台账号：${label}` : '平台账号：未登录'}
-      className={`inline-flex min-h-[40px] items-center gap-2 rounded-full border px-3 text-sm font-semibold ${
+      className={`inline-flex min-h-[38px] max-w-[16rem] items-center gap-2 rounded-lg border px-3 text-sm font-semibold ${
         ready
-          ? 'border-success/30 bg-success-surface text-success'
-          : 'border-border bg-surface text-text-muted hover:text-text'
+          ? 'border-success/35 bg-success-surface text-success'
+          : 'border-dashed border-border bg-surface text-text-muted hover:border-primary/50 hover:text-text'
       }`}
     >
-      <UserRound className="h-4 w-4" aria-hidden="true" />
-      {label}
+      <UserRound className="h-4 w-4 shrink-0" aria-hidden="true" />
+      <span className="truncate">{label}</span>
+      {ready && maskAccount(account) && <span className="text-xs font-normal opacity-80" aria-hidden="true">已连接</span>}
     </button>
   )
 }

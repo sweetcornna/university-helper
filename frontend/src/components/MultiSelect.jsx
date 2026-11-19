@@ -2,9 +2,9 @@ import { useId, useMemo, useState } from 'react'
 import { Check, Search } from 'lucide-react'
 
 /*
- * Touch-friendly multi-select. Replaces native <select multiple>, which on
- * mobile requires long-press / ctrl-click and is effectively impossible to
- * operate with a thumb — yet picking courses/classes is a core action here.
+ * Touch-friendly multi-select rendered as a catalog drawer: each option is a
+ * ruled row with a real checkbox. Replaces native <select multiple>, which on
+ * mobile requires long-press / ctrl-click.
  *
  * options: Array<{ id: string, name: string }>
  * selectedIds: string[]
@@ -18,7 +18,7 @@ export default function MultiSelect({
   searchable = true,
   emptyHint = '暂无选项',
   headerAction = null,
-  maxHeightClass = 'max-h-60',
+  maxHeightClass = 'max-h-72',
 }) {
   const [query, setQuery] = useState('')
   const searchId = useId()
@@ -40,7 +40,7 @@ export default function MultiSelect({
   return (
     <div role="group" aria-label={label}>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="block text-sm font-medium text-text">{label}</span>
+        <span className="ui-label mb-0">{label}</span>
         {headerAction}
       </div>
 
@@ -57,13 +57,13 @@ export default function MultiSelect({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索…"
             aria-label={`搜索${label}`}
-            className="clay-input pl-9"
+            className="ui-field pl-9"
           />
         </div>
       )}
 
       <div
-        className={`${maxHeightClass} divide-y divide-border-subtle overflow-y-auto rounded-xl border border-border/60 bg-surface/60 backdrop-blur-sm`}
+        className={`${maxHeightClass} divide-y divide-border-subtle overflow-y-auto rounded-lg border border-border bg-surface`}
       >
         {options.length === 0 ? (
           <p className="px-4 py-6 text-center text-sm text-text-muted">{emptyHint}</p>
@@ -75,14 +75,17 @@ export default function MultiSelect({
             return (
               <label
                 key={option.id}
-                className="flex min-h-[44px] cursor-pointer items-center gap-3 px-4 py-2 text-sm text-text transition-colors hover:bg-surface-hover focus-within:bg-surface-hover focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary/40"
+                className={`flex min-h-[44px] cursor-pointer items-center gap-3 px-3 py-2 text-sm text-text hover:bg-surface-hover focus-within:bg-surface-hover focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary/40 ${
+                  checked ? 'bg-primary/5' : ''
+                }`}
               >
                 <span
-                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
-                    checked ? 'border-primary bg-primary text-white' : 'border-border bg-surface'
+                  aria-hidden="true"
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
+                    checked ? 'border-primary bg-primary text-on-primary' : 'border-border bg-surface'
                   }`}
                 >
-                  {checked && <Check className="h-3.5 w-3.5" aria-hidden="true" />}
+                  {checked && <Check className="h-3.5 w-3.5" />}
                 </span>
                 <input
                   type="checkbox"
@@ -102,7 +105,7 @@ export default function MultiSelect({
           type="button"
           onClick={() => onChange(allSelected ? [] : options.map((o) => o.id))}
           disabled={options.length === 0}
-          className="min-h-[36px] rounded-lg border border-border/60 px-3 text-xs text-text/80 transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+          className="ui-btn-secondary ui-btn-sm"
         >
           {allSelected ? '清空' : '全选'}
         </button>
@@ -110,12 +113,12 @@ export default function MultiSelect({
           <button
             type="button"
             onClick={() => onChange([])}
-            className="min-h-[36px] rounded-lg border border-border/60 px-3 text-xs text-text/80 transition-colors hover:bg-surface-hover"
+            className="ui-btn-ghost ui-btn-sm"
           >
             清空
           </button>
         )}
-        <p className="text-xs text-text-muted">
+        <p className="font-code text-xs text-text-muted" aria-live="polite">
           已选 {selectedIds.length} / {options.length}
         </p>
       </div>
